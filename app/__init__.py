@@ -53,12 +53,23 @@ def create_app(config: dict | None = None) -> Flask:
 
     app = Flask(__name__, static_folder="../static", template_folder="../templates")
     config = config or dict()
+
+    def _as_bool(value, default: bool = False) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in ("1", "true", "yes", "on")
+
     # Default configuration
     app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-key")
     app.config["SQLALCHEMY_DATABASE_URI"] = config.get(
         "SQLALCHEMY_DATABASE_URI", "sqlite:///tournament.db"
     )
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+    app.config["RUN_STARTUP_MIGRATIONS"] = _as_bool(
+        os.environ.get("ARCTOS_RUN_STARTUP_MIGRATIONS", "1"), default=True
+    )
     # Record / footage uploads use multi-MB POST bodies; set explicitly so Werkzeug does not reject large chunks.
     # Reverse proxies (nginx client_max_body_size, etc.) may still need raising in deployment.
     app.config["MAX_CONTENT_LENGTH"] = int(
@@ -165,16 +176,17 @@ def create_app(config: dict | None = None) -> Flask:
 
     except Exception:
         pass
-    # Ensure tables exist (safe to call on startup)
-    try:
-        with app.app_context():
-            db.create_all()
-            from app.db_migrations import run_bootstrap_migrations
+    # Ensure tables/migrations exist when startup migration mode is enabled.
+    if _as_bool(app.config.get("RUN_STARTUP_MIGRATIONS"), default=True):
+        try:
+            with app.app_context():
+                db.create_all()
+                from app.db_migrations import run_bootstrap_migrations
 
-            run_bootstrap_migrations(db)
-    except Exception:
-        # If creation fails, continue; errors will surface when accessed
-        pass
+                run_bootstrap_migrations(db)
+        except Exception:
+            # If creation fails, continue; errors will surface when accessed
+            pass
 
     # Initialize login manager
     login_manager.init_app(app)
