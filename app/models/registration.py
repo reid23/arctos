@@ -41,6 +41,18 @@ class TeamRegistration(db.Model):  # type: ignore[misc]
     """
 
     __tablename__ = "team_registrations"
+    __table_args__ = (
+        db.UniqueConstraint("event", "team", name="uq_team_reg_event_team"),
+        db.UniqueConstraint("league_id", "team", name="uq_team_reg_league_team"),
+        db.CheckConstraint(
+            "(event IS NOT NULL AND league_id IS NULL) OR "
+            "(event IS NULL AND league_id IS NOT NULL)",
+            name="ck_team_reg_event_league_mutual_exclusive",
+        ),
+        db.Index("ix_team_registrations_event", "event"),
+        db.Index("ix_team_registrations_league_id", "league_id"),
+        db.Index("ix_team_registrations_team", "team"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     event = db.Column(
@@ -54,13 +66,15 @@ class TeamRegistration(db.Model):  # type: ignore[misc]
         db.String(SHORT_NAME_LEN), nullable=False
     )  # Team name for this tournament
     status = db.Column(
-        db.Enum(TeamRegistrationStatus), default=TeamRegistrationStatus.CONFIRMED
+        db.Enum(TeamRegistrationStatus),
+        default=TeamRegistrationStatus.CONFIRMED,
+        nullable=False,
     )  # CONFIRMED, CANCELLED
     registered_at = db.Column(
         db.DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
     )
     # Payment fields
-    paid = db.Column(db.Boolean, default=False)
+    paid = db.Column(db.Boolean, default=False, nullable=False)
     amount_paid = db.Column(db.Float, default=0.0)
     paid_at = db.Column(db.DateTime, nullable=True)
     payment_method = db.Column(
@@ -103,6 +117,19 @@ class PlayerRegistration(db.Model):  # type: ignore[misc]
     """
 
     __tablename__ = "player_registrations"
+    __table_args__ = (
+        db.UniqueConstraint("event", "player", name="uq_player_reg_event_player"),
+        db.UniqueConstraint("league_id", "player", name="uq_player_reg_league_player"),
+        db.CheckConstraint(
+            "(event IS NOT NULL AND league_id IS NULL) OR "
+            "(event IS NULL AND league_id IS NOT NULL)",
+            name="ck_player_reg_event_league_mutual_exclusive",
+        ),
+        db.Index("ix_player_registrations_event", "event"),
+        db.Index("ix_player_registrations_league_id", "league_id"),
+        db.Index("ix_player_registrations_player", "player"),
+        db.Index("ix_player_registrations_team", "team"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     event = db.Column(
@@ -122,13 +149,15 @@ class PlayerRegistration(db.Model):  # type: ignore[misc]
         db.String(SHORT_NAME_LEN)
     )  # Player name for this tournament
     status = db.Column(
-        db.Enum(RegistrationStatus), default=RegistrationStatus.PENDING_TEAM_APPROVAL
+        db.Enum(RegistrationStatus),
+        default=RegistrationStatus.PENDING_TEAM_APPROVAL,
+        nullable=False,
     )
     registered_at = db.Column(
         db.DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
     )
     # Payment fields
-    paid = db.Column(db.Boolean, default=False)
+    paid = db.Column(db.Boolean, default=False, nullable=False)
     amount_paid = db.Column(db.Float, default=0.0)
     paid_at = db.Column(db.DateTime, nullable=True)
     payment_method = db.Column(db.String(SHORT_LABEL_LEN))

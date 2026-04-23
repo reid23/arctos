@@ -18,6 +18,12 @@ directory=$(dirname "${BASH_SOURCE[0]}")
 
 brew bundle --file="${directory}/Brewfile"
 echo "Installed Homebrew packages"
+if command -v cargo >/dev/null 2>&1; then
+    echo "Cargo is available: $(cargo --version)"
+else
+    echo "Cargo installation failed or is not on PATH" >&2
+    exit 1
+fi
 
 chmod +x "${directory}/setup-python.sh"
 "${directory}/setup-python.sh"

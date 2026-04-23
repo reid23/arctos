@@ -169,6 +169,9 @@ def create_app(config: dict | None = None) -> Flask:
     try:
         with app.app_context():
             db.create_all()
+            from app.db_migrations import run_bootstrap_migrations
+
+            run_bootstrap_migrations(db)
     except Exception:
         # If creation fails, continue; errors will surface when accessed
         pass

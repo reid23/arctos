@@ -8,7 +8,7 @@ import pytest
 from app.error_values import Err, Ok
 from app.services.schedule_import_export_service import ScheduleImportExportService
 from app.utils.toml_helpers import write_toml_schedule
-from models import Field, Match, Tag, Tournament, db
+from models import Field, Match, MatchRefSlot, Tag, Tournament, db
 
 
 @pytest.mark.unit
@@ -16,12 +16,10 @@ def test_export_schedule_includes_tags_fields_and_matches(test_db, tournament):
     """Exported TOML should contain tags, fields, and matches with expected structure."""
     tournament_url = tournament.url
 
-    # Seed tags and fields
+    # Seed tags
     tag1 = Tag(event=tournament_url, name="Pool A")
     tag2 = Tag(event=tournament_url, name="Pool B")
-    field1 = Field(event=tournament_url, name="Field 1", camera=None)
-    field2 = Field(event=tournament_url, name="Field 2", camera="[]")
-    db.session.add_all([tag1, tag2, field1, field2])
+    db.session.add_all([tag1, tag2])
 
     # Seed a simple match that uses tag and result references
     m1 = Match(
@@ -228,12 +226,6 @@ def test_break_join_matches_can_have_duplicate_names_on_different_fields(
     """BREAK and JOIN matches can have the same name on different fields."""
     tournament_url = tournament.url
 
-    # Create two fields
-    field1 = Field(event=tournament_url, name="Field 1", camera=None)
-    field2 = Field(event=tournament_url, name="Field 2", camera=None)
-    db.session.add_all([field1, field2])
-    db.session.commit()
-
     # Create two BREAK matches with the same name on different fields
     break1 = Match(
         name="Lunch Break",
@@ -290,12 +282,6 @@ def test_regular_matches_cannot_have_duplicate_names(test_db, tournament, app):
     """Regular matches (STATIC/SAFE/FAST) must have unique names within tournament."""
     tournament_url = tournament.url
 
-    # Create a field
-    field1 = Field(event=tournament_url, name="Field 1", camera=None)
-    field2 = Field(event=tournament_url, name="Field 2", camera=None)
-    db.session.add_all([field1, field2])
-    db.session.commit()
-
     # Create a STATIC match
     match1 = Match(
         name="Match A",
@@ -340,12 +326,6 @@ def test_import_resolves_duplicate_match_names_by_field(test_db, tournament):
     """When importing matches with duplicate names, previous_match/next_match should resolve to match on same field."""
     tournament_url = tournament.url
 
-    # Create fields
-    field1 = Field(event=tournament_url, name="Field 1", camera=None)
-    field2 = Field(event=tournament_url, name="Field 2", camera=None)
-    db.session.add_all([field1, field2])
-    db.session.commit()
-
     # Create TOML with duplicate BREAK match names on different fields
     # Each break should reference the previous match on its own field
     toml_content = textwrap.dedent(
@@ -353,35 +333,35 @@ def test_import_resolves_duplicate_match_names_by_field(test_db, tournament):
         event = "{tournament_url}"
 
         [[fields]]
-        name = "Field 1"
+        name = "Court A"
 
         [[fields]]
-        name = "Field 2"
+        name = "Court B"
 
         [[matches]]
         name = "Match 1"
-        field = "Field 1"
+        field = "Court A"
         schedule_type = "STATIC"
         set_type = "SETS"
         nominal_length = 60
 
         [[matches]]
         name = "Lunch Break"
-        field = "Field 1"
+        field = "Court A"
         schedule_type = "BREAK"
         nominal_length = 60
         previous_match = "Match 1"
 
         [[matches]]
         name = "Match 2"
-        field = "Field 2"
+        field = "Court B"
         schedule_type = "STATIC"
         set_type = "SETS"
         nominal_length = 60
 
         [[matches]]
         name = "Lunch Break"
-        field = "Field 2"
+        field = "Court B"
         schedule_type = "BREAK"
         nominal_length = 60
         previous_match = "Match 2"
@@ -404,8 +384,8 @@ def test_import_resolves_duplicate_match_names_by_field(test_db, tournament):
     assert len(breaks) == 2
 
     # Verify each break's previous_match points to the match on its own field
-    break1 = next((b for b in breaks if b.field == "Field 1"), None)
-    break2 = next((b for b in breaks if b.field == "Field 2"), None)
+    break1 = next((b for b in breaks if b.field == "Court A"), None)
+    break2 = next((b for b in breaks if b.field == "Court B"), None)
 
     assert break1 is not None
     assert break2 is not None
@@ -426,10 +406,6 @@ def test_import_resolves_duplicate_match_names_by_field(test_db, tournament):
 def test_tags_with_spaces_work_correctly(test_db, tournament):
     """Tags with spaces in their names should work correctly in export/import and references."""
     tournament_url = tournament.url
-
-    # Create a field
-    field = Field(event=tournament_url, name="Field 1", camera=None)
-    db.session.add(field)
 
     # Create a tag with spaces in the name
     tag_with_spaces = Tag(event=tournament_url, name="Pool A Teams")
@@ -477,3 +453,37 @@ def test_tags_with_spaces_work_correctly(test_db, tournament):
     assert imported_match is not None
     assert imported_match.team1_initial == "tag::Pool A Teams"
     assert imported_match.refs_initial == "tag::Pool A Teams"
+
+
+@pytest.mark.unit
+def test_export_schedule_reads_refs_initial_from_normalized_slots(test_db, tournament):
+    """Export should preserve refs_initial from normalized slots when legacy columns are empty."""
+    tournament_url = tournament.url
+    m = Match(
+        name="Normalized Refs Match",
+        event=tournament_url,
+        field="Field 1",
+        schedule_type="STATIC",
+        set_type="SETS",
+        nominal_length=60,
+        refs=None,
+        refs_initial=None,
+    )
+    db.session.add(m)
+    db.session.flush()
+    db.session.add(
+        MatchRefSlot(
+            match_uuid=m.uuid,
+            slot_index=0,
+            resolved_team_id=None,
+            initial_token="tag::Pool A",
+        )
+    )
+    db.session.commit()
+
+    res = ScheduleImportExportService.export_schedule(tournament_url)
+    match res:
+        case Ok(toml_str):
+            assert 'refs_initial = "tag::Pool A"' in toml_str
+        case Err(err):
+            raise AssertionError(f"Expected Ok(TOML), got Err({err})")

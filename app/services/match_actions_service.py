@@ -7,7 +7,6 @@ then map Result -> JSON.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
@@ -19,8 +18,9 @@ from app.exceptions import (
     UnauthorizedError,
     ValidationError,
 )
-from app.domain.enums import MatchStatus
+from app.domain.enums import MatchStatus, WinnerSide
 from app.utils.helpers import can_head_ref_match
+from app.utils.match_1nf import read_match_stream_starts
 
 if TYPE_CHECKING:  # pragma: no cover
     from models import Match, Point
@@ -182,8 +182,9 @@ class MatchActionsService:
             :class:`~app.error_values.Ok` wrapping the new point's UUID and
             metadata, or :class:`~app.error_values.Err`.
         """
-        from models import Field, Point, db
+        from models import Point, db
         from app.utils.datetime_helpers import to_iso_z
+        from app.utils.field_refs import resolve_match_field_obj, sync_match_field_ref
 
         match = MatchActionsService._require_match(tournament_url, match_id).Q()
         MatchActionsService._require_head_ref(tournament_url, user_id, match=match).Q()
@@ -215,28 +216,26 @@ class MatchActionsService:
                 new_point.stones_at_start = match.stones_remaining
 
         # Camera timestamp calculation (best-effort; preserves prior behavior).
-        if match.field:
-            field_obj = Field.query.filter_by(
-                event=tournament_url, name=match.field
-            ).first()
-            if field_obj and field_obj.camera and match.camera_stream_starts:
-                from app.utils.camera_helpers import (
-                    calculate_stream_timestamp,
-                    parse_camera_urls,
-                )
+        sync_match_field_ref(tournament_url, match)
+        field_obj = resolve_match_field_obj(tournament_url, match)
+        if field_obj and field_obj.camera:
+            from app.utils.camera_helpers import (
+                calculate_stream_timestamp,
+                parse_camera_urls,
+            )
 
-                try:
-                    stream_starts = json.loads(match.camera_stream_starts)
-                    camera_urls = parse_camera_urls(field_obj.camera)
-                    if "0" in stream_starts and len(camera_urls) > 0:
-                        stream_timestamp = calculate_stream_timestamp(
-                            new_point.stamp, stream_starts["0"]
-                        )
-                        if stream_timestamp is not None:
-                            new_point.camera_index = 0
-                            new_point.stream_timestamp = stream_timestamp
-                except (json.JSONDecodeError, KeyError, ValueError):
-                    pass
+            try:
+                stream_starts = read_match_stream_starts(match)
+                camera_urls = parse_camera_urls(field_obj.camera)
+                if "0" in stream_starts and len(camera_urls) > 0:
+                    stream_timestamp = calculate_stream_timestamp(
+                        new_point.stamp, stream_starts["0"]
+                    )
+                    if stream_timestamp is not None:
+                        new_point.camera_index = 0
+                        new_point.stream_timestamp = stream_timestamp
+            except (KeyError, ValueError):
+                pass
 
         db.session.add(new_point)
         db.session.commit()
@@ -287,7 +286,18 @@ class MatchActionsService:
         MatchActionsService._require_head_ref(tournament_url, user_id, match=match).Q()
 
         if "winner" in data:
-            point.winner = data["winner"] if data["winner"] != "none" else None
+            winner_val = data["winner"]
+            if winner_val == "none" or winner_val is None:
+                point.winner = None
+            else:
+                try:
+                    point.winner = WinnerSide(str(winner_val))
+                except ValueError:
+                    return Err(
+                        ValidationError(
+                            "winner must be TEAM1, TEAM2, or none", status_code=400
+                        )
+                    )
         if "rerolled" in data:
             point.rerolled = data["rerolled"]
         if "notes" in data:

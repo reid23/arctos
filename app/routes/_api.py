@@ -41,6 +41,18 @@ from app.utils.scheduling import (
 from app.utils.name_validation import match_name_char_error, team_pseudonym_char_error
 from app.utils.datetime_helpers import to_iso_z
 from app.utils.recording_retry import current_user_can_retry_finalization
+from app.utils.field_refs import (
+    resolve_match_field_obj,
+    set_match_field_from_name,
+    sync_match_field_ref,
+)
+from app.utils.match_1nf import (
+    read_match_ref_slots,
+    read_match_roster,
+    read_match_stream_starts,
+    replace_match_ref_slots,
+    replace_match_stream_starts,
+)
 from app.domain.enums import (
     RegistrationStatus,
     MatchStatus,
@@ -2881,8 +2893,9 @@ def start_match_data_api(tournament_url):
                 "uuid": match.uuid,
                 "name": match.name,
                 "field": match.field,
+                "field_id": match.field_id,
                 "set_type": match.set_type.value if match.set_type else None,
-                "refs": match.refs,
+                "refs": read_match_ref_slots(match)[0],
                 "team1_name": _team_name_for_match(tournament, match, "team1"),
                 "team2_name": _team_name_for_match(tournament, match, "team2"),
             },
@@ -3041,23 +3054,16 @@ def finalize_match_post_api(tournament_url):
     match.match_winner = match_winner
     match.finalized_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
-    if match.field:
-        field_obj = Field.query.filter_by(
-            event=tournament_url, name=match.field
-        ).first()
-        if field_obj and field_obj.camera:
-            from app.utils.camera_helpers import get_all_camera_stream_starts
+    sync_match_field_ref(tournament_url, match)
+    field_obj = resolve_match_field_obj(tournament_url, match)
+    if field_obj and field_obj.camera:
+        from app.utils.camera_helpers import get_all_camera_stream_starts
 
-            stream_starts = get_all_camera_stream_starts(field_obj)
-            if stream_starts:
-                existing_starts = {}
-                if match.camera_stream_starts:
-                    try:
-                        existing_starts = json.loads(match.camera_stream_starts)
-                    except json.JSONDecodeError:
-                        pass
-                existing_starts.update(stream_starts)
-                match.camera_stream_starts = json.dumps(existing_starts)
+        stream_starts = get_all_camera_stream_starts(field_obj)
+        if stream_starts:
+            existing_starts = read_match_stream_starts(match)
+            existing_starts.update(stream_starts)
+            replace_match_stream_starts(match, existing_starts)
 
     team1_signature = data.get("team1_signature")
     team2_signature = data.get("team2_signature")
@@ -3155,6 +3161,7 @@ def tournament_schedule(tournament_url):
                 "uuid": m.uuid,
                 "name": m.name,
                 "field": m.field,
+                "field_id": m.field_id,
                 "team1": m.team1,
                 "team2": m.team2,
                 "team1_initial": m.team1_initial,
@@ -3329,11 +3336,13 @@ def tournament_schedule_setup(tournament_url):
     )
     match_list = []
     for m in matches_query:
+        refs_csv, refs_initial_csv = read_match_ref_slots(m)
         match_list.append(
             {
                 "uuid": m.uuid,
                 "name": m.name,
                 "field": m.field,
+                "field_id": m.field_id,
                 "team1": m.team1,
                 "team2": m.team2,
                 "team1_initial": m.team1_initial,
@@ -3349,12 +3358,12 @@ def tournament_schedule_setup(tournament_url):
                 "nominal_length": m.nominal_length,
                 "previous_match": m.previous_match,
                 "next_match": m.next_match,
-                "refs": m.refs,
-                "refs_initial": m.refs_initial,
+                "refs": refs_csv,
+                "refs_initial": refs_initial_csv,
                 "ribbon": m.ribbon,
                 "skip_condition": m.skip_condition,
                 "nsets": m.nsets,
-                "stones_per_set": m.stones_per_set or m.nstonesperset,
+                "stones_per_set": m.stones_per_set,
                 "stones_remaining": m.stones_remaining,
                 "match_winner": m.match_winner.value if m.match_winner else None,
             }
@@ -3419,17 +3428,18 @@ def _team_display_name(tournament, team_id):
 
 def _refs_display_for_match(tournament, match):
     """Refs as comma-separated display names (pseudonym for each ref team), like team1_name/team2_name."""
-    if not match.refs:
-        return match.refs_initial
+    refs_csv, refs_initial_csv = read_match_ref_slots(match)
+    if not refs_csv:
+        return refs_initial_csv
     parts = []
-    for tid in (match.refs or "").split(","):
+    for tid in (refs_csv or "").split(","):
         tid = tid.strip()
         if not tid:
             continue
         name = _team_display_name(tournament, tid)
         if name:
             parts.append(name)
-    return ",".join(parts) if parts else match.refs_initial
+    return ",".join(parts) if parts else refs_initial_csv
 
 
 @bp.route("/tournaments/<tournament_url>/match", methods=["GET"])
@@ -3673,19 +3683,8 @@ def tournament_match_detail(tournament_url):
     from app.utils.player_helpers import get_player_display_from_registration
 
     # Parse selected players for "in_this_match" check
-    team1_selected = set()
-    if match.team1_players:
-        try:
-            team1_selected = set(json.loads(match.team1_players))
-        except:
-            pass
-
-    team2_selected = set()
-    if match.team2_players:
-        try:
-            team2_selected = set(json.loads(match.team2_players))
-        except:
-            pass
+    team1_selected = set(read_match_roster(match, "team1"))
+    team2_selected = set(read_match_roster(match, "team2"))
 
     # Helper to add players from a team (registration). Skip any player whose id is in exclude_ids (e.g. playing for the other team).
     def add_team_players(team_id, team_side, selected_ids, exclude_ids=None):
@@ -3868,9 +3867,12 @@ def tournament_match_detail(tournament_url):
     return jsonify(
         {
             "match": {
+                "refs": read_match_ref_slots(match)[0],
+                "refs_initial": read_match_ref_slots(match)[1],
                 "uuid": match.uuid,
                 "name": match.name,
                 "field": match.field,
+                "field_id": match.field_id,
                 "team1": match.team1,
                 "team2": match.team2,
                 "team1_name": team1_name,
@@ -3888,7 +3890,7 @@ def tournament_match_detail(tournament_url):
                 "confirmed_start_time": _dt_iso(match.confirmed_start_time),
                 "completed_time": _dt_iso(match.completed_time),
                 "set_type": match.set_type.value if match.set_type else None,
-                "stones_per_set": match.stones_per_set or match.nstonesperset,
+                "stones_per_set": match.stones_per_set,
                 "stones_remaining": match.stones_remaining,
                 "match_winner": (
                     match.match_winner.value if match.match_winner else None
@@ -3898,8 +3900,6 @@ def tournament_match_detail(tournament_url):
                 ),
                 "nominal_length": match.nominal_length,
                 "previous_match": match.previous_match,
-                "refs": match.refs,
-                "refs_initial": match.refs_initial,
                 "refs_display": _refs_display_for_match(tournament, match),
                 "ribbon": match.ribbon,
                 "skip_condition": match.skip_condition,
@@ -4719,6 +4719,7 @@ def update_match_api(tournament_url, match_id):
     # Extract fields
     name = data.get("name")
     field = data.get("field")
+    field_id = data.get("field_id")
     schedule_type_str = data.get("schedule_type")  # STATIC, SAFE, FAST, BREAK, JOIN
     length = data.get("length")
     start_time_str = data.get("start_time")
@@ -4760,11 +4761,23 @@ def update_match_api(tournament_url, match_id):
         if mn_err:
             return jsonify({"error": mn_err}), 400
         match.name = name
+    if field_id is not None:
+        try:
+            field_id_int = int(field_id)
+        except (TypeError, ValueError):
+            return jsonify({"error": "field_id must be an integer"}), 400
+        field_obj = Field.query.filter_by(event=tournament_url, id=field_id_int).first()
+        if not field_obj:
+            return (
+                jsonify({"error": "field_id does not exist for this tournament"}),
+                400,
+            )
+        set_match_field_from_name(tournament_url, match, field_obj.name)
     if field is not None:  # field can be empty string/null
-        match.field = field
+        set_match_field_from_name(tournament_url, match, field)
 
     # Match name uniqueness: for BREAK/JOIN only within same field; for others globally in tournament
-    if name is not None or field is not None:
+    if name is not None or field is not None or field_id is not None:
         effective_name = (match.name or "").strip()
         effective_field = (match.field or "").strip()
         if effective_name:
@@ -4810,8 +4823,7 @@ def update_match_api(tournament_url, match_id):
         match.team1_initial = None
         match.team2 = None
         match.team2_initial = None
-        match.refs = None
-        match.refs_initial = None
+        replace_match_ref_slots(match, None, None)
     else:
         # Helper to check if a value is an explicit team ID (not a tag or match reference)
         def is_explicit_team_id(val: str) -> bool:
@@ -4870,13 +4882,17 @@ def update_match_api(tournament_url, match_id):
         if refs is not None:
             if isinstance(refs, list):
                 r_csv, i_csv = resolve_refs_slots(refs, tournament_url)
-                match.refs = r_csv
-                match.refs_initial = i_csv
+                replace_match_ref_slots(match, r_csv, i_csv)
             else:
                 toks = refs_string_to_tokens(refs)
                 r_csv, i_csv = resolve_refs_slots(toks, tournament_url)
-                match.refs = r_csv
-                match.refs_initial = i_csv
+                replace_match_ref_slots(match, r_csv, i_csv)
+        else:
+            replace_match_ref_slots(
+                match,
+                read_match_ref_slots(match)[0],
+                read_match_ref_slots(match)[1],
+            )
 
     # Set Type
     if set_type_str:
@@ -4890,7 +4906,6 @@ def update_match_api(tournament_url, match_id):
 
     if stones_per_set is not None:
         match.stones_per_set = int(stones_per_set)
-        match.nstonesperset = int(stones_per_set)  # Legacy field
 
     if ribbon is not None:
         match.ribbon = bool(ribbon)
@@ -5096,8 +5111,7 @@ def force_start_match_api(tournament_url, match_id):
 
     # Refs: preserve slot count (registration, explicit id, tag)
     r_csv, i_csv = resolve_refs_slots(refs_list, tournament_url)
-    match.refs = r_csv
-    match.refs_initial = i_csv
+    replace_match_ref_slots(match, r_csv, i_csv)
 
     # Convert to static
     match.schedule_type = ScheduleType.STATIC
@@ -5235,30 +5249,19 @@ def update_field_api(tournament_url, field_id):
                 pass
 
         for match in matches_to_update:
-            if match.camera_stream_starts:
-                try:
-                    stream_starts = json.loads(match.camera_stream_starts)
-                    new_stream_starts = {}
-                    for old_idx_str, start_time in stream_starts.items():
-                        if old_idx_str in old_to_new_index_map:
-                            new_idx_str = old_to_new_index_map[old_idx_str]
-                            new_stream_starts[new_idx_str] = start_time
-                    match.camera_stream_starts = (
-                        json.dumps(new_stream_starts) if new_stream_starts else None
-                    )
-                except:
-                    match.camera_stream_starts = None
+            stream_starts = read_match_stream_starts(match)
+            new_stream_starts = {}
+            for old_idx_str, start_time in stream_starts.items():
+                if old_idx_str in old_to_new_index_map:
+                    new_idx_str = old_to_new_index_map[old_idx_str]
+                    new_stream_starts[new_idx_str] = start_time
+            replace_match_stream_starts(match, new_stream_starts)
 
         from app.utils.camera_helpers import calculate_stream_timestamp
 
         for match in matches_to_update:
             points = Point.query.filter_by(match=match.uuid).all()
-            stream_starts = {}
-            if match.camera_stream_starts:
-                try:
-                    stream_starts = json.loads(match.camera_stream_starts)
-                except:
-                    pass
+            stream_starts = read_match_stream_starts(match)
 
             for point in points:
                 if point.camera_index is not None:
@@ -5290,7 +5293,7 @@ def update_field_api(tournament_url, field_id):
 
     if old_field_name != new_field_name:
         for match in matches_to_update:
-            match.field = new_field_name
+            set_match_field_from_name(tournament_url, match, new_field_name)
 
     # Optional: set stream start times for cameras (e.g. from YouTube API or user input).
     # Merge with existing: only update indices present in the request; never remove other keys.
@@ -5299,14 +5302,7 @@ def update_field_api(tournament_url, field_id):
         from app.utils.camera_helpers import calculate_stream_timestamp
 
         for match in matches_to_update:
-            stream_starts = {}
-            if match.camera_stream_starts:
-                try:
-                    loaded = json.loads(match.camera_stream_starts)
-                    if isinstance(loaded, dict):
-                        stream_starts = dict(loaded)
-                except (TypeError, ValueError):
-                    pass
+            stream_starts = dict(read_match_stream_starts(match))
             for idx, val in enumerate(stream_start_times):
                 if idx >= len(camera_urls):
                     break
@@ -5314,18 +5310,11 @@ def update_field_api(tournament_url, field_id):
                     stream_starts[str(idx)] = val.strip()
                 elif str(idx) in stream_starts:
                     del stream_starts[str(idx)]
-            match.camera_stream_starts = (
-                json.dumps(stream_starts) if stream_starts else None
-            )
+            replace_match_stream_starts(match, stream_starts)
         # Recompute point stream_timestamp for matches we updated
         for match in matches_to_update:
             points = Point.query.filter_by(match=match.uuid).all()
-            stream_starts = {}
-            if match.camera_stream_starts:
-                try:
-                    stream_starts = json.loads(match.camera_stream_starts)
-                except (TypeError, ValueError):
-                    pass
+            stream_starts = read_match_stream_starts(match)
             for point in points:
                 if (
                     point.camera_index is not None
@@ -5361,6 +5350,7 @@ def create_match_api(tournament_url):
 
     # Parse schedule type and field for name-uniqueness scope (BREAK/JOIN are unique per field)
     schedule_type_str = data.get("schedule_type")
+    field_id = data.get("field_id")
     schedule_type = ScheduleType.STATIC
     if schedule_type_str:
         try:
@@ -5368,6 +5358,18 @@ def create_match_api(tournament_url):
         except ValueError:
             pass
     effective_field = (data.get("field") or "").strip()
+    if field_id is not None:
+        try:
+            field_id_int = int(field_id)
+        except (TypeError, ValueError):
+            return jsonify({"error": "field_id must be an integer"}), 400
+        field_obj = Field.query.filter_by(event=tournament_url, id=field_id_int).first()
+        if not field_obj:
+            return (
+                jsonify({"error": "field_id does not exist for this tournament"}),
+                400,
+            )
+        effective_field = field_obj.name
 
     # Name uniqueness: for BREAK/JOIN only within same field (and same type); for others globally in tournament
     if schedule_type in (ScheduleType.BREAK, ScheduleType.JOIN):
@@ -5394,7 +5396,7 @@ def create_match_api(tournament_url):
         return jsonify({"error": "Match name already exists"}), 400
 
     match = Match(event=tournament_url, name=name)
-    match.field = data.get("field")
+    set_match_field_from_name(tournament_url, match, effective_field)
     match.nominal_length = (
         int(data.get("length")) if data.get("length") is not None else None
     )
@@ -5508,8 +5510,13 @@ def create_match_api(tournament_url):
     refs = data.get("refs")
     if refs and isinstance(refs, list):
         r_csv, i_csv = resolve_refs_slots(refs, tournament_url)
-        match.refs = r_csv
-        match.refs_initial = i_csv
+        replace_match_ref_slots(match, r_csv, i_csv)
+    else:
+        replace_match_ref_slots(
+            match,
+            read_match_ref_slots(match)[0],
+            read_match_ref_slots(match)[1],
+        )
 
     # Format
     set_type_str = data.get("set_type")
@@ -5523,7 +5530,6 @@ def create_match_api(tournament_url):
         match.nsets = int(data.get("nsets"))
     if match.set_type == SetType.STONES and data.get("stones_per_set") is not None:
         match.stones_per_set = int(data.get("stones_per_set"))
-        match.nstonesperset = match.stones_per_set
 
     if data.get("ribbon") is not None:
         match.ribbon = bool(data.get("ribbon"))
@@ -5677,8 +5683,9 @@ def _tag_usage(tournament_url, tag_name):
             used.append(f'Team 1 of match "{m.name}"')
         if m.team2_initial and m.team2_initial.strip() == tag_ref:
             used.append(f'Team 2 of match "{m.name}"')
-        if m.refs_initial:
-            for r in (r.strip() for r in m.refs_initial.split(",")):
+        _, refs_initial_csv = read_match_ref_slots(m)
+        if refs_initial_csv:
+            for r in (r.strip() for r in refs_initial_csv.split(",")):
                 if r == tag_ref:
                     used.append(f'Refs of match "{m.name}"')
                     break
@@ -6291,9 +6298,10 @@ def update_tags_api(tournament_url):
         if m.team2_initial == tag_ref:
             m.team2 = team_id
 
-        if m.refs_initial:
-            refs = [r.strip() for r in m.refs_initial.split(",")]
-            current_refs = [r.strip() for r in (m.refs or "").split(",")]
+        refs_csv, refs_initial_csv = read_match_ref_slots(m)
+        if refs_initial_csv:
+            refs = [r.strip() for r in refs_initial_csv.split(",")]
+            current_refs = [r.strip() for r in (refs_csv or "").split(",")]
             if len(current_refs) != len(refs):
                 current_refs = [""] * len(refs)
 
@@ -6304,7 +6312,7 @@ def update_tags_api(tournament_url):
                     changed = True
 
             if changed:
-                m.refs = ",".join(current_refs)
+                replace_match_ref_slots(m, ",".join(current_refs), refs_initial_csv)
 
     db.session.commit()
     recompute_all_match_times(tournament_url)

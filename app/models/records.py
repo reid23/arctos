@@ -23,6 +23,7 @@ class Injury(db.Model):
     """
 
     __tablename__ = "injuries"
+    __table_args__ = (db.Index("ix_injuries_player", "player"),)
 
     id = db.Column(db.Integer, primary_key=True)
     player = db.Column(
@@ -51,6 +52,11 @@ class HeadRef(db.Model):
     """
 
     __tablename__ = "headrefs"
+    __table_args__ = (
+        db.UniqueConstraint("player", "event", name="uq_headref_event_player"),
+        db.Index("ix_headrefs_event", "event"),
+        db.Index("ix_headrefs_player", "player"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     player = db.Column(

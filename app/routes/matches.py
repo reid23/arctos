@@ -26,6 +26,12 @@ from app.utils.responses import json_error, json_success
 from app.utils.datetime_helpers import to_iso_z
 from app.error_values import Ok, Err
 from app.utils.result_helpers import json_from_result, public_error_message
+from app.utils.field_refs import resolve_match_field_obj, sync_match_field_ref
+from app.utils.match_1nf import (
+    read_match_roster,
+    read_match_stream_starts,
+    replace_match_stream_starts,
+)
 from app.domain.enums import RegistrationStatus, MatchStatus, ScheduleType, SetType
 
 bp = Blueprint("matches", __name__, url_prefix="/_api")
@@ -128,7 +134,7 @@ def scoreboard():
         stones_info = None
         if match.set_type == "STONES":
             stones_info = {
-                "stones_per_set": match.stones_per_set or match.nstonesperset or 100,
+                "stones_per_set": match.stones_per_set or 100,
                 "stones_remaining": match.stones_remaining,
             }
 
@@ -349,7 +355,7 @@ def scoreboard_state():
         points_for_stones = None
         if match.set_type == "STONES":
             stones_info = {
-                "stones_per_set": match.stones_per_set or match.nstonesperset or 100,
+                "stones_per_set": match.stones_per_set or 100,
                 "stones_remaining": match.stones_remaining,
             }
 
@@ -733,34 +739,30 @@ def match_page(tournament_url: str):
                 stream_starts = {}
 
     # Get YouTube cameras from field configuration (if field exists)
-    if match.field:
-        field_obj = Field.query.filter_by(
-            event=tournament_url, name=match.field
-        ).first()
-        if field_obj and field_obj.camera:
-            camera_urls = parse_camera_urls(field_obj.camera)
+    sync_match_field_ref(tournament_url, match)
+    field_obj = resolve_match_field_obj(tournament_url, match)
+    if field_obj and field_obj.camera:
+        camera_urls = parse_camera_urls(field_obj.camera)
 
-            # Include YouTube cameras from field configuration
-            if camera_urls:
-                for idx, url in enumerate(camera_urls):
-                    stream_start_str = stream_starts.get(
-                        str(idx)
-                    )  # JSON keys are strings
+        # Include YouTube cameras from field configuration
+        if camera_urls:
+            for idx, url in enumerate(camera_urls):
+                stream_start_str = stream_starts.get(str(idx))  # JSON keys are strings
 
-                    # For old format compatibility
-                    if not stream_start_str and isinstance(stream_starts, dict):
-                        stream_start_str = stream_starts.get(str(idx))
+                # For old format compatibility
+                if not stream_start_str and isinstance(stream_starts, dict):
+                    stream_start_str = stream_starts.get(str(idx))
 
-                    available_cameras.append(
-                        {
-                            "index": idx,
-                            "url": url,
-                            "stream_start_time": (
-                                stream_start_str if stream_start_str else None
-                            ),
-                            "type": "youtube",
-                        }
-                    )
+                available_cameras.append(
+                    {
+                        "index": idx,
+                        "url": url,
+                        "stream_start_time": (
+                            stream_start_str if stream_start_str else None
+                        ),
+                        "type": "youtube",
+                    }
+                )
 
     # Add recorded videos whenever we have them (match may be in progress, completed, or not yet started)
     if recorded_videos:
@@ -795,14 +797,10 @@ def match_page(tournament_url: str):
             camera_url = first_cam["url"]
 
     # Debug: log camera availability
-    if not available_cameras and match.field:
-        field_obj = Field.query.filter_by(
-            event=tournament_url, name=match.field
-        ).first()
-        if field_obj and field_obj.camera:
-            print(
-                f"Warning: No cameras available for match {match.uuid} on field {match.field}. Field has {len(camera_urls)} camera(s). Match status: {match.status}"
-            )
+    if not available_cameras and field_obj and field_obj.camera:
+        print(
+            f"Warning: No cameras available for match {match.uuid} on field {match.field}. Field has {len(camera_urls)} camera(s). Match status: {match.status}"
+        )
 
     return render_template(
         "match_page.html",
@@ -1111,37 +1109,27 @@ def run_match(tournament_url):
 
     team1_players = []
     team2_players = []
-    if match.team1_players:
-        try:
-            player_ids = json.loads(match.team1_players)
-            for pid in player_ids:
-                pr = PlayerRegistration.query.filter_by(
-                    event=tournament_url,
-                    player=pid,
-                    status=RegistrationStatus.CONFIRMED,
-                ).first()
-                if pr:
-                    player = Player.query.get(pid)
-                    if player:
-                        team1_players.append((pr, player))
-        except (json.JSONDecodeError, TypeError):
-            pass
+    for pid in read_match_roster(match, "team1"):
+        pr = PlayerRegistration.query.filter_by(
+            event=tournament_url,
+            player=pid,
+            status=RegistrationStatus.CONFIRMED,
+        ).first()
+        if pr:
+            player = Player.query.get(pid)
+            if player:
+                team1_players.append((pr, player))
 
-    if match.team2_players:
-        try:
-            player_ids = json.loads(match.team2_players)
-            for pid in player_ids:
-                pr = PlayerRegistration.query.filter_by(
-                    event=tournament_url,
-                    player=pid,
-                    status=RegistrationStatus.CONFIRMED,
-                ).first()
-                if pr:
-                    player = Player.query.get(pid)
-                    if player:
-                        team2_players.append((pr, player))
-        except (json.JSONDecodeError, TypeError):
-            pass
+    for pid in read_match_roster(match, "team2"):
+        pr = PlayerRegistration.query.filter_by(
+            event=tournament_url,
+            player=pid,
+            status=RegistrationStatus.CONFIRMED,
+        ).first()
+        if pr:
+            player = Player.query.get(pid)
+            if player:
+                team2_players.append((pr, player))
 
     # Build match_players for player autocomplete in notes modal
     match_players = []
@@ -1297,25 +1285,18 @@ def finalize_match_post(tournament_url):
     match.finalized_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
     # Refresh camera stream start times when match ends (in case streams started late)
-    if match.field:
-        field_obj = Field.query.filter_by(
-            event=tournament_url, name=match.field
-        ).first()
-        if field_obj and field_obj.camera:
-            from app.utils.camera_helpers import get_all_camera_stream_starts
+    sync_match_field_ref(tournament_url, match)
+    field_obj = resolve_match_field_obj(tournament_url, match)
+    if field_obj and field_obj.camera:
+        from app.utils.camera_helpers import get_all_camera_stream_starts
 
-            stream_starts = get_all_camera_stream_starts(field_obj)
-            if stream_starts:
-                # Merge with existing stream starts (don't overwrite if already set)
-                existing_starts = {}
-                if match.camera_stream_starts:
-                    try:
-                        existing_starts = json.loads(match.camera_stream_starts)
-                    except json.JSONDecodeError:
-                        pass
-                # Update with any new stream starts
-                existing_starts.update(stream_starts)
-                match.camera_stream_starts = json.dumps(existing_starts)
+        stream_starts = get_all_camera_stream_starts(field_obj)
+        if stream_starts:
+            # Merge with existing stream starts (don't overwrite if already set)
+            existing_starts = read_match_stream_starts(match)
+            # Update with any new stream starts
+            existing_starts.update(stream_starts)
+            replace_match_stream_starts(match, existing_starts)
 
     team1_signature = request.form.get("team1_signature")
     team2_signature = request.form.get("team2_signature")

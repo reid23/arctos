@@ -94,10 +94,13 @@ class MatchScheduleSerializer:
             result["team2_initial"] = match.team2_initial
         elif getattr(match, "team2", False):
             result["team2_initial"] = match.team2
-        if match.refs_initial:
-            result["refs_initial"] = match.refs_initial
-        elif getattr(match, "refs", False):
-            result["refs_initial"] = match.refs
+        from app.utils.match_1nf import read_match_ref_slots
+
+        refs_csv, refs_initial_csv = read_match_ref_slots(match)
+        if refs_initial_csv:
+            result["refs_initial"] = refs_initial_csv
+        elif refs_csv:
+            result["refs_initial"] = refs_csv
         if match.field:
             result["field"] = match.field
         if match.skip_condition:

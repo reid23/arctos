@@ -175,14 +175,16 @@ def get_conflicting_match_on_field(tournament_url: str, match):
 def _reasons_teams_refs(match, tournament_url: str) -> List[str]:
     """Reasons for teams or refs not resolved. For refs, list which slots are unresolved (tag, match ref, or explicit)."""
     from models import Match, Tag
+    from app.utils.match_1nf import read_match_ref_slots
 
     reasons = []
     if not getattr(match, "team1", None) or not getattr(match, "team2", None):
         reasons.append("Teams not yet determined.")
-    refs_initial = (getattr(match, "refs_initial", None) or "").strip()
+    refs_current_csv, refs_initial_csv = read_match_ref_slots(match)
+    refs_initial = (refs_initial_csv or "").strip()
     if refs_initial:
         refs_list = [r.strip() for r in refs_initial.split(",")]
-        refs_current = (getattr(match, "refs", None) or "").split(",")
+        refs_current = (refs_current_csv or "").split(",")
         if len(refs_current) < len(refs_list):
             refs_current = list(refs_current) + [""] * (
                 len(refs_list) - len(refs_current)

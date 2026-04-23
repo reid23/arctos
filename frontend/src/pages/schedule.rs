@@ -981,6 +981,7 @@ fn CreateMatchModal(
             let req = CreateMatchRequest {
                 name: name(),
                 field: if field().is_empty() { None } else { Some(field()) },
+                field_id: None,
                 schedule_type: Some(schedule_type()),
                 length: len,
                 start_time: if start_time().is_empty() {
@@ -1048,6 +1049,7 @@ fn CreateMatchModal(
             let req = CreateMatchRequest {
                 name: name(),
                 field: if field().is_empty() { None } else { Some(field()) },
+                field_id: None,
                 schedule_type: Some(schedule_type()),
                 length: len,
                 start_time: if start_time().is_empty() {
@@ -3649,6 +3651,7 @@ fn EditMatchModal(
             let req = UpdateMatchRequest {
                 name: Some(name()),
                 field: Some(field()),
+                field_id: None,
                 schedule_type: Some(schedule_type()),
                 length: len,
                 start_time: if start_time().is_empty() {

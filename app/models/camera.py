@@ -29,6 +29,7 @@ class Camera(db.Model):
         event: Tournament URL slug (denormalised for efficient filtering
             without joins).
         field: Field index within the tournament (0-based integer).
+        field_id: FK to the tournament field row used by this recording.
         name: Human-readable display name for the recording.
         source_type: Where the recording originated (e.g. ``"recording"``).
         uploaded_by_user_id: ID of the user who uploaded the recording.
@@ -45,6 +46,13 @@ class Camera(db.Model):
     """
 
     __tablename__ = "cameras"
+    __table_args__ = (
+        db.Index("ix_cameras_field_id", "field_id"),
+        db.CheckConstraint(
+            "(uploaded_by_user_type IS NULL OR uploaded_by_user_type IN ('player', 'team'))",
+            name="ck_cameras_uploaded_by_user_type_allowed_values",
+        ),
+    )
 
     uuid = db.Column(
         db.String(UUID_LEN), primary_key=True, default=lambda: str(uuid.uuid4())
@@ -63,6 +71,7 @@ class Camera(db.Model):
         index=True,
     )
     field = db.Column(db.Integer, nullable=False, index=True)
+    field_id = db.Column(db.Integer, db.ForeignKey("fields.id"), nullable=True)
 
     # Display / identity.
     name = db.Column(db.String(LONG_NAME_LEN), nullable=False)

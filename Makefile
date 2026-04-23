@@ -18,7 +18,7 @@ KEYFILE  ?= key.pem
 CERT_DAYS    ?= 365
 CERT_SUBJECT ?= /CN=localhost
 
-.PHONY: help setup setup-os setup-macos setup-ubuntu setup-python setup-frontend install all run certs
+.PHONY: help setup setup-os setup-macos setup-ubuntu setup-python setup-frontend install all run migrate certs test unit integration format
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*##"; printf "Usage: make <target>\n\nTargets:\n"} \
@@ -37,11 +37,11 @@ else
 	@echo "Unsupported OS: $(UNAME_S). Only macOS and Linux (Ubuntu) are supported."; exit 1
 endif
 
-setup-macos: ## Install macOS system dependencies (Homebrew, Xcode CLI, packages, Python)
+setup-macos: ## Install macOS system dependencies (Homebrew, Rust/Cargo, uv, Python)
 	@chmod +x $(SETUP_DIR)/setup-macos.sh
 	@$(SETUP_DIR)/setup-macos.sh
 
-setup-ubuntu: ## Install Ubuntu system dependencies (apt packages, uv, Python)
+setup-ubuntu: ## Install Ubuntu system dependencies (apt packages incl. Rust/Cargo, uv, Python)
 	@chmod +x $(SETUP_DIR)/setup-ubuntu.sh
 	@$(SETUP_DIR)/setup-ubuntu.sh
 
@@ -53,6 +53,7 @@ install: ## Sync backend Python dependencies with uv
 	@uv sync
 
 setup-frontend: ## Install the Dioxus CLI required to build/serve the frontend
+	@command -v cargo >/dev/null || { echo "cargo not found; run 'make setup' first"; exit 1; }
 	@cargo install dioxus-cli
 
 certs: ## Generate self-signed SSL certs at $(CERTFILE)/$(KEYFILE) (use FORCE=1 to overwrite)
@@ -84,6 +85,10 @@ run: ## Run the backend with gunicorn (loads $(ENV_FILE) if present)
 		$(if $(strip $(CERTFILE)),--certfile=$(CERTFILE)) \
 		$(if $(strip $(KEYFILE)),--keyfile=$(KEYFILE)) \
 		run_app:app
+
+migrate: ## Apply app-managed schema migrations
+	@uv sync
+	@PYTHONPATH="$(REPO_ROOT):$$PYTHONPATH" uv run python scripts/run_migrations.py
 
 test:
 	uv run pytest tests/

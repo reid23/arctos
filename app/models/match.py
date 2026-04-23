@@ -8,7 +8,6 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import foreign
 
 from app.domain.enums import (
-    WinnerSide,
     MatchStatus,
     ScheduleType,
     WinnerSide,
@@ -47,6 +46,8 @@ class Match(db.Model):
         refs: Comma-separated team IDs confirmed as referees.
         refs_initial: Comma-separated ASS expressions for referee slots.
         field: Name of the field (court) where the match takes place.
+        field_id: FK to :class:`~app.models.tournament.Field` (preferred over
+            :attr:`field` for referential integrity).
         nominal_start_time: Scheduled start time (may be updated dynamically).
         confirmed_start_time: Actual start time once the match begins.
         completed_time: Time the match ended.
@@ -81,6 +82,12 @@ class Match(db.Model):
     """
 
     __tablename__ = "matches"
+    __table_args__ = (
+        db.Index("ix_matches_event", "event"),
+        db.Index("ix_matches_status", "status"),
+        db.Index("ix_matches_field", "field"),
+        db.Index("ix_matches_field_id", "field_id"),
+    )
 
     uuid = db.Column(
         db.String(UUID_LEN), primary_key=True, default=lambda: str(uuid.uuid4())
@@ -96,25 +103,26 @@ class Match(db.Model):
     refs = db.Column(db.Text)  # comma separated team ids
     refs_initial = db.Column(db.Text)
     field = db.Column(db.String(SHORT_NAME_LEN))
+    field_id = db.Column(db.Integer, db.ForeignKey("fields.id"), nullable=True)
     nominal_start_time = db.Column(db.DateTime)
     confirmed_start_time = db.Column(db.DateTime)
     completed_time = db.Column(db.DateTime)
     nominal_length = db.Column(db.Integer)  # minutes
     schedule_type = db.Column(
-        db.Enum(ScheduleType), default=ScheduleType.STATIC
+        db.Enum(ScheduleType), default=ScheduleType.STATIC, nullable=False
     )  # STATIC, SAFE, FAST, BREAK, JOIN
     set_type = db.Column(
-        db.Enum(SetType), default=SetType.SETS
+        db.Enum(SetType), default=SetType.SETS, nullable=False
     )  # SETS, STONES (only for non-BREAK/JOIN matches)
     ribbon = db.Column(
-        db.Boolean, default=False
+        db.Boolean, default=False, nullable=False
     )  # True if this is a ribbon game (not counted in results)
     nsets = db.Column(db.Integer)
     nstonesperset = db.Column(
         db.Integer
     )  # DEPRECATED: Use stones_per_set instead. Kept for backward compatibility.
     status = db.Column(
-        db.Enum(MatchStatus), default=MatchStatus.NOT_STARTED
+        db.Enum(MatchStatus), default=MatchStatus.NOT_STARTED, nullable=False
     )  # NOT_STARTED, IN_PROGRESS, COMPLETED
     initial_notes = db.Column(
         db.Text
@@ -161,6 +169,7 @@ class Match(db.Model):
         post_update=True,
         backref="next_of",
     )
+    field_obj = db.relationship("Field", foreign_keys=[field_id], lazy="joined")
 
     def get_skip_condition_dependencies(self) -> dict[str, set[str]]:
         """
@@ -263,7 +272,7 @@ class Point(db.Model):
     Attributes:
         uuid: UUID primary key, auto-generated.
         match: UUID FK of the parent :class:`Match`.
-        winner: Winning side (``"TEAM1"`` or ``"TEAM2"``).
+        winner: Winning side enum (TEAM1/TEAM2), or ``None``.
         rerolled: ``True`` if this point was rerolled (overridden).
         stamp: Timestamp when the point was scored.
         end_stamp: Timestamp when the point ended (for duration tracking).
@@ -279,6 +288,13 @@ class Point(db.Model):
     """
 
     __tablename__ = "points"
+    __table_args__ = (
+        db.Index("ix_points_match", "match"),
+        db.CheckConstraint(
+            "(winner IS NULL OR winner IN ('TEAM1', 'TEAM2'))",
+            name="ck_points_winner_enum",
+        ),
+    )
 
     uuid = db.Column(
         db.String(UUID_LEN), primary_key=True, default=lambda: str(uuid.uuid4())
@@ -286,10 +302,12 @@ class Point(db.Model):
     match = db.Column(
         db.String(UUID_LEN), db.ForeignKey("matches.uuid"), nullable=False
     )
-    winner = db.Column(db.String(SHORT_CODE_LEN))  # TEAM1, TEAM2
-    rerolled = db.Column(db.Boolean, default=False)
+    winner = db.Column(db.Enum(WinnerSide), nullable=True)  # TEAM1, TEAM2
+    rerolled = db.Column(db.Boolean, default=False, nullable=False)
     stamp = db.Column(
-        db.DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+        db.DateTime,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+        nullable=False,
     )
     end_stamp = db.Column(db.DateTime)
     footage = db.Column(db.String(LONG_URL_LEN))
@@ -303,8 +321,75 @@ class Point(db.Model):
         db.Integer
     )  # Stones remaining when this point started (for STONES matches)
     rerollreason = db.Column(db.Text)
-    set_number = db.Column(db.Integer, default=1)
+    set_number = db.Column(db.Integer, default=1, nullable=False)
     notes = db.Column(db.Text)
+
+
+class MatchRefSlot(db.Model):
+    """Normalized referee-slot representation for a match."""
+
+    __tablename__ = "match_ref_slots"
+    __table_args__ = (
+        db.UniqueConstraint("match_uuid", "slot_index", name="uq_match_ref_slot_index"),
+        db.Index("ix_match_ref_slots_match_uuid", "match_uuid"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    match_uuid = db.Column(
+        db.String(UUID_LEN), db.ForeignKey("matches.uuid"), nullable=False
+    )
+    slot_index = db.Column(db.Integer, nullable=False)
+    resolved_team_id = db.Column(
+        db.String(USER_ID_LEN), db.ForeignKey("teams.id"), nullable=True
+    )
+    initial_token = db.Column(db.String(LONG_NAME_LEN), nullable=True)
+
+
+class MatchRosterEntry(db.Model):
+    """Normalized roster selections captured at match start."""
+
+    __tablename__ = "match_roster_entries"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "match_uuid", "side", "player_id", name="uq_match_roster_side_player"
+        ),
+        db.UniqueConstraint(
+            "match_uuid", "side", "slot_index", name="uq_match_roster_side_slot"
+        ),
+        db.Index("ix_match_roster_entries_match_uuid", "match_uuid"),
+        db.CheckConstraint(
+            "side IN ('team1', 'team2')", name="ck_match_roster_side_allowed_values"
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    match_uuid = db.Column(
+        db.String(UUID_LEN), db.ForeignKey("matches.uuid"), nullable=False
+    )
+    side = db.Column(db.String(SHORT_CODE_LEN), nullable=False)
+    player_id = db.Column(
+        db.String(USER_ID_LEN), db.ForeignKey("players.id"), nullable=False
+    )
+    slot_index = db.Column(db.Integer, nullable=False)
+
+
+class MatchCameraStreamStart(db.Model):
+    """Normalized camera stream start times for a match."""
+
+    __tablename__ = "match_camera_stream_starts"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "match_uuid", "camera_index", name="uq_match_camera_stream_start_idx"
+        ),
+        db.Index("ix_match_camera_stream_starts_match_uuid", "match_uuid"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    match_uuid = db.Column(
+        db.String(UUID_LEN), db.ForeignKey("matches.uuid"), nullable=False
+    )
+    camera_index = db.Column(db.Integer, nullable=False)
+    stream_start_iso = db.Column(db.String(LONG_NAME_LEN), nullable=False)
 
 
 class MatchNote(db.Model):
@@ -328,6 +413,10 @@ class MatchNote(db.Model):
     """
 
     __tablename__ = "match_notes"
+    __table_args__ = (
+        db.Index("ix_match_notes_match", "match"),
+        db.Index("ix_match_notes_point_id", "point_id"),
+    )
 
     uuid = db.Column(
         db.String(UUID_LEN), primary_key=True, default=lambda: str(uuid.uuid4())

@@ -4,7 +4,6 @@ Match operations service.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Iterable, List, Optional
@@ -15,6 +14,7 @@ from app.exceptions import (
     NotFoundError,
     ValidationError,
 )
+from app.utils.match_1nf import replace_match_roster, replace_match_stream_starts
 
 if TYPE_CHECKING:  # pragma: no cover
     from models import Match
@@ -82,8 +82,9 @@ class MatchService:
             :class:`~app.models.match.Match`, or
             :class:`~app.error_values.Err` wrapping a domain error.
         """
-        from models import Match, Tournament, Field, db
+        from models import Match, Tournament, db
         from app.domain.enums import MatchStatus
+        from app.utils.field_refs import resolve_match_field_obj, sync_match_field_ref
         from app.utils.scheduling import recompute_all_match_times
 
         if not match_id:
@@ -138,8 +139,8 @@ class MatchService:
         match.confirmed_start_time = datetime.now(timezone.utc).replace(tzinfo=None)
 
         match.initial_notes = match_notes or ""
-        match.team1_players = json.dumps(team1_players)
-        match.team2_players = json.dumps(team2_players)
+        replace_match_roster(match, "team1", team1_players)
+        replace_match_roster(match, "team2", team2_players)
         match.started_by = user.id
         match.started_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
@@ -150,22 +151,19 @@ class MatchService:
                 except ValueError:
                     return Err(ValidationError("Invalid stones per set value"))
             else:
-                # Use stones_per_set with fallback to deprecated nstonesperset for backward compatibility
-                spp = match.stones_per_set or match.nstonesperset or 100
+                spp = match.stones_per_set or 100
             match.stones_per_set = spp
             match.stones_remaining = spp
 
         # Get camera stream start times for all cameras on this field
-        if match.field:
-            field_obj = Field.query.filter_by(
-                event=tournament_url, name=match.field
-            ).first()
-            if field_obj and field_obj.camera:
-                from app.utils.camera_helpers import get_all_camera_stream_starts
+        sync_match_field_ref(tournament_url, match)
+        field_obj = resolve_match_field_obj(tournament_url, match)
+        if field_obj and field_obj.camera:
+            from app.utils.camera_helpers import get_all_camera_stream_starts
 
-                stream_starts = get_all_camera_stream_starts(field_obj)
-                if stream_starts:
-                    match.camera_stream_starts = json.dumps(stream_starts)
+            stream_starts = get_all_camera_stream_starts(field_obj)
+            if stream_starts:
+                replace_match_stream_starts(match, stream_starts)
 
         db.session.commit()
 

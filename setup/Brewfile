@@ -1,3 +1,4 @@
 brew "git"
 brew "git-lfs"
 brew "uv"
+brew "rust"

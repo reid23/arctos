@@ -430,6 +430,8 @@ pub struct MatchDetailData {
     pub uuid: String,
     pub name: String,
     pub field: Option<String>,
+    #[serde(default)]
+    pub field_id: Option<u32>,
     pub team1: Option<String>,
     pub team2: Option<String>,
     pub team1_name: String,
@@ -731,6 +733,8 @@ pub struct StartMatchInfo {
     pub uuid: String,
     pub name: String,
     pub field: Option<String>,
+    #[serde(default)]
+    pub field_id: Option<u32>,
     pub set_type: Option<String>,
     pub refs: Option<String>,
     pub team1_name: String,
@@ -1094,6 +1098,8 @@ pub struct UpdateFieldRequest {
 pub struct UpdateMatchRequest {
     pub name: Option<String>,
     pub field: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field_id: Option<u32>,
     pub schedule_type: Option<String>,
     pub length: Option<u32>,
     pub start_time: Option<String>,
@@ -1187,6 +1193,8 @@ pub struct MatchSetupData {
     pub uuid: String,
     pub name: String,
     pub field: Option<String>,
+    #[serde(default)]
+    pub field_id: Option<u32>,
     pub team1: Option<String>,
     pub team2: Option<String>,
     pub team1_initial: Option<String>,
@@ -1229,6 +1237,8 @@ pub struct TagSetupData {
 pub struct CreateMatchRequest {
     pub name: String,
     pub field: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field_id: Option<u32>,
     pub length: Option<u32>,
     pub schedule_type: Option<String>,
     pub start_time: Option<String>,

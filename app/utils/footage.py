@@ -771,12 +771,14 @@ def _create_camera_outputs(
             match_uuid=match_id,
             event=tournament_url,
             field=field_obj.id,
+            field_id=field_obj.id,
             name=camera_name,
             source_type="recording",
         )
         db.session.add(camera_row)
 
     camera_row.field = field_obj.id
+    camera_row.field_id = field_obj.id
     camera_row.status = "UPLOADING"
     camera_row.link = None
     camera_row.file = video_path

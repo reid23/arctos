@@ -15,7 +15,14 @@ from app.models.registrable_config import RegistrableConfig
 from app.models.league import League
 from app.models.tournament import Tournament, TO, Field, Tag
 from app.models.registration import TeamRegistration, PlayerRegistration
-from app.models.match import Match, Point, MatchNote
+from app.models.match import (
+    Match,
+    Point,
+    MatchNote,
+    MatchRefSlot,
+    MatchRosterEntry,
+    MatchCameraStreamStart,
+)
 from app.models.penalty_type import PenaltyType
 from app.models.records import Injury, HeadRef
 from app.models.sidecomp import SideComp, SideCompResult
@@ -37,6 +44,9 @@ __all__ = [
     "Match",
     "Point",
     "MatchNote",
+    "MatchRefSlot",
+    "MatchRosterEntry",
+    "MatchCameraStreamStart",
     "Camera",
     "PenaltyType",
     "Injury",

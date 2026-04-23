@@ -17,6 +17,7 @@ from app.utils.match_ref_resolution import (
     resolve_refs_slots,
     resolve_team_column,
 )
+from app.utils.match_1nf import replace_match_ref_slots
 from app.utils.toml_helpers import parse_toml_schedule, write_toml_schedule
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -557,6 +558,11 @@ class ScheduleImportExportService:
                                 "next_match",
                             ):
                                 setattr(match, key, value)
+                        replace_match_ref_slots(
+                            match,
+                            getattr(match, "refs", None),
+                            getattr(match, "refs_initial", None),
+                        )
 
                         # If _initial fields changed, clear corresponding resolved fields
                         # (they will be repopulated by update_tags/apply_match_dependencies or explicit team IDs)
@@ -587,11 +593,15 @@ class ScheduleImportExportService:
                                     if r_csv and any(
                                         s.strip() for s in r_csv.split(",")
                                     ):
-                                        match.refs = r_csv
+                                        replace_match_ref_slots(
+                                            match, r_csv, new_refs_initial
+                                        )
                                     else:
-                                        match.refs = None
+                                        replace_match_ref_slots(
+                                            match, None, new_refs_initial
+                                        )
                                 else:
-                                    match.refs = None
+                                    replace_match_ref_slots(match, None, None)
                         match_name_to_uuid[match_name] = match.uuid
                         # Also add to field-based mapping for duplicate resolution (use actual match field)
                         match_field = match.field or ""
@@ -619,6 +629,11 @@ class ScheduleImportExportService:
                                 match.status = MatchStatus.NOT_STARTED
                         db.session.add(match)
                         db.session.flush()  # Flush to get the match object with field set
+                        replace_match_ref_slots(
+                            match,
+                            getattr(match, "refs", None),
+                            getattr(match, "refs_initial", None),
+                        )
                         match_name_to_uuid[match_name] = match.uuid
                         # Also add to field-based mapping for duplicate resolution (use actual match field)
                         match_field = match.field or ""

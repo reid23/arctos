@@ -74,6 +74,17 @@ make run CERTFILE= KEYFILE=          # if you handle SSL elsewhere
 make run ENV_FILE=.env.prod          # use a different env file
 ```
 
+### Schema migrations
+
+Arctos now ships app-managed bootstrap migrations. Startup runs migrations
+automatically, and you can also run them explicitly:
+
+```bash
+make migrate
+```
+
+This is idempotent and safe to run repeatedly.
+
 #### Video storage
 
 To store finalized match recordings in an s3 compatible bucket (I use
@@ -91,11 +102,20 @@ in your `run` script:
 
 ### Part 2: Frontend
 
-Install the Dioxus CLI:
+Install frontend dependencies:
+
+```bash
+make setup
+```
+
+This installs system packages including Rust/Cargo. Then install the Dioxus CLI:
 
 ```bash
 cargo install dioxus-cli
 ```
+
+On Ubuntu, `make setup` installs apt Rust/Cargo and auto-upgrades to rustup
+stable if the apt Cargo version is too old for Edition 2024 crates.
 
 then (for development) simply `cd frontend` and serve the app:
 
@@ -105,3 +125,10 @@ dx serve
 
 In production, you should run `dx bundle --release` and copy the
 output files to somewhere that your reverse proxy can serve.
+
+For a quick frontend compile check:
+
+```bash
+cd frontend
+cargo check
+```

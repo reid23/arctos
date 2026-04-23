@@ -68,6 +68,13 @@ from app.utils.recording_retry import (
     current_user_can_retry_finalization,
 )
 from app.utils import preview_store
+from app.utils.field_refs import set_match_field_from_name
+from app.utils.match_1nf import (
+    read_match_ref_slots,
+    read_match_stream_starts,
+    replace_match_ref_slots,
+    replace_match_stream_starts,
+)
 
 from app.domain.enums import (
     MatchStatus,
@@ -2146,12 +2153,10 @@ def add_match(tournament_url):
                 400,
             )
 
-    # Get stones_per_set for STONES matches (with fallback to deprecated nstonesperset for backward compatibility)
+    # Get stones_per_set for STONES matches.
     stones_per_set_value = None
     if set_type == SetType.STONES:
-        stones_per_set_str = request.form.get("stones_per_set") or request.form.get(
-            "nstonesperset"
-        )
+        stones_per_set_str = request.form.get("stones_per_set")
         if stones_per_set_str:
             try:
                 stones_per_set_value = int(stones_per_set_str)
@@ -2229,7 +2234,6 @@ def add_match(tournament_url):
     match = Match(
         name=match_name,
         event=tournament_url,
-        field=request.form.get("field", ""),
         team1=final_team1,
         team1_initial=team1_name,
         team2=final_team2,
@@ -2248,6 +2252,8 @@ def add_match(tournament_url):
         stones_per_set=stones_per_set_value,
         skip_condition=skip_condition,
     )
+    set_match_field_from_name(tournament_url, match, request.form.get("field", ""))
+    replace_match_ref_slots(match, final_refs, refs_initial)
 
     db.session.add(match)
     db.session.flush()  # Flush to get UUID before updating links
@@ -2419,26 +2425,16 @@ def update_field(tournament_url):
 
         # Update matches that reference this field
         for match in matches_to_update:
-            if match.camera_stream_starts:
-                try:
-                    stream_starts = json.loads(match.camera_stream_starts)
-                    # Remap camera indices
-                    new_stream_starts = {}
-                    for old_idx_str, start_time in stream_starts.items():
-                        if old_idx_str in old_to_new_index_map:
-                            new_idx_str = old_to_new_index_map[old_idx_str]
-                            new_stream_starts[new_idx_str] = start_time
-                        # If old index not in map, camera was removed - don't include it
-                    match.camera_stream_starts = (
-                        json.dumps(new_stream_starts) if new_stream_starts else None
-                    )
-                    camera_update_count += 1
-                except (json.JSONDecodeError, TypeError) as e:
-                    print(
-                        f"Error updating camera_stream_starts for match {match.uuid}: {e}"
-                    )
-                    # If parsing fails, clear it
-                    match.camera_stream_starts = None
+            stream_starts = read_match_stream_starts(match)
+            # Remap camera indices
+            new_stream_starts = {}
+            for old_idx_str, start_time in stream_starts.items():
+                if old_idx_str in old_to_new_index_map:
+                    new_idx_str = old_to_new_index_map[old_idx_str]
+                    new_stream_starts[new_idx_str] = start_time
+                # If old index not in map, camera was removed - don't include it
+            replace_match_stream_starts(match, new_stream_starts)
+            camera_update_count += 1
 
         # Update points that reference this field (via the match)
         # Get all points for matches on this field
@@ -2450,12 +2446,7 @@ def update_field(tournament_url):
             points = Point.query.filter_by(match=match.uuid).all()
 
             # Get stream start times for this match
-            stream_starts = {}
-            if match.camera_stream_starts:
-                try:
-                    stream_starts = json.loads(match.camera_stream_starts)
-                except (json.JSONDecodeError, TypeError):
-                    pass
+            stream_starts = read_match_stream_starts(match)
 
             for point in points:
                 # First, handle camera_index remapping if needed
@@ -2503,7 +2494,7 @@ def update_field(tournament_url):
     name_update_count = 0
     if old_field_name != new_field_name:
         for match in matches_to_update:
-            match.field = new_field_name
+            set_match_field_from_name(tournament_url, match, new_field_name)
             name_update_count += 1
 
     # Generate success message
@@ -2745,7 +2736,7 @@ def update_match(tournament_url):
         return True
 
     match.name = new_match_name
-    match.field = request.form.get("field", "")
+    set_match_field_from_name(tournament_url, match, request.form.get("field", ""))
 
     # Handle team1_initial changes
     old_team1_initial = match.team1_initial or ""
@@ -2803,19 +2794,14 @@ def update_match(tournament_url):
     else:
         match.nsets = None
 
-    # Update stones_per_set for STONES matches (with fallback to deprecated nstonesperset for backward compatibility)
+    # Update stones_per_set for STONES matches.
     if set_type == SetType.STONES:
-        stones_per_set_str = request.form.get("stones_per_set") or request.form.get(
-            "nstonesperset"
-        )
+        stones_per_set_str = request.form.get("stones_per_set")
         if stones_per_set_str:
             try:
                 match.stones_per_set = int(stones_per_set_str)
             except (ValueError, TypeError):
                 pass  # Keep existing value if invalid
-        # If not provided and match doesn't have stones_per_set, try to migrate from nstonesperset
-        elif match.nstonesperset and not match.stones_per_set:
-            match.stones_per_set = match.nstonesperset
     else:
         # Clear stones_per_set for non-STONES matches
         match.stones_per_set = None
@@ -2841,8 +2827,7 @@ def update_match(tournament_url):
     )
 
     # If refs_initial changed, clear refs and repopulate with explicit team IDs and resolved tag references
-    old_refs_initial = match.refs_initial or ""
-    match.refs_initial = refs_initial
+    old_refs_initial = read_match_ref_slots(match)[1] or ""
     if old_refs_initial != refs_initial:
         # Clear refs, but populate any explicit team IDs and resolved tag references from refs_initial
         if refs_initial:
@@ -2862,11 +2847,13 @@ def update_match(tournament_url):
                             refs_list[i] = resolved_team
                             has_explicit_ids = True
             if has_explicit_ids:
-                match.refs = ", ".join(refs_list)
+                replace_match_ref_slots(match, ", ".join(refs_list), refs_initial)
             else:
-                match.refs = None
+                replace_match_ref_slots(match, None, refs_initial)
         else:
-            match.refs = None
+            replace_match_ref_slots(match, None, None)
+    else:
+        replace_match_ref_slots(match, match.refs, refs_initial)
 
     # For dynamic matches, set previous_match from form and compute start time from it
     # For static matches, ensure previous_match is cleared and use provided start_time

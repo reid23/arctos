@@ -117,6 +117,17 @@ class TO(db.Model):
     """
 
     __tablename__ = "tos"
+    __table_args__ = (
+        db.CheckConstraint(
+            "(event IS NOT NULL AND league_id IS NULL) OR "
+            "(event IS NULL AND league_id IS NOT NULL)",
+            name="ck_to_event_league_mutual_exclusive",
+        ),
+        db.CheckConstraint(
+            "user_type IN ('player', 'team')",
+            name="ck_to_user_type_allowed_values",
+        ),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.String(USER_ID_LEN), nullable=False)  # Player or Team ID
@@ -143,6 +154,7 @@ class Field(db.Model):
     """
 
     __tablename__ = "fields"
+    __table_args__ = (db.UniqueConstraint("event", "name", name="uq_field_event_name"),)
 
     id = db.Column(db.Integer, primary_key=True)
     event = db.Column(
@@ -168,6 +180,7 @@ class Tag(db.Model):
     """
 
     __tablename__ = "tags"
+    __table_args__ = (db.UniqueConstraint("event", "name", name="uq_tag_event_name"),)
 
     id = db.Column(db.Integer, primary_key=True)
     event = db.Column(
