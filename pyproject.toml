@@ -52,3 +52,6 @@ markers = [
     "integration: Integration tests",
     "slow: Slow running tests",
 ]
+
+[tool.setuptools.packages.find]
+include = ["app*"]

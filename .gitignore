@@ -41,6 +41,7 @@ Cargo.lock
 /frontend/pkg/
 /frontend/.parcel-cache/
 /frontend/node_modules/
+/docs/_build/
 
 # stupid
 .DS_Store
