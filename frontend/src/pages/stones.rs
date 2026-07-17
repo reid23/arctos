@@ -527,7 +527,7 @@ fn StonesPlayerWasm(stones_val: ReadSignal<Option<Result<StonesResponse, String>
                                 button {
                                     class: "btn btn-danger mb-3 ms-2",
                                     onclick: on_reping,
-                                    "Re-ping / Reset Sync"
+                                    "Reset Sync"
                                 }
                                 if let Some(ref msg) = *custom_status.read() {
                                     p { class: "form-text mt-2 text-danger", "{msg}" }

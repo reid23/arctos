@@ -182,8 +182,8 @@ impl TimeSync {
         self.persist();
     }
 
-    /// Reset the estimator and force an immediate probe next tick (the
-    /// re-ping button).
+    /// Reset the estimator and force an immediate probe next tick
+    /// (the re-sync button).
     pub fn reping(&mut self) {
         self.filter.write().reset();
     }

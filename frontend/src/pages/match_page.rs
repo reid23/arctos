@@ -917,7 +917,6 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
     // User info for permissions
     let user_info = use_resource(move || async move { api::me().await.ok() });
 
-    // Bayesian filter for server time sync (for stones elapsed calculation)
     // Shared client-server time sync (converges to the server clock; the probe
     // loop lives in the module).
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
