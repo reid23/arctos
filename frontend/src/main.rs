@@ -10,6 +10,7 @@ mod url_slug;
 #[cfg(target_arch = "wasm32")]
 mod record_idb;
 mod stones_filter;
+mod time_sync;
 mod types;
 
 use dioxus::prelude::*;

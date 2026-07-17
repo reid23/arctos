@@ -187,7 +187,7 @@ With the above goals in mind, Arctos has been designed to be:
 Arctos is an open-source project, hosted on
 [github](https://github.com/reid23/arctos) and licensed with
 GPLv3. Anyone can view the source code and propose their own changes
-by forking the repository, commiting changes, and opening a pull
+by forking the repository, committing changes, and opening a pull
 request. If you are interested in contributing, please see see the
 [contributing guide](https://github.com/reid23/arctos/CONTRIBUTING.md)
 for more information.
@@ -257,7 +257,7 @@ Here's, briefly, how it works.
      just the points and displayed in the same place as the live
      stream footage.
   2. TOs set up stones, playing them from the stones player. Multiple
-     devices can be used to play syncronized stones from multiple
+     devices can be used to play synchronized stones from multiple
      speakers.
   3. Players check the schedule to see when they need to play.
      - guarantees provided by the dynamic scheduling system ensure
@@ -302,7 +302,7 @@ devices have very good clocks, so once we compute the offset between
 our clock and the server's clock, clients know exactly when stones are
 played, without needing any expensive low-latency network shenanigans.
 
-When head refs run games, we use this to syncronize the stone counter
+When head refs run games, we use this to synchronize the stone counter
 on their device with the actual stones being played on the field, so
 their device counts stones precisely just based on when they start and
 stop the point locally, regardless of the server ping time.
@@ -318,8 +318,10 @@ play from two separate devices and it'll be in sync.
     putting the devices in question right next to each other and see
     if the issue persists. Unfortunately there's nothing I can do
     about this issue :\(
-
-
+	
+If you use a bluetooth speaker, you'll need to do a quick calibration
+to compensate for the bluetooth delay. This tends to be somewhere on
+the order of 200ms.
 
 ## Account Types
 
@@ -485,7 +487,7 @@ All matches have (among other things) the following information:
 ### Tags and References: Specifying Teams
 
 Each match as two teams playing in it as well as any number of teams
-assigned to ref. Let's take a breif aside on how to specify teams. You
+assigned to ref. Let's take a brief aside on how to specify teams. You
 have three options:
 
   1. explicit team name: just type their name (autocomplete will help
@@ -718,4 +720,3 @@ this may take a while, since it involves re-encoding all of the video.
 If you want to add overlays like the scoreboard, you'll still need to
 run OBS and use a virtual camera setup to pass the feed to the
 recording page.
-

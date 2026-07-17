@@ -3,7 +3,6 @@ use crate::api;
 use crate::components::{PenaltyDisplay, all_tokens_known, resolve_value_to_team_ids};
 use crate::display::short_or_truncate;
 use crate::pages::TeamSelectionField;
-use crate::stones_filter::BayesianOffsetFilter;
 use crate::time_format::format_match_display_local;
 use crate::types::{
     ConflictingMatchInfo, ForceStartMatchRequest, MatchDetailData, PointData, PointTimestamp,
@@ -341,7 +340,7 @@ fn parse_iso_to_secs(s: &str) -> Option<f64> {
 fn compute_stones_elapsed(
     start_stamp: Option<&str>,
     end_stamp: Option<&str>,
-    filter: &Signal<BayesianOffsetFilter>,
+    time_sync: &crate::time_sync::TimeSync,
 ) -> String {
     const BEAT: f64 = 1.5;
 
@@ -352,10 +351,7 @@ fn compute_stones_elapsed(
 
     let end = match end_stamp.and_then(|s| parse_iso_to_secs(s)) {
         Some(secs) => secs,
-        None => {
-            let client_time = js_sys::Date::now() / 1000.0;
-            client_time + filter.read().get_mean()
-        }
+        None => time_sync.server_now_secs(),
     };
 
     let start_beat = (start / BEAT).floor() as i64;
@@ -368,7 +364,7 @@ fn compute_stones_elapsed(
 #[cfg(target_arch = "wasm32")]
 fn compute_stones_remaining(
     points: &[&crate::types::PointData],
-    filter: &Signal<BayesianOffsetFilter>,
+    time_sync: &crate::time_sync::TimeSync,
 ) -> String {
     if points.is_empty() {
         return "??".to_string();
@@ -382,7 +378,7 @@ fn compute_stones_remaining(
     if last_point_is_ongoing {
         if let Some(stones_at_start) = last_point.stones_at_start {
             if let Some(start_stamp) = &last_point.stamp {
-                let elapsed_str = compute_stones_elapsed(Some(start_stamp), None, filter);
+                let elapsed_str = compute_stones_elapsed(Some(start_stamp), None, time_sync);
                 if let Ok(elapsed) = elapsed_str.parse::<u32>() {
                     let remaining = stones_at_start.saturating_sub(elapsed);
                     return remaining.to_string();
@@ -397,7 +393,7 @@ fn compute_stones_remaining(
             if let Some(stones_at_start) = pt.stones_at_start {
                 if let (Some(start_stamp), Some(end_stamp)) = (&pt.stamp, &pt.end_stamp) {
                     let elapsed_str =
-                        compute_stones_elapsed(Some(start_stamp), Some(end_stamp), filter);
+                        compute_stones_elapsed(Some(start_stamp), Some(end_stamp), time_sync);
                     if let Ok(elapsed) = elapsed_str.parse::<u32>() {
                         let remaining = stones_at_start.saturating_sub(elapsed);
                         return remaining.to_string();
@@ -922,33 +918,10 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
     let user_info = use_resource(move || async move { api::me().await.ok() });
 
     // Bayesian filter for server time sync (for stones elapsed calculation)
-    #[cfg(target_arch = "wasm32")]
-    let time_filter = use_signal(|| BayesianOffsetFilter::default());
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        use_effect(move || {
-            if let Some(Ok(d)) = data.value().read().as_ref() {
-                if d.match_data.status == "IN_PROGRESS"
-                    && d.match_data.set_type.as_deref() == Some("STONES")
-                {
-                    let mut filter = time_filter;
-                    spawn(async move {
-                        loop {
-                            let client_send = js_sys::Date::now() / 1000.0;
-                            if let Ok(res) = api::server_time().await {
-                                let client_receive = js_sys::Date::now() / 1000.0;
-                                let rtt = client_receive - client_send;
-                                let offset = res.server_time - client_receive + (rtt / 2.0);
-                                filter.write().update(offset);
-                            }
-                            gloo_timers::future::TimeoutFuture::new(997).await;
-                        }
-                    });
-                }
-            }
-        });
-    }
+    // Shared client-server time sync (converges to the server clock; the probe
+    // loop lives in the module).
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
+    let time_sync = crate::time_sync::use_time_sync();
 
     // Stones elapsed update interval (for ongoing points)
     #[cfg(target_arch = "wasm32")]
@@ -2121,12 +2094,12 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                         let between_points = !points_refs.is_empty() && !last_ongoing;
                                         if between_points {
                                         if let Some(Ok(state)) = state_signal.read().as_ref() {
-                                            state.get("stones_remaining").and_then(|v| v.as_u64()).map(|s| s.to_string()).unwrap_or_else(|| compute_stones_remaining(&points_refs, &time_filter))
+                                            state.get("stones_remaining").and_then(|v| v.as_u64()).map(|s| s.to_string()).unwrap_or_else(|| compute_stones_remaining(&points_refs, &time_sync))
                                         } else {
-                                            compute_stones_remaining(&points_refs, &time_filter)
+                                            compute_stones_remaining(&points_refs, &time_sync)
                                         }
                                         } else {
-                                            compute_stones_remaining(&points_refs, &time_filter)
+                                            compute_stones_remaining(&points_refs, &time_sync)
                                         }
                                     };
                                     #[cfg(not(target_arch = "wasm32"))]
@@ -2317,7 +2290,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                                                                     compute_stones_elapsed(
                                                                                         pt.stamp.as_deref(),
                                                                                         pt.end_stamp.as_deref(),
-                                                                                        &time_filter,
+                                                                                        &time_sync,
                                                                                     )
                                                                                 }
                                                                                 #[cfg(not(target_arch = "wasm32"))] { "0" }

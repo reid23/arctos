@@ -1,7 +1,6 @@
 use crate::Route;
 use crate::api;
 use crate::components::PenaltyDisplay;
-use crate::stones_filter::BayesianOffsetFilter;
 use dioxus::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use gloo_timers::callback::Interval;
@@ -431,12 +430,13 @@ fn quick_timer_current(start_time: f64, start_stones: u32, now_server: f64) -> i
     start_stones as i64 - (now_beat - start_beat).max(0)
 }
 
-/// Stones elapsed = global 1.5s beat boundaries crossed. Uses Bayesian filter for server time when end is None (ongoing point).
+/// Stones elapsed = global 1.5s beat boundaries crossed. Uses the shared time
+/// sync for corrected server time when end is None (ongoing point).
 #[cfg(target_arch = "wasm32")]
 fn stones_elapsed_with_filter(
     stamp_opt: Option<&str>,
     end_opt: Option<&str>,
-    filter: &Signal<BayesianOffsetFilter>,
+    time_sync: &crate::time_sync::TimeSync,
 ) -> u32 {
     const BEAT: f64 = 1.5;
     let start = match stamp_opt.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok()) {
@@ -447,12 +447,10 @@ fn stones_elapsed_with_filter(
         if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(e) {
             parsed.timestamp_millis() as f64 / 1000.0
         } else {
-            let client_time = js_sys::Date::now() / 1000.0;
-            client_time + filter.read().get_mean()
+            time_sync.server_now_secs()
         }
     } else {
-        let client_time = js_sys::Date::now() / 1000.0;
-        client_time + filter.read().get_mean()
+        time_sync.server_now_secs()
     };
     let start_beat = (start / BEAT).floor() as i64;
     let end_beat = (end / BEAT).floor() as i64;
@@ -475,6 +473,19 @@ fn team_short_label(shortname: Option<&str>, name: &str) -> String {
         let head: String = name.chars().take(max_len - 1).collect();
         format!("{head}…")
     }
+}
+
+/// Corrected-server-time millis for the moment a point starts, so its anchor
+/// lands on the same grid the stone counter uses.
+fn point_start_server_millis(time_sync: &crate::time_sync::TimeSync) -> u64 {
+    (time_sync.server_now_secs() * 1000.0).round() as u64
+}
+
+/// Convert unix-epoch millis to an RFC3339 string for the optimistic local point.
+fn server_millis_to_rfc3339(millis: u64) -> String {
+    chrono::DateTime::from_timestamp_millis(millis as i64)
+        .unwrap_or_else(chrono::Utc::now)
+        .to_rfc3339()
 }
 
 #[component]
@@ -534,7 +545,6 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
     }
 
     // Ref-only quick timer beside the stone counter (local, not persisted).
-    // Declared before the server-time sync effect so that effect can react to it.
     let mut quick_timer = use_signal(|| QuickTimer::Idle);
     // Page coordinates captured at pointerdown, for computing drag magnitude.
     #[cfg(target_arch = "wasm32")]
@@ -543,45 +553,9 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
     #[cfg(target_arch = "wasm32")]
     let mut quick_timer_fired_zero = use_signal(|| false);
 
-    // Bayesian filter for server time sync (stones elapsed during ongoing point).
-    #[cfg(target_arch = "wasm32")]
-    let time_filter = use_signal(|| BayesianOffsetFilter::default());
-    #[cfg(target_arch = "wasm32")]
-    let server_time_loop_started = use_signal(|| false);
-    #[cfg(target_arch = "wasm32")]
-    {
-        let binding = detail.value();
-        let mut time_filter = time_filter;
-        let mut server_time_loop_started = server_time_loop_started;
-        use_effect(move || {
-            if server_time_loop_started() {
-                return;
-            }
-            let guard = binding.try_read();
-            let Ok(ref g) = guard else { return };
-            let Some(Ok(d)) = g.as_ref() else { return };
-            let quick_timer_running = matches!(quick_timer(), QuickTimer::Running { .. });
-            if quick_timer_running
-                || (d.match_data.set_type.as_deref() == Some("STONES")
-                    && d.match_data.status == "IN_PROGRESS")
-            {
-                server_time_loop_started.set(true);
-                let mut filter = time_filter;
-                spawn(async move {
-                    loop {
-                        let client_send = js_sys::Date::now() / 1000.0;
-                        if let Ok(res) = api::server_time().await {
-                            let client_receive = js_sys::Date::now() / 1000.0;
-                            let rtt = client_receive - client_send;
-                            let offset = res.server_time - client_receive + (rtt / 2.0);
-                            filter.write().update(offset);
-                        }
-                        gloo_timers::future::TimeoutFuture::new(997).await;
-                    }
-                });
-            }
-        });
-    }
+    // Shared client-server time sync (stones elapsed during an ongoing point,
+    // quick timer countdown, and server-time stamping of new points).
+    let time_sync = crate::time_sync::use_time_sync();
 
     // Screen wake lock: keep the device awake while the match page is open (wasm only).
     #[cfg(target_arch = "wasm32")]
@@ -831,7 +805,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                         let stamp = pt.get("stamp").and_then(|s| s.as_str());
                         let end_stamp = pt.get("end_stamp").and_then(|e| e.as_str());
                         #[cfg(target_arch = "wasm32")]
-                        let elapsed = stones_elapsed_with_filter(stamp, end_stamp, &time_filter);
+                        let elapsed = stones_elapsed_with_filter(stamp, end_stamp, &time_sync);
                         #[cfg(not(target_arch = "wasm32"))]
                         let elapsed = stones_elapsed_beats(stamp, end_stamp);
                         PointRow {
@@ -858,8 +832,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                     pt.get("stones_at_start").and_then(|s| s.as_u64())?;
                                 let stamp = pt.get("stamp").and_then(|s| s.as_str());
                                 #[cfg(target_arch = "wasm32")]
-                                let elapsed =
-                                    stones_elapsed_with_filter(stamp, None, &time_filter) as u64;
+                                let elapsed = stones_elapsed_with_filter(stamp, None, &time_sync) as u64;
                                 #[cfg(not(target_arch = "wasm32"))]
                                 let elapsed = stones_elapsed_beats(stamp, None) as u64;
                                 Some((at_start.saturating_sub(elapsed)) as u32)
@@ -935,6 +908,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                         let id_for_stones = id.clone();
                         let u_for_stones = u.clone();
                         spawn(async move {
+                            #[cfg(target_arch = "wasm32")]
                             gloo_timers::future::TimeoutFuture::new(0).await;
                             let mut final_stones_for_api: Option<u32> = None;
                             if let Some(Ok(ref state)) = prev.clone() {
@@ -990,10 +964,12 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                             }
                         });
                     } else {
-                        // Start new point — optimistic: add pending point, set current_point
-                        let pending_id =
-                            format!("pending-{}", chrono::Utc::now().timestamp_millis());
-                        let stamp_iso = chrono::Utc::now().to_rfc3339();
+                        // Start new point — optimistic: add pending point, set current_point.
+                        // Anchor the point to corrected server time so it lands on the same
+                        // 1.5s grid the stone counter measures against.
+                        let point_start_ms = point_start_server_millis(&time_sync);
+                        let pending_id = format!("pending-{}", point_start_ms);
+                        let stamp_iso = server_millis_to_rfc3339(point_start_ms);
                         let new_point = serde_json::json!({
                             "uuid": pending_id,
                             "set_number": default_set,
@@ -1018,15 +994,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                         let stones_at_start = if set_type_stones { stones_val } else { None };
                         spawn(async move {
                             err_out.set(None);
-                            match api::add_point(
-                                &u,
-                                &id,
-                                default_set,
-                                Some(chrono::Utc::now().timestamp_millis() as u64),
-                                stones_at_start,
-                            )
-                            .await
-                            {
+                            match api::add_point(&u, &id, default_set, Some(point_start_ms), stones_at_start).await {
                                 Ok(resp) => {
                                     let real_id = resp
                                         .get("point_id")
@@ -1100,6 +1068,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                         let id_for_stones = id.clone();
                         let u_for_stones = u.clone();
                         spawn(async move {
+                            #[cfg(target_arch = "wasm32")]
                             gloo_timers::future::TimeoutFuture::new(0).await;
                             let mut final_stones_for_api: Option<u32> = None;
                             if let Some(Ok(ref state)) = prev.clone() {
@@ -1155,9 +1124,9 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                             }
                         });
                     } else {
-                        let pending_id =
-                            format!("pending-{}", chrono::Utc::now().timestamp_millis());
-                        let stamp_iso = chrono::Utc::now().to_rfc3339();
+                        let point_start_ms = point_start_server_millis(&time_sync);
+                        let pending_id = format!("pending-{}", point_start_ms);
+                        let stamp_iso = server_millis_to_rfc3339(point_start_ms);
                         let new_point = serde_json::json!({
                             "uuid": pending_id,
                             "set_number": default_set,
@@ -1182,15 +1151,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                         let stones_at_start = if set_type_stones { stones_val } else { None };
                         spawn(async move {
                             err_out.set(None);
-                            match api::add_point(
-                                &u,
-                                &id,
-                                default_set,
-                                Some(chrono::Utc::now().timestamp_millis() as u64),
-                                stones_at_start,
-                            )
-                            .await
-                            {
+                            match api::add_point(&u, &id, default_set, Some(point_start_ms), stones_at_start).await {
                                 Ok(resp) => {
                                     let real_id = resp
                                         .get("point_id")
@@ -1671,7 +1632,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                     } => {
                         #[cfg(target_arch = "wasm32")]
                         let now_server =
-                            js_sys::Date::now() / 1000.0 + time_filter.read().get_mean();
+                            time_sync.server_now_secs();
                         #[cfg(not(target_arch = "wasm32"))]
                         let now_server = now_epoch_secs();
                         let current = quick_timer_current(start_time, start_stones, now_server);
@@ -1733,7 +1694,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                     } else {
                                         // Re-prime audio on the release gesture that arms the timer.
                                         unlock_run_match_audio();
-                                        let now_server = js_sys::Date::now() / 1000.0 + time_filter.read().get_mean();
+                                        let now_server = time_sync.server_now_secs();
                                         quick_timer_fired_zero.set(false);
                                         quick_timer.set(QuickTimer::Running { start_time: now_server, start_stones });
                                     }

@@ -1,7 +1,6 @@
 //! Stones Player: globally synchronized stones using a Bayesian filter for time offset.
 
 use crate::api;
-use crate::stones_filter::BayesianOffsetFilter;
 use crate::types::StonesResponse;
 use dioxus::prelude::*;
 
@@ -15,10 +14,19 @@ use std::rc::Rc;
 use wasm_bindgen::JsCast;
 
 const BEAT_INTERVAL: f64 = 1.5;
-const SYNC_INTERVAL_MS: u32 = 997;
-const SCHEDULE_INTERVAL_MS: u32 = 500;
+// Kept short so that after a calibration change clears the queue, the loop
+// re-queues quickly and the new timing lands on the next stone.
+const SCHEDULE_INTERVAL_MS: u32 = 200;
 const SCHEDULE_AHEAD_SEC: f64 = 7.0;
 const MIN_GAP_SEC: f64 = 1.0;
+// Visual metronome: how long the flash stays lit, and a floor gap afterward so
+// we never busy-loop if the next boundary computes as essentially now.
+const BEAT_FLASH_MS: u32 = 120;
+const BEAT_MIN_GAP_MS: u32 = 50;
+// Step 2 of calibration: after resetting the estimate, poll this often and wait
+// at most this long for it to settle before letting the user tune the offset.
+const STEP2_POLL_MS: u32 = 100;
+const STEP2_MAX_SYNC_MS: u32 = 3000;
 
 #[component]
 pub fn Stones() -> Element {
@@ -52,9 +60,19 @@ pub fn Stones() -> Element {
 fn StonesPlayerWasm(stones_val: ReadSignal<Option<Result<StonesResponse, String>>>) -> Element {
     let mut is_playing = use_signal(|| false);
     let mut selected_index = use_signal(|| 0usize);
-    let mut filter = use_signal(|| BayesianOffsetFilter::default());
-    let rtt_ms = use_signal(|| Option::<f64>::None);
+    let mut time_sync = crate::time_sync::use_time_sync();
     let mut custom_status = use_signal(|| Option::<String>::None);
+    // Pulses true (briefly) on each server beat, driving the visual metronome
+    // shown inside the calibration walkthrough.
+    let beat_flash = use_signal(|| false);
+    // Calibration walkthrough: 0 = closed, 1 = audio-delay step, 2 = clock-offset step.
+    let mut calibration_step = use_signal(|| 0u8);
+    // Calibration snapshot taken when the walkthrough opens, so Cancel can roll
+    // back the live changes the user made while dragging.
+    let mut calibration_snapshot = use_signal(|| crate::time_sync::Calibration::default());
+    // True while step 2 is re-syncing after a reset (waiting for the estimate
+    // to settle, up to a timeout) before the user tunes the clock offset.
+    let step2_syncing = use_signal(|| false);
 
     let mut audio_ctx = use_signal(|| Option::<web_sys::AudioContext>::None);
     let mut audio_buffer = use_signal(|| Option::<web_sys::AudioBuffer>::None);
@@ -68,37 +86,24 @@ fn StonesPlayerWasm(stones_val: ReadSignal<Option<Result<StonesResponse, String>
         }))
     });
 
-    // Sync loop
-    use_effect(move || {
-        let mut filter = filter.clone();
-        let mut rtt_ms = rtt_ms.clone();
-        spawn(async move {
-            loop {
-                let client_send = js_sys::Date::now() / 1000.0;
-                if let Ok(res) = api::server_time().await {
-                    let client_receive = js_sys::Date::now() / 1000.0;
-                    let rtt = client_receive - client_send;
-                    let offset = res.server_time - client_receive + (rtt / 2.0);
-                    filter.write().update(offset);
-                    rtt_ms.set(Some(rtt * 1000.0));
-                }
-                gloo_timers::future::TimeoutFuture::new(SYNC_INTERVAL_MS).await;
-            }
-        });
-    });
-
     // Schedule loop when playing
     use_effect(move || {
         if !is_playing() {
             return;
         }
         let is_playing_sig = is_playing.clone();
-        let filter_sig = filter.clone();
         let audio_ctx_sig = audio_ctx.clone();
         let audio_buffer_sig = audio_buffer.clone();
         let ctx_start_time_sig = ctx_start_time.clone();
         let schedule_rc = schedule_state.read().clone();
         spawn(async move {
+            // Track the calibration used to schedule the currently-queued
+            // stones. When it changes we drop the not-yet-played sources once
+            // and let this loop re-queue with the new timing. Checking here (at
+            // the loop's fixed cadence) rather than on every slider `oninput`
+            // keeps the live-MediaStream audio graph from churning dozens of
+            // times a second, which is what made the pitch wobble.
+            let mut last_cal = time_sync.calibration();
             while is_playing_sig() {
                 let ctx = audio_ctx_sig.read().clone();
                 let buf = audio_buffer_sig.read().clone();
@@ -106,19 +111,26 @@ fn StonesPlayerWasm(stones_val: ReadSignal<Option<Result<StonesResponse, String>
                 if let (Some(ref ctx), Some(ref buf), Some(_start)) =
                     (ctx, buf, *start_time)
                 {
-                    let now = js_sys::Date::now() / 1000.0;
+                    let cal = time_sync.calibration();
+                    if cal.clock_offset_ms != last_cal.clock_offset_ms
+                        || cal.audio_delay_ms != last_cal.audio_delay_ms
+                    {
+                        clear_future_scheduled(schedule_rc.clone(), ctx);
+                        last_cal = cal;
+                    }
                     let audio_now = ctx.current_time();
-                    let mean = filter_sig.read().get_mean();
-                    let mut beat_time = next_beat_time(now, mean);
-                    let max_wall = now + SCHEDULE_AHEAD_SEC;
+                    let server_now = time_sync.server_now_secs();
+                    let audio_delay = time_sync.audio_delay_secs();
+                    let mut next_server_beat =
+                        crate::time_sync::next_beat_boundary(server_now, BEAT_INTERVAL);
                     let mut scheduled = 0u32;
-                    while beat_time <= max_wall && scheduled < 5 {
+                    while next_server_beat - server_now <= SCHEDULE_AHEAD_SEC && scheduled < 5 {
                         if !is_playing_sig() {
                             break;
                         }
-                        let delay = beat_time - now;
+                        let delay = next_server_beat - server_now;
                         if delay > 0.05 && delay < 60.0 {
-                            let audio_time = audio_now + delay;
+                            let audio_time = audio_now + delay + audio_delay;
                             if schedule_sound_at(
                                 ctx.clone(),
                                 buf.clone(),
@@ -128,7 +140,7 @@ fn StonesPlayerWasm(stones_val: ReadSignal<Option<Result<StonesResponse, String>
                                 scheduled += 1;
                             }
                         }
-                        beat_time += BEAT_INTERVAL;
+                        next_server_beat += BEAT_INTERVAL;
                     }
                 }
                 gloo_timers::future::TimeoutFuture::new(SCHEDULE_INTERVAL_MS).await;
@@ -136,10 +148,55 @@ fn StonesPlayerWasm(stones_val: ReadSignal<Option<Result<StonesResponse, String>
         });
     });
 
-    let on_play_pause = move |_| {
+    // Visual beat loop: pulse `beat_flash` on every server beat (clock-offset
+    // adjusted grid, so it moves with the offset slider). Drives the metronome
+    // dot shown inside the calibration walkthrough.
+    use_effect(move || {
+        let mut beat_flash = beat_flash;
+        spawn(async move {
+            loop {
+                let server_now = time_sync.server_now_secs();
+                let next_beat = crate::time_sync::next_beat_boundary(server_now, BEAT_INTERVAL);
+                let wait_ms = ((next_beat - server_now) * 1000.0).max(0.0);
+                gloo_timers::future::TimeoutFuture::new(wait_ms as u32).await;
+                beat_flash.set(true);
+                gloo_timers::future::TimeoutFuture::new(BEAT_FLASH_MS).await;
+                beat_flash.set(false);
+                gloo_timers::future::TimeoutFuture::new(BEAT_MIN_GAP_MS).await;
+            }
+        });
+    });
+
+    // Step 2 entry: reset the estimate and wait (up to STEP2_MAX_SYNC_MS) for it
+    // to settle before the user tunes the clock offset against a neighboring
+    // device's stones.
+    use_effect(move || {
+        if calibration_step() != 2 {
+            return;
+        }
+        let mut time_sync = time_sync;
+        let mut step2_syncing = step2_syncing;
+        spawn(async move {
+            time_sync.reping();
+            step2_syncing.set(true);
+            let mut waited = 0u32;
+            while waited < STEP2_MAX_SYNC_MS {
+                if time_sync.quality().converged {
+                    break;
+                }
+                gloo_timers::future::TimeoutFuture::new(STEP2_POLL_MS).await;
+                waited += STEP2_POLL_MS;
+            }
+            step2_syncing.set(false);
+        });
+    });
+
+    let on_play_pause = use_callback(move |_: ()| {
         if is_playing() {
             is_playing.set(false);
-            clear_scheduled(schedule_state.read().clone());
+            if let Some(ctx) = audio_ctx.read().clone() {
+                clear_future_scheduled(schedule_state.read().clone(), &ctx);
+            }
             // Stop the hidden audio element immediately so mobile doesn't keep playing
             // buffered MediaStream data or loop a segment.
             pause_audio_stream_element();
@@ -205,21 +262,51 @@ fn StonesPlayerWasm(stones_val: ReadSignal<Option<Result<StonesResponse, String>
                 .await;
             });
         }
+    });
+
+    let on_reping = move |_| {
+        time_sync.reping();
     };
 
-    let on_reset = move |_| {
-        filter.write().reset();
+    // Open the calibration walkthrough: snapshot current calibration (so Cancel
+    // can roll back live edits) and go to step 1.
+    let on_open_calibration = move |_| {
+        calibration_snapshot.set(time_sync.calibration());
+        calibration_step.set(1);
+    };
+
+    // Advance step 1 -> 2 -> done. Finishing keeps the live-applied values.
+    let on_calibration_next = move |_| {
+        let step = calibration_step();
+        if step >= 2 {
+            calibration_step.set(0);
+        } else {
+            calibration_step.set(step + 1);
+        }
+    };
+
+    // Cancel: roll back to the snapshot taken when the walkthrough opened, and close.
+    let on_calibration_cancel = move |_| {
+        let snap = *calibration_snapshot.read();
+        time_sync.set_clock_offset_ms(snap.clock_offset_ms);
+        time_sync.set_audio_delay_ms(snap.audio_delay_ms);
+        calibration_step.set(0);
     };
 
     let stones_ok = stones_val.read().as_ref().and_then(|r| r.as_ref().ok()).cloned();
     let stones_len = stones_ok.as_ref().map(|s| s.stones.len()).unwrap_or(0);
     let base_url = api::base_url();
-    let offset_str = format!("{:.6}", filter.read().get_mean());
-    let var_str = format!("{:.6}", filter.read().get_variance());
-    let rtt_display = match *rtt_ms.read() {
+    let quality = time_sync.quality();
+    let calibration = time_sync.calibration();
+    let offset_str = format!("{:.1} ms", quality.offset_ms);
+    let var_str = format!("{:.1} ms\u{00B2}", quality.variance_ms2);
+    let converged_str = if quality.converged { "yes" } else { "not yet" };
+    let rtt_display = match quality.rtt_ms {
         Some(ms) => format!("{:.1} ms", ms),
         None => "-".to_string(),
     };
+    let clock_offset_val = format!("{:.0}", calibration.clock_offset_ms);
+    let audio_delay_val = format!("{:.0}", calibration.audio_delay_ms);
 
     #[cfg(target_arch = "wasm32")]
     fn ensure_media_destination(
@@ -320,6 +407,18 @@ fn StonesPlayerWasm(stones_val: ReadSignal<Option<Result<StonesResponse, String>
         .unwrap_or_default();
 
     rsx! {
+        style { r#"
+        .stones-beat-dot {{
+            width: 44px; height: 44px; border-radius: 50%;
+            background: #3a3f44; border: 2px solid #555;
+            flex: 0 0 auto; transition: background 90ms ease-out, box-shadow 90ms ease-out, transform 90ms ease-out;
+        }}
+        .stones-beat-dot-on {{
+            background: #4ecdc4; border-color: #4ecdc4;
+            box-shadow: 0 0 18px 4px rgba(78, 205, 196, 0.8);
+            transform: scale(1.12);
+        }}
+        "# }
         div { class: "container mt-4",
             div { class: "row",
                 div { class: "col-12",
@@ -330,9 +429,8 @@ fn StonesPlayerWasm(stones_val: ReadSignal<Option<Result<StonesResponse, String>
                     p { strong { "Important Notes:" } }
                     ul {
                         li { "The speed of sound is about 343 m/s (~110 ms to cross a 40 m field). If stones sound out of sync, try standing equidistant from speakers." }
-                        li { "It should only take a few (3–5) stones to sync. If not syncing, click \"Reset Sync\" on all devices at roughly the same time." }
-                        li { "Bluetooth can add up to ~250 ms delay; prefer wired connections if latency differs between devices." }
-                        li { "When changing the audio device, the first few stones may be out of sync while the buffer clears." }
+                        li { "It should only take a few (3–5) stones to sync." }
+                        li { "Bluetooth can add up to ~250 ms delay; if you are using bluetooth, click \"calibrate manually\" to compensate for this delay." }
                         li { "Custom files: keep them under 1.5 s and avoid dead space at the start." }
                     }
 
@@ -354,7 +452,9 @@ fn StonesPlayerWasm(stones_val: ReadSignal<Option<Result<StonesResponse, String>
                                                     key: "{key_name}",
                                                     class: if is_selected { "btn btn-primary" } else { "btn btn-outline-primary" },
                                                     onclick: move |_| {
-                                                        clear_scheduled(schedule_state.read().clone());
+                                                        if let Some(ctx) = audio_ctx.read().clone() {
+                                                            clear_future_scheduled(schedule_state.read().clone(), &ctx);
+                                                        }
                                                         selected_index.set(idx);
                                                         audio_buffer.set(None);
                                                         let base = base_url.clone();
@@ -378,7 +478,9 @@ fn StonesPlayerWasm(stones_val: ReadSignal<Option<Result<StonesResponse, String>
                                     button {
                                         class: if selected_index() >= stones_len { "btn btn-primary" } else { "btn btn-outline-primary" },
                                         onclick: move |_| {
-                                            clear_scheduled(schedule_state.read().clone());
+                                            if let Some(ctx) = audio_ctx.read().clone() {
+                                                clear_future_scheduled(schedule_state.read().clone(), &ctx);
+                                            }
                                             selected_index.set(stones_len);
                                             audio_buffer.set(custom_buffer.read().clone());
                                         },
@@ -419,16 +521,25 @@ fn StonesPlayerWasm(stones_val: ReadSignal<Option<Result<StonesResponse, String>
                             div { class: "mb-3",
                                 button {
                                     class: if is_playing() { "btn btn-warning btn-lg mb-3" } else { "btn btn-primary btn-lg mb-3" },
-                                    onclick: on_play_pause,
+                                    onclick: move |_| on_play_pause.call(()),
                                     if is_playing() { "Pause" } else { "Play" }
                                 }
                                 button {
                                     class: "btn btn-danger mb-3 ms-2",
-                                    onclick: on_reset,
-                                    "Reset Sync"
+                                    onclick: on_reping,
+                                    "Re-ping / Reset Sync"
                                 }
                                 if let Some(ref msg) = *custom_status.read() {
                                     p { class: "form-text mt-2 text-danger", "{msg}" }
+                                }
+                            }
+
+                            div { class: "mb-3",
+                                p { class: "form-text mb-1", "Something doesn't look or sound right?" }
+                                button {
+                                    class: "btn btn-outline-secondary",
+                                    onclick: on_open_calibration,
+                                    "Calibrate manually"
                                 }
                             }
 
@@ -443,8 +554,9 @@ fn StonesPlayerWasm(stones_val: ReadSignal<Option<Result<StonesResponse, String>
 
                             div { class: "mb-3",
                                 h5 { "Stats" }
-                                p { "Offset (x\u{0302}): {offset_str} s" }
-                                p { "Variance (P): {var_str} s\u{00B2}" }
+                                p { "Offset (x\u{0302}): {offset_str}" }
+                                p { "Variance (P): {var_str}" }
+                                p { "Converged: {converged_str}" }
                                 p { "Round trip time: {rtt_display}" }
                             }
                         }
@@ -456,13 +568,116 @@ fn StonesPlayerWasm(stones_val: ReadSignal<Option<Result<StonesResponse, String>
         if let Some(Err(e)) = stones_val.read().as_ref() {
             p { class: "text-danger", "{e}" }
         }
-    }
-}
 
-fn next_beat_time(now: f64, offset: f64) -> f64 {
-    let server_now = now + offset;
-    let next_server = (server_now / BEAT_INTERVAL).ceil() * BEAT_INTERVAL;
-    next_server - offset
+        if calibration_step() != 0 {
+            div { class: "modal show", style: "display: block;",
+                div { class: "modal-dialog modal-dialog-centered",
+                    div { class: "modal-content",
+                        div { class: "modal-header",
+                            h5 { class: "modal-title",
+                                if calibration_step() == 1 { "Calibrate — Step 1 of 2: Audio delay" }
+                                else { "Calibrate — Step 2 of 2: Clock offset" }
+                            }
+                            button { r#type: "button", class: "btn-close", onclick: on_calibration_cancel }
+                        }
+                        div { class: "modal-body",
+                            div { class: "d-flex flex-column align-items-center mb-3",
+                                div {
+                                    class: if beat_flash() { "stones-beat-dot stones-beat-dot-on" } else { "stones-beat-dot" },
+                                }
+                                span { class: "form-text mt-2 text-center", "this should light up on the stone beat" }
+                            }
+
+                            if calibration_step() == 1 {
+                                p {
+                                    "Press Play, then drag the slider until the stones you hear from "
+                                    strong { "this device" }
+                                    " line up with the flashing indicator above."
+                                }
+                                p { class: "form-text",
+                                    "If you're not playing stones from this device, you can skip this step — just press Next."
+                                }
+                                div { class: "mb-3",
+                                    button {
+                                        r#type: "button",
+                                        class: if is_playing() { "btn btn-warning" } else { "btn btn-primary" },
+                                        onclick: move |_| on_play_pause.call(()),
+                                        if is_playing() { "Pause" } else { "Play" }
+                                    }
+                                }
+                                label { class: "form-label d-flex justify-content-between",
+                                    span { "Audio delay" }
+                                    strong { class: "ms-2", "{audio_delay_val} ms" }
+                                }
+                                input {
+                                    r#type: "range",
+                                    class: "form-range",
+                                    min: "-750",
+                                    max: "750",
+                                    step: "10",
+                                    value: "{audio_delay_val}",
+                                    onmounted: move |evt: Event<MountedData>| {
+                                        set_input_value_on_mount(&evt.data(), time_sync.calibration().audio_delay_ms);
+                                    },
+                                    oninput: move |evt| {
+                                        if let Ok(v) = evt.value().parse::<f64>() {
+                                            time_sync.set_audio_delay_ms(v);
+                                        }
+                                    },
+                                }
+                            } else {
+                                if step2_syncing() {
+                                    div { class: "d-flex align-items-center gap-2 mb-2",
+                                        div { class: "spinner-border spinner-border-sm", role: "status" }
+                                        span { "Re-syncing the clock… (up to 3 seconds)" }
+                                    }
+                                }
+                                p {
+                                    "Drag the slider until the flashing indicator lines up with the stones playing from "
+                                    strong { "another already-synced device" }
+                                    " nearby."
+                                }
+                                p { class: "form-text",
+                                    "This adjusts this device's whole sense of server time, so it also fixes the live stone counter when you run a match."
+                                }
+                                label { class: "form-label d-flex justify-content-between",
+                                    span { "Clock offset" }
+                                    strong { class: "ms-2", "{clock_offset_val} ms" }
+                                }
+                                input {
+                                    r#type: "range",
+                                    class: "form-range",
+                                    min: "-750",
+                                    max: "750",
+                                    step: "10",
+                                    value: "{clock_offset_val}",
+                                    disabled: step2_syncing(),
+                                    onmounted: move |evt: Event<MountedData>| {
+                                        set_input_value_on_mount(&evt.data(), time_sync.calibration().clock_offset_ms);
+                                    },
+                                    oninput: move |evt| {
+                                        if let Ok(v) = evt.value().parse::<f64>() {
+                                            time_sync.set_clock_offset_ms(v);
+                                        }
+                                    },
+                                }
+                            }
+                        }
+                        div { class: "modal-footer",
+                            button { r#type: "button", class: "btn btn-secondary", onclick: on_calibration_cancel, "Cancel" }
+                            button {
+                                r#type: "button",
+                                class: "btn btn-primary",
+                                onclick: on_calibration_next,
+                                if calibration_step() == 1 { "Next" } else { "Done" }
+                            }
+                        }
+                    }
+                }
+            }
+            div { class: "modal-backdrop show" }
+        }
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -529,14 +744,44 @@ fn schedule_sound_at(
     true
 }
 
+/// Force a range/number input's value on mount. Range inputs clamp an
+/// un-applied value to the track midpoint, so a stored calibration would show
+/// as 0 without this; setting the DOM value directly reflects the real value.
 #[cfg(target_arch = "wasm32")]
-fn clear_scheduled(state_rc: Rc<RefCell<ScheduleState>>) {
-    // Drain sources and clear times inside the borrow, then stop/disconnect
-    // outside so that any onended callback can safely borrow the RefCell.
+fn set_input_value_on_mount(event: &MountedData, value: f64) {
+    use dioxus_web::WebEventExt;
+    if let Some(el) = event.try_as_web_event() {
+        if let Ok(input) = el.dyn_into::<web_sys::HtmlInputElement>() {
+            input.set_value(&format!("{value:.0}"));
+        }
+    }
+}
+
+/// Cancel only sources whose scheduled start is still in the future, leaving
+/// any currently-sounding stone to finish. Cutting the source that is actively
+/// feeding the live MediaStream starves it, and the browser time-stretches the
+/// gap and drops the pitch — so pause, sound changes, and calibration tweaks
+/// all clear this way and let the in-flight stone play out.
+#[cfg(target_arch = "wasm32")]
+fn clear_future_scheduled(state_rc: Rc<RefCell<ScheduleState>>, ctx: &web_sys::AudioContext) {
+    // A source is "playing" (do not touch) if it started at or before now; a
+    // small margin keeps one that is about to start from being cut mid-attack.
+    let cutoff_ms = ((ctx.current_time() + 0.05) * 1000.0) as i64;
     let to_stop: Vec<web_sys::AudioBufferSourceNode> = {
         let mut state = state_rc.borrow_mut();
-        state.times.clear();
-        state.sources.drain().map(|(_, s)| s).collect()
+        let future: Vec<i64> = state
+            .times
+            .iter()
+            .copied()
+            .filter(|&t_ms| t_ms > cutoff_ms)
+            .collect();
+        for t_ms in &future {
+            state.times.remove(t_ms);
+        }
+        future
+            .iter()
+            .filter_map(|t_ms| state.sources.remove(t_ms))
+            .collect()
     };
     for source in to_stop {
         #[allow(deprecated)]
