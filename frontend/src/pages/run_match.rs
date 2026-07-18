@@ -502,6 +502,8 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
     // Local stones remaining (for STONES set type); synced from match/state when not ticking.
     // None means the count is not yet known (neither stones_remaining nor stones_per_set is set).
     let mut stones_remaining = use_signal(|| None as Option<u32>);
+    // uuid of the most recently added point, to play a one-shot slide-in/highlight on its row.
+    let mut flash_point_id = use_signal(|| None as Option<String>);
     // When true, stones input shows stones_edit_value so we don't overwrite typing with display_stones.
     let mut stones_input_focused = use_signal(|| false);
     let mut stones_edit_value = use_signal(|| String::new());
@@ -819,6 +821,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                             state_signal.set(Some(Ok(state)));
                         }
                         current_point.set(Some(pending_id.clone()));
+                        flash_point_id.set(Some(pending_id.clone()));
                         let stones_at_start = if set_type_stones { stones_val } else { None };
                         spawn(async move {
                             err_out.set(None);
@@ -854,6 +857,9 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                 }
                                             }
                                             state_signal.set(Some(Ok(state)));
+                                        }
+                                        if flash_point_id().as_deref() == Some(pending_id.as_str()) {
+                                            flash_point_id.set(Some(real_id.clone()));
                                         }
                                         current_point.set(Some(real_id));
                                     }
@@ -978,6 +984,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                             state_signal.set(Some(Ok(state)));
                         }
                         current_point.set(Some(pending_id.clone()));
+                        flash_point_id.set(Some(pending_id.clone()));
                         let stones_at_start = if set_type_stones { stones_val } else { None };
                         spawn(async move {
                             err_out.set(None);
@@ -1013,6 +1020,9 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                 }
                                             }
                                             state_signal.set(Some(Ok(state)));
+                                        }
+                                        if flash_point_id().as_deref() == Some(pending_id.as_str()) {
+                                            flash_point_id.set(Some(real_id.clone()));
                                         }
                                         current_point.set(Some(real_id));
                                     }
@@ -1072,6 +1082,10 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                     #quick-timer-scrim{position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,0.6);pointer-events:none;display:flex;align-items:flex-start;justify-content:center}\
                     #quick-timer-scrim .qt-scrim-text{margin-top:20vh;color:#fff;text-align:center;font-size:1.5rem;line-height:1.5}\
                     #quick-timer-scrim .qt-scrim-title{font-size:2rem;font-weight:600}\
+                    @keyframes point-row-flash-kf{0%{background-color:#adb5bd}100%{background-color:transparent}}\
+                    @keyframes point-row-slide-kf{0%{transform:translateY(-8px);opacity:0.4}100%{transform:translateY(0);opacity:1}}\
+                    tr.point-row-flash>td{animation:point-row-flash-kf 1.1s ease-out}\
+                    tr.point-row-flash>td>*{animation:point-row-slide-kf 0.25s ease-out}\
                     @media (max-width:768px){.mobile-button-wrapper{position:fixed;bottom:0;left:0;right:0;z-index:1000;background:white;padding:0;margin:0;box-shadow:0 -2px 10px rgba(0,0,0,0.1);display:flex;flex-direction:row}\
                     #quick-timer{position:fixed;top:64px;right:8px;z-index:1030;min-width:3rem;height:3rem;padding:0 0.5rem;font-size:1.5rem;box-shadow:0 2px 6px rgba(0,0,0,0.2)}\
                     .mobile-button-wrapper .btn{border-radius:0;margin:0;flex:1;min-height:96px}\
@@ -1093,6 +1107,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                     .map(|r| {
                         let pt_id = r.point_id.as_str();
                         let point_index = r.index;
+                        let is_flash = flash_point_id().as_deref() == Some(pt_id);
                         let set_num = r.set_num;
                         let winner_val = r.winner.as_str();
                         let rerolled = r.rerolled;
@@ -1125,7 +1140,10 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                         let winner_is_t2 = winner_val == "TEAM2";
                         let notes_for_point = point_notes_map_signal().get(&pid_list).cloned().unwrap_or_default();
                         rsx! {
-                            tr { key: "{pt_id}", id: "point-row-{pt_id}",
+                            tr {
+                                key: "{pt_id}",
+                                id: "point-row-{pt_id}",
+                                class: if is_flash { "point-row-flash" } else { "" },
                                 td { class: "text-muted text-center align-middle", "{point_index}" }
                                 td {
                                     div { class: "set-number-controls",
