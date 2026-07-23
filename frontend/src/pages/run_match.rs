@@ -53,6 +53,63 @@ fn now_epoch_secs() -> f64 {
     chrono::Utc::now().timestamp() as f64
 }
 
+/// Long-lived Web Audio context for run-match tones.
+///
+/// Browsers only allow an AudioContext to leave the ``suspended`` state inside a
+/// user gesture. Creating a fresh context when a timer hits zero (seconds later)
+/// leaves it suspended, and dropping it immediately cancels scheduled beeps.
+/// Keep one context for the page lifetime and unlock it on the first gesture.
+#[cfg(target_arch = "wasm32")]
+fn run_match_audio_ctx() -> Option<web_sys::AudioContext> {
+    thread_local! {
+        static CTX: std::cell::RefCell<Option<web_sys::AudioContext>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    CTX.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        if slot.is_none() {
+            match web_sys::AudioContext::new() {
+                Ok(ctx) => {
+                    let _ = ctx.resume();
+                    *slot = Some(ctx);
+                }
+                Err(_) => return None,
+            }
+        } else if let Some(ctx) = slot.as_ref() {
+            if ctx.state() != web_sys::AudioContextState::Running {
+                let _ = ctx.resume();
+            }
+        }
+        slot.clone()
+    })
+}
+
+/// Unlock/resume audio during a user gesture (pointer down, button click, etc.).
+///
+/// ``AudioContext.resume()`` is asynchronous. Calling it alone on pointerdown
+/// often leaves the context still ``suspended`` by the time the promise runs
+/// (outside the gesture). Starting a near-silent oscillator on this stack is
+/// what actually primes the graph — same reason Start/End Point beeps work
+/// on first click.
+#[cfg(target_arch = "wasm32")]
+fn unlock_run_match_audio() {
+    let Some(ctx) = run_match_audio_ctx() else {
+        return;
+    };
+    let _ = ctx.resume();
+    if let (Ok(osc), Ok(gain)) = (ctx.create_oscillator(), ctx.create_gain()) {
+        // Inaudible prime so the gesture counts as "audio started".
+        gain.gain().set_value(0.0001);
+        osc.set_type(web_sys::OscillatorType::Sine);
+        osc.frequency().set_value(440.0);
+        let _ = osc.connect_with_audio_node(&gain);
+        let _ = gain.connect_with_audio_node(&ctx.destination());
+        let now = ctx.current_time();
+        let _ = osc.start_with_when(now);
+        let _ = osc.stop_with_when(now + 0.05);
+    }
+}
+
 /// Play sound and trigger vibration for start/end point button. Different sound and pattern for start vs end.
 #[cfg(target_arch = "wasm32")]
 fn point_button_feedback(is_end_point: bool) {
@@ -70,9 +127,8 @@ fn point_button_feedback(is_end_point: bool) {
                 let _ = f.apply(&nav, &args);
             }
         }
-        // Sound via Web Audio
-        if let Ok(ctx) = web_sys::AudioContext::new() {
-            let _ = ctx.resume();
+        // Sound via Web Audio (shared context unlocked by this click gesture).
+        if let Some(ctx) = run_match_audio_ctx() {
             if let (Ok(osc), Ok(gain)) = (ctx.create_oscillator(), ctx.create_gain()) {
                 gain.gain().set_value(0.4);
                 let (freq, duration) = if is_end_point {
@@ -86,7 +142,6 @@ fn point_button_feedback(is_end_point: bool) {
                 let _ = gain.connect_with_audio_node(&ctx.destination());
                 let _ = osc.start();
                 let _ = osc.stop_with_when(ctx.current_time() + duration);
-                // Context will be garbage-collected after the beep; no need to close explicitly.
             }
         }
     }
@@ -95,22 +150,22 @@ fn point_button_feedback(is_end_point: bool) {
 /// Play five fast beeps to warn that 15 stones remain in a stones match.
 #[cfg(target_arch = "wasm32")]
 fn play_stones_warning_beeps() {
-    if let Ok(ctx) = web_sys::AudioContext::new() {
-        let _ = ctx.resume();
-        let start = ctx.current_time();
-        let beep = 0.08;
-        let gap = 0.12;
-        for i in 0..5 {
-            if let (Ok(osc), Ok(gain)) = (ctx.create_oscillator(), ctx.create_gain()) {
-                gain.gain().set_value(0.4);
-                osc.set_type(web_sys::OscillatorType::Square);
-                osc.frequency().set_value(1000.0);
-                let _ = osc.connect_with_audio_node(&gain);
-                let _ = gain.connect_with_audio_node(&ctx.destination());
-                let at = start + (i as f64) * gap;
-                let _ = osc.start_with_when(at);
-                let _ = osc.stop_with_when(at + beep);
-            }
+    let Some(ctx) = run_match_audio_ctx() else {
+        return;
+    };
+    let start = ctx.current_time();
+    let beep = 0.08;
+    let gap = 0.12;
+    for i in 0..5 {
+        if let (Ok(osc), Ok(gain)) = (ctx.create_oscillator(), ctx.create_gain()) {
+            gain.gain().set_value(0.4);
+            osc.set_type(web_sys::OscillatorType::Square);
+            osc.frequency().set_value(1000.0);
+            let _ = osc.connect_with_audio_node(&gain);
+            let _ = gain.connect_with_audio_node(&ctx.destination());
+            let at = start + (i as f64) * gap;
+            let _ = osc.start_with_when(at);
+            let _ = osc.stop_with_when(at + beep);
         }
     }
 }
@@ -118,22 +173,24 @@ fn play_stones_warning_beeps() {
 /// Play five beeps spread across ~2 seconds to signal a quick timer reaching zero.
 #[cfg(target_arch = "wasm32")]
 fn play_timer_end_beeps() {
-    if let Ok(ctx) = web_sys::AudioContext::new() {
-        let _ = ctx.resume();
-        let start = ctx.current_time();
-        let beep = 0.12;
-        let gap = 0.5; // 5 beeps at 0.0, 0.5, 1.0, 1.5, 2.0s.
-        for i in 0..5 {
-            if let (Ok(osc), Ok(gain)) = (ctx.create_oscillator(), ctx.create_gain()) {
-                gain.gain().set_value(0.4);
-                osc.set_type(web_sys::OscillatorType::Square);
-                osc.frequency().set_value(660.0);
-                let _ = osc.connect_with_audio_node(&gain);
-                let _ = gain.connect_with_audio_node(&ctx.destination());
-                let at = start + (i as f64) * gap;
-                let _ = osc.start_with_when(at);
-                let _ = osc.stop_with_when(at + beep);
-            }
+    let Some(ctx) = run_match_audio_ctx() else {
+        return;
+    };
+    // Resume in case the browser suspended the context while the tab was backgrounded.
+    let _ = ctx.resume();
+    let start = ctx.current_time();
+    let beep = 0.12;
+    let gap = 0.5; // 5 beeps at 0.0, 0.5, 1.0, 1.5, 2.0s.
+    for i in 0..5 {
+        if let (Ok(osc), Ok(gain)) = (ctx.create_oscillator(), ctx.create_gain()) {
+            gain.gain().set_value(0.4);
+            osc.set_type(web_sys::OscillatorType::Square);
+            osc.frequency().set_value(660.0);
+            let _ = osc.connect_with_audio_node(&gain);
+            let _ = gain.connect_with_audio_node(&ctx.destination());
+            let at = start + (i as f64) * gap;
+            let _ = osc.start_with_when(at);
+            let _ = osc.stop_with_when(at + beep);
         }
     }
 }
@@ -187,6 +244,143 @@ fn scores_by_set_from_points(points: &[&Value]) -> Vec<(String, u64, u64)> {
         .collect()
 }
 
+
+/// Read a point's set_number from match-state JSON (handles null / int forms).
+fn set_number_from_state(state: &Option<Result<Value, String>>, point_id: &str) -> u32 {
+    let Some(Ok(v)) = state.as_ref() else {
+        return 1;
+    };
+    let Some(points) = v.get("points").and_then(|p| p.as_array()) else {
+        return 1;
+    };
+    for p in points {
+        if p.get("uuid").and_then(|u| u.as_str()) == Some(point_id) {
+            return p
+                .get("set_number")
+                .and_then(|n| n.as_u64().or_else(|| n.as_i64().map(|i| i.max(0) as u64)))
+                .unwrap_or(1) as u32;
+        }
+    }
+    1
+}
+
+/// Optimistically write set_number for a point in match-state JSON. Returns true if found.
+fn set_number_in_state(state: &mut Value, point_id: &str, new_set: u32) -> bool {
+    let Some(points) = state.get_mut("points").and_then(|p| p.as_array_mut()) else {
+        return false;
+    };
+    for p in points.iter_mut() {
+        if p.get("uuid").and_then(|u| u.as_str()) == Some(point_id) {
+            p["set_number"] = serde_json::json!(new_set);
+            return true;
+        }
+    }
+    false
+}
+
+
+
+/// Highlight a point row once, then clear so live re-renders do not restart the animation.
+#[cfg(target_arch = "wasm32")]
+fn trigger_point_row_flash(mut flash_point_id: Signal<Option<String>>, point_id: String) {
+    flash_point_id.set(Some(point_id));
+    spawn(async move {
+        gloo_timers::future::TimeoutFuture::new(1200).await;
+        flash_point_id.set(None);
+    });
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn trigger_point_row_flash(mut flash_point_id: Signal<Option<String>>, point_id: String) {
+    flash_point_id.set(Some(point_id));
+}
+
+/// Set +/- controls for one point. Own component so it re-renders from
+/// ``state_signal`` when set_number changes, independent of how the parent
+/// table rows are reconciled (prebuilt VNodes were showing a stale number).
+#[component]
+fn SetNumberControls(
+    point_id: String,
+    url: String,
+    mut state_signal: Signal<Option<Result<Value, String>>>,
+    mut action_error: Signal<Option<String>>,
+) -> Element {
+    // Subscribe to state so this cell always shows the live value for point_id.
+    let set_num = set_number_from_state(&state_signal(), point_id.as_str());
+    let pid_inc = point_id.clone();
+    let pid_dec = point_id.clone();
+    let u_inc = url.clone();
+    let u_dec = url.clone();
+    rsx! {
+        div { class: "set-number-controls",
+            button {
+                class: "set-step-btn",
+                r#type: "button",
+                onclick: move |_| {
+                    let prev = state_signal().clone();
+                    let current = set_number_from_state(&prev, pid_inc.as_str());
+                    let new_set = current.saturating_add(1).max(1);
+                    if let Some(Ok(ref state)) = prev.clone() {
+                        let mut state = state.clone();
+                        if set_number_in_state(&mut state, pid_inc.as_str(), new_set) {
+                            state_signal.set(Some(Ok(state)));
+                        }
+                    }
+                    let u = u_inc.clone();
+                    let p = pid_inc.clone();
+                    let mut state_signal = state_signal;
+                    let mut action_error = action_error;
+                    spawn(async move {
+                        let body = serde_json::json!({ "point_id": p, "set_number": new_set });
+                        match api::update_point(&u, &p, &body).await {
+                            Ok(_) => { action_error.set(None); }
+                            Err(e) => {
+                                action_error.set(Some(e));
+                                state_signal.set(prev);
+                            }
+                        }
+                    });
+                },
+                "+"
+            }
+            span { class: "set-number-display", "{set_num}" }
+            button {
+                class: "set-step-btn",
+                r#type: "button",
+                onclick: move |_| {
+                    let prev = state_signal().clone();
+                    let current = set_number_from_state(&prev, pid_dec.as_str());
+                    let new_set = current.saturating_sub(1).max(1);
+                    if new_set == current {
+                        return;
+                    }
+                    if let Some(Ok(ref state)) = prev.clone() {
+                        let mut state = state.clone();
+                        if set_number_in_state(&mut state, pid_dec.as_str(), new_set) {
+                            state_signal.set(Some(Ok(state)));
+                        }
+                    }
+                    let u = u_dec.clone();
+                    let p = pid_dec.clone();
+                    let mut state_signal = state_signal;
+                    let mut action_error = action_error;
+                    spawn(async move {
+                        let body = serde_json::json!({ "point_id": p, "set_number": new_set });
+                        match api::update_point(&u, &p, &body).await {
+                            Ok(_) => { action_error.set(None); }
+                            Err(e) => {
+                                action_error.set(Some(e));
+                                state_signal.set(prev);
+                            }
+                        }
+                    });
+                },
+                "−"
+            }
+        }
+    }
+}
+
 /// Stones elapsed = number of global 1.5s beat boundaries crossed (so counters tick in sync with global clock).
 fn stones_elapsed_beats(stamp_opt: Option<&str>, end_opt: Option<&str>) -> u32 {
     const BEAT: f64 = 1.5;
@@ -217,7 +411,7 @@ fn stones_elapsed_beats_ms(stamp_opt: Option<&str>, end_opt: Option<&str>) -> u3
 }
 
 /// Px of drag magnitude per 5 stones when arming the quick timer.
-const PX_PER_5: f64 = 12.0;
+const PX_PER_5: f64 = 30.0;
 /// Global beat length (seconds) for the quick timer countdown.
 const QUICK_TIMER_BEAT: f64 = 1.5;
 
@@ -502,7 +696,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
     // Local stones remaining (for STONES set type); synced from match/state when not ticking.
     // None means the count is not yet known (neither stones_remaining nor stones_per_set is set).
     let mut stones_remaining = use_signal(|| None as Option<u32>);
-    // uuid of the most recently added point, to play a one-shot slide-in/highlight on its row.
+    // uuid of most recently added point for one-shot row highlight (auto-cleared).
     let mut flash_point_id = use_signal(|| None as Option<String>);
     // When true, stones input shows stones_edit_value so we don't overwrite typing with display_stones.
     let mut stones_input_focused = use_signal(|| false);
@@ -612,12 +806,11 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                 struct PointRow {
                     index: usize,
                     point_id: String,
-                    set_num: u32,
                     winner: String,
                     rerolled: bool,
                     elapsed: u32,
                 }
-                let point_rows: Vec<PointRow> = points
+                let mut point_rows: Vec<PointRow> = points
                     .iter()
                     .enumerate()
                     .map(|(index, pt)| {
@@ -626,8 +819,6 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
-                        let set_num =
-                            pt.get("set_number").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
                         let winner = pt
                             .get("winner")
                             .and_then(|v| v.as_str())
@@ -646,13 +837,15 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                         PointRow {
                             index: index + 1,
                             point_id,
-                            set_num,
                             winner,
                             rerolled,
                             elapsed,
                         }
                     })
                     .collect();
+                // Newest first in the table; reverse data (not cloned VNodes) so each
+                // row keeps a stable key tied to point id during reconciliation.
+                point_rows.reverse();
 
                 // Stones display: during an active point show stones_at_start - elapsed (ticks down); otherwise show stones_remaining.
                 let display_stones: Option<u32> = if set_type_stones {
@@ -821,7 +1014,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                             state_signal.set(Some(Ok(state)));
                         }
                         current_point.set(Some(pending_id.clone()));
-                        flash_point_id.set(Some(pending_id.clone()));
+                        trigger_point_row_flash(flash_point_id, pending_id.clone());
                         let stones_at_start = if set_type_stones { stones_val } else { None };
                         spawn(async move {
                             err_out.set(None);
@@ -858,7 +1051,8 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                             }
                                             state_signal.set(Some(Ok(state)));
                                         }
-                                        if flash_point_id().as_deref() == Some(pending_id.as_str()) {
+                                        if flash_point_id().as_deref() == Some(pending_id.as_str())
+                                        {
                                             flash_point_id.set(Some(real_id.clone()));
                                         }
                                         current_point.set(Some(real_id));
@@ -984,7 +1178,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                             state_signal.set(Some(Ok(state)));
                         }
                         current_point.set(Some(pending_id.clone()));
-                        flash_point_id.set(Some(pending_id.clone()));
+                        trigger_point_row_flash(flash_point_id, pending_id.clone());
                         let stones_at_start = if set_type_stones { stones_val } else { None };
                         spawn(async move {
                             err_out.set(None);
@@ -1021,7 +1215,8 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                             }
                                             state_signal.set(Some(Ok(state)));
                                         }
-                                        if flash_point_id().as_deref() == Some(pending_id.as_str()) {
+                                        if flash_point_id().as_deref() == Some(pending_id.as_str())
+                                        {
                                             flash_point_id.set(Some(real_id.clone()));
                                         }
                                         current_point.set(Some(real_id));
@@ -1083,7 +1278,8 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                     #quick-timer-scrim .qt-scrim-text{margin-top:20vh;color:#fff;text-align:center;font-size:1.5rem;line-height:1.5}\
                     #quick-timer-scrim .qt-scrim-title{font-size:2rem;font-weight:600}\
                     @keyframes point-row-flash-kf{0%{background-color:#adb5bd}100%{background-color:transparent}}\
-                    tr.point-row-flash>td{animation:point-row-flash-kf 1.1s ease-out}\
+                    #points-table tbody tr.point-row-flash>td{animation:point-row-flash-kf 1.1s ease-out both}\
+                    #point-button,.mobile-button-wrapper .btn{animation:none!important}\
                     #points-table tr.point-row-no-border>td{border-bottom-width:0}\
                     @media (max-width:768px){.mobile-button-wrapper{position:fixed;bottom:0;left:0;right:0;z-index:1000;background:white;padding:0;margin:0;box-shadow:0 -2px 10px rgba(0,0,0,0.1);display:flex;flex-direction:row}\
                     #quick-timer{position:fixed;top:64px;right:8px;z-index:1030;min-width:3rem;height:3rem;padding:0 0.5rem;font-size:1.5rem;box-shadow:0 2px 6px rgba(0,0,0,0.2)}\
@@ -1107,12 +1303,9 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                         let pt_id = r.point_id.as_str();
                         let point_index = r.index;
                         let is_flash = flash_point_id().as_deref() == Some(pt_id);
-                        let set_num = r.set_num;
                         let winner_val = r.winner.as_str();
                         let rerolled = r.rerolled;
                         let elapsed = r.elapsed;
-                        let u_inc = url.clone();
-                        let u_dec = url.clone();
                         let u_winner = url.clone();
                         let u_reroll = url.clone();
                         let u_del = url.clone();
@@ -1120,8 +1313,6 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                         let id_notes = match_id.clone();
                         let id_reroll_match = match_id.clone();
                         let pid = r.point_id.clone();
-                        let pid_inc = pid.clone();
-                        let pid_dec = pid.clone();
                         let pid_winner = pid.clone();
                         let pid_reroll = pid.clone();
                         let pid_del = pid.clone();
@@ -1154,72 +1345,12 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                 class: "{main_row_class}",
                                 td { class: "text-muted text-center align-middle", "{point_index}" }
                                 td {
-                                    div { class: "set-number-controls",
-                                        button {
-                                            class: "set-step-btn",
-                                            r#type: "button",
-                                            onclick: move |_| {
-                                                let new_set = (set_num + 1).max(1);
-                                                let prev = state_signal().clone();
-                                                if let Some(Ok(ref state)) = prev.clone() {
-                                                    let mut state = state.clone();
-                                                    if let Some(points) = state.get_mut("points").and_then(|p| p.as_array_mut()) {
-                                                        for p in points.iter_mut() {
-                                                            if p.get("uuid").and_then(|v| v.as_str()) == Some(pid_inc.as_str()) {
-                                                                p["set_number"] = serde_json::json!(new_set);
-                                                                break;
-                                                            }
-                                                        }
-                                                    }
-                                                    state_signal.set(Some(Ok(state)));
-                                                }
-                                                let u = u_inc.clone();
-                                                let p = pid_inc.clone();
-                                                let mut state_signal = state_signal;
-                                                let mut action_error = action_error;
-                                                spawn(async move {
-                                                    let body = serde_json::json!({ "point_id": p, "set_number": new_set });
-                                                    match api::update_point(&u, &p, &body).await {
-                                                        Ok(_) => { action_error.set(None); }
-                                                        Err(e) => { action_error.set(Some(e)); state_signal.set(prev); }
-                                                    }
-                                                });
-                                            },
-                                            "+"
-                                        }
-                                        span { class: "set-number-display", id: "set-display-{pt_id}", "{set_num}" }
-                                        button {
-                                            class: "set-step-btn",
-                                            r#type: "button",
-                                            onclick: move |_| {
-                                                let new_set = (set_num as i64 - 1).max(1) as u32;
-                                                let prev = state_signal().clone();
-                                                if let Some(Ok(ref state)) = prev.clone() {
-                                                    let mut state = state.clone();
-                                                    if let Some(points) = state.get_mut("points").and_then(|p| p.as_array_mut()) {
-                                                        for p in points.iter_mut() {
-                                                            if p.get("uuid").and_then(|v| v.as_str()) == Some(pid_dec.as_str()) {
-                                                                p["set_number"] = serde_json::json!(new_set);
-                                                                break;
-                                                            }
-                                                        }
-                                                    }
-                                                    state_signal.set(Some(Ok(state)));
-                                                }
-                                                let u = u_dec.clone();
-                                                let p = pid_dec.clone();
-                                                let mut state_signal = state_signal;
-                                                let mut action_error = action_error;
-                                                spawn(async move {
-                                                    let body = serde_json::json!({ "point_id": p, "set_number": new_set });
-                                                    match api::update_point(&u, &p, &body).await {
-                                                        Ok(_) => { action_error.set(None); }
-                                                        Err(e) => { action_error.set(Some(e)); state_signal.set(prev); }
-                                                    }
-                                                });
-                                            },
-                                            "−"
-                                        }
+                                    SetNumberControls {
+                                        key: "set-{pt_id}",
+                                        point_id: pid.clone(),
+                                        url: url.clone(),
+                                        state_signal: state_signal,
+                                        action_error: action_error,
                                     }
                                 }
                                 td { class: "align-middle", id: "stones-{pt_id}", "{elapsed}" }
@@ -1534,9 +1665,13 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                 let quick_timer_label: Option<String> = match quick_timer() {
                     QuickTimer::Idle => None,
                     QuickTimer::Dragging { start_stones } => Some(start_stones.to_string()),
-                    QuickTimer::Running { start_time, start_stones } => {
+                    QuickTimer::Running {
+                        start_time,
+                        start_stones,
+                    } => {
                         #[cfg(target_arch = "wasm32")]
-                        let now_server = js_sys::Date::now() / 1000.0 + time_filter.read().get_mean();
+                        let now_server =
+                            js_sys::Date::now() / 1000.0 + time_filter.read().get_mean();
                         #[cfg(not(target_arch = "wasm32"))]
                         let now_server = now_epoch_secs();
                         let current = quick_timer_current(start_time, start_stones, now_server);
@@ -1572,6 +1707,9 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                         class: if quick_timer_dragging { "d-flex align-items-center justify-content-center user-select-none qt-dragging" } else { "d-flex align-items-center justify-content-center user-select-none" },
                         title: "Quick timer: drag to set",
                         onpointerdown: move |ev: Event<PointerData>| {
+                            // Unlock Web Audio during this gesture so the end-of-timer beeps
+                            // (which fire seconds later) can use a running AudioContext.
+                            unlock_run_match_audio();
                             // Capture the pointer so move/up events keep arriving after the cursor
                             // leaves this small element; otherwise the drag stalls and never releases.
                             capture_quick_timer_pointer(ev.pointer_id());
@@ -1593,6 +1731,8 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                     if start_stones == 0 {
                                         quick_timer.set(QuickTimer::Idle);
                                     } else {
+                                        // Re-prime audio on the release gesture that arms the timer.
+                                        unlock_run_match_audio();
                                         let now_server = js_sys::Date::now() / 1000.0 + time_filter.read().get_mean();
                                         quick_timer_fired_zero.set(false);
                                         quick_timer.set(QuickTimer::Running { start_time: now_server, start_stones });
@@ -1805,8 +1945,8 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                     }
                                                 }
                                                 tbody { id: "points-table-body",
-                                                    for node in point_table_rows.iter().rev() {
-                                                        {node.clone()}
+                                                    for node in point_table_rows.into_iter() {
+                                                        {node}
                                                     }
                                                 }
                                             }
