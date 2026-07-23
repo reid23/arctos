@@ -23,6 +23,7 @@
      Don't just check the boxes; say what you actually ran. -->
 
 - [ ] `just test` passes locally
+- [ ] `just lint` passes locally, or CI coverage is sufficient
 - [ ] `just coverage-check` passes locally, or CI coverage is sufficient
 - [ ] Manual verification:
   -
