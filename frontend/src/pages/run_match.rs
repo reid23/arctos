@@ -1083,9 +1083,8 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                     #quick-timer-scrim .qt-scrim-text{margin-top:20vh;color:#fff;text-align:center;font-size:1.5rem;line-height:1.5}\
                     #quick-timer-scrim .qt-scrim-title{font-size:2rem;font-weight:600}\
                     @keyframes point-row-flash-kf{0%{background-color:#adb5bd}100%{background-color:transparent}}\
-                    @keyframes point-row-slide-kf{0%{transform:translateY(-8px);opacity:0.4}100%{transform:translateY(0);opacity:1}}\
                     tr.point-row-flash>td{animation:point-row-flash-kf 1.1s ease-out}\
-                    tr.point-row-flash>td>*{animation:point-row-slide-kf 0.25s ease-out}\
+                    #points-table tr.point-row-no-border>td{border-bottom-width:0}\
                     @media (max-width:768px){.mobile-button-wrapper{position:fixed;bottom:0;left:0;right:0;z-index:1000;background:white;padding:0;margin:0;box-shadow:0 -2px 10px rgba(0,0,0,0.1);display:flex;flex-direction:row}\
                     #quick-timer{position:fixed;top:64px;right:8px;z-index:1030;min-width:3rem;height:3rem;padding:0 0.5rem;font-size:1.5rem;box-shadow:0 2px 6px rgba(0,0,0,0.2)}\
                     .mobile-button-wrapper .btn{border-radius:0;margin:0;flex:1;min-height:96px}\
@@ -1139,11 +1138,20 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                         let winner_is_t1 = winner_val == "TEAM1";
                         let winner_is_t2 = winner_val == "TEAM2";
                         let notes_for_point = point_notes_map_signal().get(&pid_list).cloned().unwrap_or_default();
+                        let has_notes = !notes_for_point.is_empty();
+                        // When a point has penalties, drop the main row's bottom border so the grey
+                        // separator falls below the penalties (which belong to this point), not above them.
+                        let main_row_class = match (is_flash, has_notes) {
+                            (true, true) => "point-row-flash point-row-no-border",
+                            (true, false) => "point-row-flash",
+                            (false, true) => "point-row-no-border",
+                            (false, false) => "",
+                        };
                         rsx! {
                             tr {
                                 key: "{pt_id}",
                                 id: "point-row-{pt_id}",
-                                class: if is_flash { "point-row-flash" } else { "" },
+                                class: "{main_row_class}",
                                 td { class: "text-muted text-center align-middle", "{point_index}" }
                                 td {
                                     div { class: "set-number-controls",
@@ -1473,9 +1481,9 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                     }
                                 }
                             }
-                            if !notes_for_point.is_empty() {
+                            if has_notes {
                                 tr { key: "{pt_id}-notes",
-                                    td { colspan: "7", class: "pt-0 pb-2 border-0",
+                                    td { colspan: "7", class: "pt-0 pb-2",
                                         div { class: "d-flex flex-wrap gap-1",
                                             for note_val in notes_for_point.iter() {
                                                 {
