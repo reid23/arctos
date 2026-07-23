@@ -33,8 +33,8 @@ their code.
 
 ```
 ┌─────────────────┐   /_api/...    ┌──────────────────┐    SQLAlchemy   ┌──────────┐
-│  Dioxus SPA     │ ─────────────-> │  Flask backend   │ ──────────────-> │  SQLite  │
-│  (Rust -> WASM)  │                │  (gunicorn)      │                 │  (WAL)   │
+│  Dioxus SPA     │ ────────────-> │  Flask backend   │ ─────────────-> │  SQLite  │
+│  (Rust -> WASM) │                │  (gunicorn)      │                 │  (WAL)   │
 │  served by      │                │                  │                 └──────────┘
 │  nginx at /     │                │  blueprints,     │
 └─────────────────┘                │  services,       │
