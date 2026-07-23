@@ -39,7 +39,7 @@ systemctl --user start arctos
 if [ "$BUILD_DOCS" -eq 1 ]; then
   just docs
   chmod -R a+rwX docs/_build
-  cp -r docs/_build/html $DOCS_SERVER_ROOT
+  cp -r docs/_build/html/* $DOCS_SERVER_ROOT
 fi
 
 set +e
