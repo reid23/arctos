@@ -130,6 +130,7 @@ def render_markdown(text: str | None) -> str:
             "extra",  # tables, fenced code, etc.
             "sane_lists",
             "smarty",
+            "toc",
             "admonition",  # !!! note "Title" style callouts
         ],
         output_format="html5",
