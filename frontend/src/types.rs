@@ -314,6 +314,9 @@ pub struct BracketResponse {
     pub labeled_teams: Vec<BracketLabeledTeamData>,
     #[serde(default)]
     pub images: Vec<BracketImageData>,
+    /// Processed legacy image-overlay brackets (from tournament.bracket TOML).
+    #[serde(default)]
+    pub legacy_brackets: Vec<BracketItem>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -439,15 +442,16 @@ impl BracketPlacementData {
     }
 }
 
-// Legacy image-bracket types (bracket-setup page)
-#[derive(Clone, Debug, Serialize, Deserialize)]
+// Legacy image-bracket types (bracket-setup page + legacy fallback view)
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct BracketItem {
     pub name: String,
     pub image: String,
+    #[serde(default)]
     pub teams: Vec<BracketTeamEntry>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct BracketTeamEntry {
     pub team_info: Option<BracketTeamInfo>,
     pub x: i32,
@@ -455,12 +459,14 @@ pub struct BracketTeamEntry {
     pub halign: String,
     pub valign: String,
     pub size: i32,
+    #[serde(default)]
     pub is_reference: bool,
+    #[serde(default)]
     pub is_tag: bool,
     pub match_name: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct BracketTeamInfo {
     pub id: Option<String>,
     pub pseudonym: Option<String>,

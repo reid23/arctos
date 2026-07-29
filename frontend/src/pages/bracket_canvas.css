@@ -87,6 +87,25 @@
     box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.35);
 }
 
+/* View-mode status outlines (hidden while editing so selection stays clear). */
+.bracket-match.status-in-progress {
+    border-color: #e6a800;
+    box-shadow: 0 0 0 1px rgba(230, 168, 0, 0.35);
+}
+
+.bracket-match.status-completed {
+    border-color: #198754;
+    box-shadow: 0 0 0 1px rgba(25, 135, 84, 0.28);
+}
+
+.bracket-team-slot .winner-badge {
+    flex-shrink: 0;
+    margin-left: 2px;
+    font-size: 0.65em;
+    padding: 0.05rem 0.3rem;
+    line-height: 1.2;
+}
+
 .bracket-match.dragging {
     opacity: 0.92;
     z-index: 5;

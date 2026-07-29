@@ -52,6 +52,7 @@ mod tournament_register;
 mod tournament_settings;
 mod create_event;
 mod bracket_setup;
+mod legacy_bracket;
 
 pub use about::About;
 pub use add_injury::AddInjury;
@@ -101,6 +102,7 @@ pub use start_match::StartMatch;
 pub use stones::Stones;
 pub use create_event::CreateEvent;
 pub use bracket_setup::BracketSetup;
+pub use legacy_bracket::{LegacyBracket, LegacyBracketDiagrams};
 pub use team_profile::TeamProfilePage;
 pub use teams_list::TeamsList;
 pub use terms::Terms;

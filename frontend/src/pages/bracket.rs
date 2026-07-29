@@ -7,8 +7,9 @@
 use crate::api;
 use crate::display::short_or_truncate;
 use crate::pages::TeamSelectionField;
+use super::legacy_bracket::LegacyBracketDiagrams;
 use crate::types::{
-    BracketImageData, BracketLabeledTeamData, BracketMatchData, BracketPlacementData,
+    BracketImageData, BracketItem, BracketLabeledTeamData, BracketMatchData, BracketPlacementData,
     BracketResponse, BracketTextData, MatchSetupData, TagSetupData, TeamOption,
 };
 use crate::Route;
@@ -607,6 +608,7 @@ enum ActiveModal {
     EditText { id: String },
     EditLabeledTeam { id: String },
     AddImage,
+    LegacyManage,
 }
 
 impl Default for ActiveModal {
@@ -680,6 +682,7 @@ pub fn Bracket(url: String) -> Element {
     let mut local_texts = use_signal(|| Vec::<BracketTextData>::new());
     let mut local_labeled = use_signal(|| Vec::<BracketLabeledTeamData>::new());
     let mut local_images = use_signal(|| Vec::<BracketImageData>::new());
+    let mut legacy_brackets = use_signal(|| Vec::<BracketItem>::new());
     let mut interaction = use_signal(Interaction::default);
     let mut active_modal = use_signal(ActiveModal::default);
     let mut add_match_query = use_signal(String::new);
@@ -709,6 +712,7 @@ pub fn Bracket(url: String) -> Element {
                 dirty,
                 canvas_size,
             );
+            legacy_brackets.set(d.legacy_brackets.clone());
             initialized.set(true);
             fit_tick.set(fit_tick() + 1);
         }
@@ -818,7 +822,14 @@ pub fn Bracket(url: String) -> Element {
                 let texts_snap = local_texts();
                 let labeled_snap = local_labeled();
                 let images_snap = local_images();
+                let legacy_snap = legacy_brackets();
                 let setup_matches = matches_to_setup(&matches_snap);
+                let canvas_empty = matches_snap.iter().filter(|m| is_placed(m)).count() == 0
+                    && texts_snap.is_empty()
+                    && labeled_snap.is_empty()
+                    && images_snap.is_empty();
+                let has_legacy = !legacy_snap.is_empty();
+                let show_legacy_fallback = canvas_empty && has_legacy && !edit_mode();
 
                 let by_name: HashMap<String, BracketMatchData> = matches_snap
                     .iter()
@@ -1280,7 +1291,64 @@ pub fn Bracket(url: String) -> Element {
                             }
                         }
 
-                        div {
+                        
+                        if has_legacy && !canvas_empty {
+                            div { class: "row",
+                                div { class: "col-12",
+                                    div { class: "alert alert-warning py-2 px-3 mb-3", role: "alert",
+                                        "This tournament has a legacy-style bracket diagram still configured. "
+                                        Link {
+                                            to: Route::LegacyBracket { url: tournament_url.clone() },
+                                            class: "alert-link",
+                                            "Click here to see it."
+                                        }
+                                        if is_to {
+                                            " To delete legacy brackets and get rid of this message, "
+                                            a {
+                                                href: "#",
+                                                class: "alert-link",
+                                                onclick: move |ev: Event<MouseData>| {
+                                                    ev.prevent_default();
+                                                    ev.stop_propagation();
+                                                    active_modal.set(ActiveModal::LegacyManage);
+                                                },
+                                                "click here."
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if show_legacy_fallback {
+                            div { class: "row",
+                                div { class: "col-12",
+                                    if is_to {
+                                        div { class: "alert alert-info py-2 px-3 mb-3", role: "alert",
+                                            "Showing the legacy image bracket because the new canvas is empty. Turn on Edit to build a canvas bracket. "
+                                            "To delete legacy brackets, "
+                                            a {
+                                                href: "#",
+                                                class: "alert-link",
+                                                onclick: move |ev: Event<MouseData>| {
+                                                    ev.prevent_default();
+                                                    ev.stop_propagation();
+                                                    active_modal.set(ActiveModal::LegacyManage);
+                                                },
+                                                "click here."
+                                            }
+                                        }
+                                    }
+                                    LegacyBracketDiagrams {
+                                        url: tournament_url.clone(),
+                                        brackets: legacy_snap.clone(),
+                                    }
+                                }
+                            }
+                        }
+
+                        if !show_legacy_fallback {
+                            div {
                             id: "bracket-canvas-wrap",
                             class: if edit_mode() { "bracket-canvas-wrap edit-mode" } else { "bracket-canvas-wrap" },
                             onwheel: move |ev: Event<WheelData>| {
@@ -1849,6 +1917,27 @@ pub fn Bracket(url: String) -> Element {
                                             (m.team1_name.clone(), m.team1_photo.clone(), t1_label.clone(),
                                              m.team2_name.clone(), m.team2_photo.clone(), t2_label.clone())
                                         };
+                                        // Which visual slot is the match winner (if known).
+                                        let winner = m.match_winner.as_deref().unwrap_or("");
+                                        let top_is_winner = if flipped {
+                                            winner.eq_ignore_ascii_case("TEAM2")
+                                        } else {
+                                            winner.eq_ignore_ascii_case("TEAM1")
+                                        };
+                                        let bot_is_winner = if flipped {
+                                            winner.eq_ignore_ascii_case("TEAM1")
+                                        } else {
+                                            winner.eq_ignore_ascii_case("TEAM2")
+                                        };
+                                        let status_class = if !edit_mode() {
+                                            match m.status.as_str() {
+                                                "IN_PROGRESS" => " status-in-progress",
+                                                "COMPLETED" => " status-completed",
+                                                _ => "",
+                                            }
+                                        } else {
+                                            ""
+                                        };
 
                                         rsx! {
                                             if let Some(init) = label1.clone() {
@@ -1919,6 +2008,7 @@ pub fn Bracket(url: String) -> Element {
                                                     let mut c = String::from("bracket-match");
                                                     if selected { c.push_str(" selected"); }
                                                     if flipped { c.push_str(" inputs-flipped"); }
+                                                    c.push_str(status_class);
                                                     c
                                                 },
                                                 style: format!("left: {x}px; top: {y}px; width: {w}px; height: {h}px; cursor: {};", if edit_mode() { "grab" } else { "default" }),
@@ -1944,9 +2034,12 @@ pub fn Bracket(url: String) -> Element {
                                                             img { class: "avatar", src: "{backend}/static/{photo}", alt: "" }
                                                         }
                                                         span { class: "label", title: "{top_name}", "{top_label}" }
+                                                        if top_is_winner {
+                                                            span { class: "winner-badge", title: "Match winner", "Winner" }
+                                                        }
                                                     }
                                                     if show_w {
-                                                        span { class: "bracket-port-badge winner", title: "Winner", "W" }
+                                                        span { class: "bracket-port-badge winner", title: "Winner output", "W" }
                                                     }
                                                 }
                                                 div { class: "bracket-match-name", title: "{m.name}",
@@ -1965,9 +2058,12 @@ pub fn Bracket(url: String) -> Element {
                                                             img { class: "avatar", src: "{backend}/static/{photo}", alt: "" }
                                                         }
                                                         span { class: "label", title: "{bot_name}", "{bot_label}" }
+                                                        if bot_is_winner {
+                                                            span { class: "winner-badge", title: "Match winner", "Winner" }
+                                                        }
                                                     }
                                                     if show_l {
-                                                        span { class: "bracket-port-badge loser", title: "Loser", "L" }
+                                                        span { class: "bracket-port-badge loser", title: "Loser output", "L" }
                                                     }
                                                 }
                                                 if edit_mode() {
@@ -2006,7 +2102,10 @@ pub fn Bracket(url: String) -> Element {
                             }
                         }
 
+                        } // end !show_legacy_fallback
+
                         // ---- Modals ----
+
                         if active_modal() == ActiveModal::AddMatch && edit_mode() {
                             div { class: "bracket-add-modal-backdrop",
                                 onclick: move |_| { active_modal.set(ActiveModal::None); focus_bracket_root(); },
@@ -2334,6 +2433,128 @@ pub fn Bracket(url: String) -> Element {
                                 }
                             }
                         }
+
+                        if active_modal() == ActiveModal::LegacyManage && is_to {
+                            div { class: "bracket-add-modal-backdrop",
+                                onclick: move |_| { active_modal.set(ActiveModal::None); focus_bracket_root(); },
+                                div { class: "bracket-add-modal", style: "max-width: 560px;",
+                                    onclick: move |ev: Event<MouseData>| ev.stop_propagation(),
+                                    div { class: "bracket-add-modal-header",
+                                        h5 { class: "mb-0", "Legacy brackets" }
+                                        button {
+                                            class: "btn-close",
+                                            onclick: move |_| { active_modal.set(ActiveModal::None); focus_bracket_root(); }
+                                        }
+                                    }
+                                    div { class: "bracket-add-modal-body px-3 py-2",
+                                        p { class: "small text-muted mb-2",
+                                            "These image-overlay brackets are from the old setup. Delete them once you no longer need them."
+                                        }
+                                        if legacy_snap.is_empty() {
+                                            p { class: "text-muted mb-0", "No legacy brackets configured." }
+                                        } else {
+                                            ul { class: "list-group list-group-flush",
+                                                for (idx, bracket) in legacy_snap.iter().enumerate() {
+                                                    {
+                                                        let bname = if bracket.name.is_empty() {
+                                                            format!("Bracket {}", idx + 1)
+                                                        } else {
+                                                            bracket.name.clone()
+                                                        };
+                                                        let bimg = bracket.image.clone();
+                                                        let idx_u = idx;
+                                                        let u = tournament_url.clone();
+                                                        rsx! {
+                                                            li {
+                                                                class: "list-group-item d-flex align-items-center justify-content-between gap-2 px-0",
+                                                                key: "{idx_u}-{bname}",
+                                                                div { class: "d-flex align-items-center gap-2 min-w-0",
+                                                                    img {
+                                                                        src: "{backend}/static/{bimg}",
+                                                                        alt: "{bname}",
+                                                                        style: "width: 64px; height: 40px; object-fit: cover; border-radius: 4px; background: #eee;"
+                                                                    }
+                                                                    div { class: "text-truncate",
+                                                                        strong { "{bname}" }
+                                                                        div { class: "small text-muted text-truncate", "{bimg}" }
+                                                                    }
+                                                                }
+                                                                div { class: "d-flex gap-1 flex-shrink-0",
+                                                                    Link {
+                                                                        to: Route::LegacyBracket { url: tournament_url.clone() },
+                                                                        class: "btn btn-sm btn-outline-primary",
+                                                                        "View"
+                                                                    }
+                                                                    button {
+                                                                        class: "btn btn-sm btn-outline-danger",
+                                                                        disabled: saving(),
+                                                                        onclick: move |_| {
+                                                                            let u = u.clone();
+                                                                            saving.set(true);
+                                                                            spawn(async move {
+                                                                                match api::delete_legacy_bracket(&u, idx_u).await {
+                                                                                    Ok(resp) => {
+                                                                                        legacy_brackets.set(resp.legacy_brackets.clone());
+                                                                                        if resp.legacy_brackets.is_empty() {
+                                                                                            active_modal.set(ActiveModal::None);
+                                                                                        }
+                                                                                    }
+                                                                                    Err(e) => {
+                                                                                        #[cfg(target_arch = "wasm32")]
+                                                                                        web_sys::console::error_1(&e.into());
+                                                                                    }
+                                                                                }
+                                                                                saving.set(false);
+                                                                            });
+                                                                        },
+                                                                        "Delete"
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    div { class: "bracket-add-modal-footer",
+                                        if !legacy_snap.is_empty() {
+                                            button {
+                                                class: "btn btn-sm btn-danger me-auto",
+                                                disabled: saving(),
+                                                onclick: {
+                                                    let u = tournament_url.clone();
+                                                    move |_| {
+                                                        let u = u.clone();
+                                                        saving.set(true);
+                                                        spawn(async move {
+                                                            match api::clear_legacy_brackets(&u).await {
+                                                                Ok(resp) => {
+                                                                    legacy_brackets.set(resp.legacy_brackets.clone());
+                                                                    active_modal.set(ActiveModal::None);
+                                                                }
+                                                                Err(e) => {
+                                                                    #[cfg(target_arch = "wasm32")]
+                                                                    web_sys::console::error_1(&e.into());
+                                                                }
+                                                            }
+                                                            saving.set(false);
+                                                        });
+                                                    }
+                                                },
+                                                "Delete all"
+                                            }
+                                        }
+                                        button {
+                                            class: "btn btn-outline-secondary btn-sm",
+                                            onclick: move |_| { active_modal.set(ActiveModal::None); focus_bracket_root(); },
+                                            "Close"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                     }
                 }
             }

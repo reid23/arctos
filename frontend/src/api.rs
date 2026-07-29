@@ -1465,6 +1465,52 @@ pub async fn tournament_bracket(tournament_url: &str) -> Result<BracketResponse,
     response_json(r).await
 }
 
+/// Delete one legacy image-bracket by index (TO only). Returns updated bracket payload.
+pub async fn delete_legacy_bracket(
+    tournament_url: &str,
+    index: usize,
+) -> Result<BracketResponse, String> {
+    let c = client();
+    let r = with_credentials(c.delete(format!(
+        "{}/_api/tournaments/{}/legacy-brackets/{}",
+        base(),
+        tournament_url,
+        index
+    )))
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    if !r.status().is_success() {
+        let msg = r
+            .text()
+            .await
+            .unwrap_or_else(|_| "Failed to delete legacy bracket".to_string());
+        return Err(msg);
+    }
+    response_json(r).await
+}
+
+/// Delete all legacy image-brackets for a tournament (TO only).
+pub async fn clear_legacy_brackets(tournament_url: &str) -> Result<BracketResponse, String> {
+    let c = client();
+    let r = with_credentials(c.delete(format!(
+        "{}/_api/tournaments/{}/legacy-brackets",
+        base(),
+        tournament_url
+    )))
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    if !r.status().is_success() {
+        let msg = r
+            .text()
+            .await
+            .unwrap_or_else(|_| "Failed to clear legacy brackets".to_string());
+        return Err(msg);
+    }
+    response_json(r).await
+}
+
 /// Persist bracket canvas state (match placements + annotations) for a tournament (TO only).
 pub async fn save_bracket_placements(
     tournament_url: &str,

@@ -287,6 +287,216 @@ def _delete_image_file(rel_path: str | None) -> None:
         pass
 
 
+def _parse_legacy_brackets_raw(tournament) -> list:
+    """Parse the tournament.bracket TOML into a raw list of bracket dicts."""
+    if not tournament.bracket:
+        return []
+    try:
+        import tomli
+
+        parsed = tomli.loads(tournament.bracket)
+    except Exception:
+        return []
+    brackets = parsed.get("brackets") or []
+    return brackets if isinstance(brackets, list) else []
+
+
+def _serialize_legacy_brackets(brackets: list) -> str:
+    """Serialize a list of raw legacy bracket dicts back to TOML."""
+
+    def escape_toml_string(s):
+        s = str(s)
+        s = s.replace("\\", "\\\\")
+        s = s.replace('"', '\\"')
+        s = s.replace("\n", "\\n")
+        s = s.replace("\t", "\\t")
+        return s
+
+    toml_lines = []
+    for bracket in brackets:
+        name = (bracket.get("name") or "").strip()
+        image = (bracket.get("image") or "").strip()
+        if not name or not image:
+            continue
+
+        toml_lines.append("[[brackets]]")
+        toml_lines.append(f'name = "{escape_toml_string(name)}"')
+        toml_lines.append(f'image = "{escape_toml_string(image)}"')
+        toml_lines.append("")
+
+        teams = bracket.get("teams") or []
+        for team in teams:
+            team_ref = (team.get("team") or "").strip()
+            if not team_ref:
+                continue
+            try:
+                x = int(team.get("x", 0) or 0)
+                y = int(team.get("y", 0) or 0)
+                halign = (team.get("halign") or "center").strip() or "center"
+                valign = (team.get("valign") or "center").strip() or "center"
+                size = int(team.get("size", 20) or 20)
+            except (ValueError, TypeError):
+                continue
+
+            toml_lines.append("[[brackets.teams]]")
+            toml_lines.append(f'team = "{escape_toml_string(team_ref)}"')
+            toml_lines.append(f"x = {x}")
+            toml_lines.append(f"y = {y}")
+            toml_lines.append(f'halign = "{escape_toml_string(halign)}"')
+            toml_lines.append(f'valign = "{escape_toml_string(valign)}"')
+            toml_lines.append(f"size = {size}")
+            toml_lines.append("")
+
+    return "\n".join(toml_lines)
+
+
+def _process_legacy_brackets(tournament) -> list:
+    """Resolve team labels on legacy image brackets for display."""
+    tournament_url = tournament.url
+    processed_brackets = []
+    for bracket in _parse_legacy_brackets_raw(tournament):
+        if not isinstance(bracket, dict):
+            continue
+        bracket_name = bracket.get("name", "") or ""
+        bracket_image = bracket.get("image", "") or ""
+        if not bracket_image:
+            continue
+        teams = bracket.get("teams") or []
+        processed_teams = []
+        for team_entry in teams:
+            if not isinstance(team_entry, dict):
+                continue
+            team_ref = team_entry.get("team", "") or ""
+            try:
+                x = int(team_entry.get("x", 0) or 0)
+                y = int(team_entry.get("y", 0) or 0)
+                size = int(team_entry.get("size", 20) or 20)
+            except (ValueError, TypeError):
+                x, y, size = 0, 0, 20
+            halign = (team_entry.get("halign") or "center").strip() or "center"
+            valign = (team_entry.get("valign") or "center").strip() or "center"
+
+            team_info = None
+            is_reference = False
+            is_tag = False
+            match_name = None
+
+            if team_ref.lower().startswith("tag::"):
+                tag_name = team_ref[5:].strip()
+                if tag_name:
+                    tag = Tag.query.filter_by(event=tournament_url, name=tag_name).first()
+                    if tag and tag.team:
+                        team_reg = TeamRegistration.query.filter_by(
+                            event=tournament_url,
+                            team=tag.team,
+                            status=TeamRegistrationStatus.CONFIRMED,
+                        ).first()
+                        if team_reg:
+                            team = Team.query.get(tag.team)
+                            team_info = {
+                                "id": tag.team,
+                                "pseudonym": team_reg.pseudonym,
+                                "shortname": team_reg.shortname,
+                                "profile_photo": team.profile_photo if team else None,
+                                "display_text": team_reg.pseudonym,
+                            }
+                        else:
+                            team_info = {"display_text": f"tag::{tag_name}"}
+                            is_tag = True
+                    elif tag:
+                        team_info = {"display_text": f"tag::{tag_name}"}
+                        is_tag = True
+            elif "::" in team_ref:
+                parts = team_ref.split("::", 1)
+                match_name = parts[0].strip()
+                ref_type = parts[1].strip().lower() if len(parts) > 1 else ""
+                match = Match.query.filter_by(event=tournament_url, name=match_name).first()
+                if match and match.status == MatchStatus.COMPLETED and match.match_winner:
+                    winner = (
+                        match.match_winner.value if hasattr(match.match_winner, "value") else str(match.match_winner)
+                    )
+                    if ref_type == "winner":
+                        team_id = match.team1 if winner == "TEAM1" else match.team2
+                    elif ref_type == "loser":
+                        team_id = match.team2 if winner == "TEAM1" else match.team1
+                    else:
+                        team_id = None
+                    if team_id:
+                        team_reg = TeamRegistration.query.filter_by(
+                            event=tournament_url,
+                            team=team_id,
+                            status=TeamRegistrationStatus.CONFIRMED,
+                        ).first()
+                        if team_reg:
+                            team = Team.query.get(team_id)
+                            team_info = {
+                                "id": team_id,
+                                "pseudonym": team_reg.pseudonym,
+                                "shortname": team_reg.shortname,
+                                "profile_photo": team.profile_photo if team else None,
+                                "display_text": team_reg.pseudonym,
+                            }
+                            is_reference = True
+                if team_info is None:
+                    team_info = {"display_text": team_ref.replace("::", " ")}
+                    is_reference = True
+            elif team_ref:
+                team_reg = TeamRegistration.query.filter_by(
+                    event=tournament_url,
+                    team=team_ref,
+                    status=TeamRegistrationStatus.CONFIRMED,
+                ).first()
+                if team_reg:
+                    team = Team.query.get(team_ref)
+                    team_info = {
+                        "id": team_ref,
+                        "pseudonym": team_reg.pseudonym,
+                        "shortname": team_reg.shortname,
+                        "profile_photo": team.profile_photo if team else None,
+                        "display_text": team_reg.pseudonym,
+                    }
+                else:
+                    tag = Tag.query.filter_by(event=tournament_url, name=team_ref).first()
+                    if tag and tag.team:
+                        team_reg = TeamRegistration.query.filter_by(
+                            event=tournament_url,
+                            team=tag.team,
+                            status=TeamRegistrationStatus.CONFIRMED,
+                        ).first()
+                        if team_reg:
+                            team = Team.query.get(tag.team)
+                            team_info = {
+                                "id": tag.team,
+                                "pseudonym": team_reg.pseudonym,
+                                "shortname": team_reg.shortname,
+                                "profile_photo": team.profile_photo if team else None,
+                                "display_text": team_reg.pseudonym,
+                            }
+                        else:
+                            team_info = {"display_text": f"tag::{tag.name}"}
+                            is_tag = True
+                    elif tag:
+                        team_info = {"display_text": f"tag::{tag.name}"}
+                        is_tag = True
+
+            processed_teams.append(
+                {
+                    "team_info": team_info,
+                    "x": x,
+                    "y": y,
+                    "halign": halign,
+                    "valign": valign,
+                    "size": size,
+                    "is_reference": is_reference,
+                    "is_tag": is_tag,
+                    "match_name": match_name if is_reference else None,
+                }
+            )
+
+        processed_brackets.append({"name": bracket_name, "image": bracket_image, "teams": processed_teams})
+    return processed_brackets
+
+
 def _bracket_response(tournament, is_to: bool) -> dict:
     tournament_url = tournament.url
     matches = _playable_matches(tournament_url)
@@ -309,6 +519,7 @@ def _bracket_response(tournament, is_to: bool) -> dict:
         "texts": texts,
         "labeled_teams": labeled,
         "images": images,
+        "legacy_brackets": _process_legacy_brackets(tournament),
     }
 
 
@@ -855,15 +1066,7 @@ def tournament_bracket_setup_data_api(tournament_url):
 
     tournament = Tournament.query.filter_by(url=tournament_url).first_or_404()
 
-    brackets_data = []
-    if tournament.bracket:
-        try:
-            import tomli
-
-            parsed = tomli.loads(tournament.bracket)
-            brackets_data = parsed.get("brackets", [])
-        except Exception:
-            brackets_data = []
+    brackets_data = _parse_legacy_brackets_raw(tournament)
 
     return jsonify(
         {
@@ -885,55 +1088,58 @@ def tournament_bracket_setup_save_api(tournament_url):
 
     data = g.json_body
     brackets = data.get("brackets", [])
-
-    def escape_toml_string(s):
-        """Escape special characters in TOML strings."""
-        s = str(s)
-        s = s.replace("\\", "\\\\")
-        s = s.replace('"', '\\"')
-        s = s.replace("\n", "\\n")
-        s = s.replace("\t", "\\t")
-        return s
-
-    toml_lines = []
-    for bracket in brackets:
-        name = (bracket.get("name") or "").strip()
-        image = (bracket.get("image") or "").strip()
-        if not name or not image:
-            continue
-
-        toml_lines.append("[[brackets]]")
-        toml_lines.append(f'name = "{escape_toml_string(name)}"')
-        toml_lines.append(f'image = "{escape_toml_string(image)}"')
-        toml_lines.append("")
-
-        teams = bracket.get("teams") or []
-        for team in teams:
-            team_ref = (team.get("team") or "").strip()
-            if not team_ref:
-                continue
-            try:
-                x = int(team.get("x", 0) or 0)
-                y = int(team.get("y", 0) or 0)
-                halign = (team.get("halign") or "center").strip() or "center"
-                valign = (team.get("valign") or "center").strip() or "center"
-                size = int(team.get("size", 20) or 20)
-            except (ValueError, TypeError):
-                continue
-
-            toml_lines.append("[[brackets.teams]]")
-            toml_lines.append(f'team = "{escape_toml_string(team_ref)}"')
-            toml_lines.append(f"x = {x}")
-            toml_lines.append(f"y = {y}")
-            toml_lines.append(f'halign = "{escape_toml_string(halign)}"')
-            toml_lines.append(f'valign = "{escape_toml_string(valign)}"')
-            toml_lines.append(f"size = {size}")
-            toml_lines.append("")
-
-    tournament.bracket = "\n".join(toml_lines)
+    tournament.bracket = _serialize_legacy_brackets(brackets)
     db.session.commit()
 
     return jsonify({"success": True})
+
+
+@bp.route("/tournaments/<tournament_url>/legacy-brackets/<int:index>", methods=["DELETE"])
+@login_required
+def tournament_legacy_bracket_delete_api(tournament_url, index):
+    """Delete one legacy image-bracket by index (TO only).
+
+    Returns the updated canvas bracket payload (including remaining
+    ``legacy_brackets``) so the SPA can refresh without a second fetch.
+    """
+    if not _check_to(tournament_url):
+        return jsonify({"error": "Forbidden"}), 403
+
+    tournament = Tournament.query.filter_by(url=tournament_url).first_or_404()
+    brackets = _parse_legacy_brackets_raw(tournament)
+    if index < 0 or index >= len(brackets):
+        return jsonify({"error": "Legacy bracket not found"}), 404
+
+    removed = brackets.pop(index)
+    image = (removed.get("image") or "").strip() if isinstance(removed, dict) else ""
+    if image:
+        _delete_image_file(image)
+
+    tournament.bracket = _serialize_legacy_brackets(brackets)
+    db.session.commit()
+
+    return jsonify({"success": True, **_bracket_response(tournament, True)})
+
+
+@bp.route("/tournaments/<tournament_url>/legacy-brackets", methods=["DELETE"])
+@login_required
+def tournament_legacy_brackets_clear_api(tournament_url):
+    """Delete all legacy image-brackets for a tournament (TO only)."""
+    if not _check_to(tournament_url):
+        return jsonify({"error": "Forbidden"}), 403
+
+    tournament = Tournament.query.filter_by(url=tournament_url).first_or_404()
+    for bracket in _parse_legacy_brackets_raw(tournament):
+        if not isinstance(bracket, dict):
+            continue
+        image = (bracket.get("image") or "").strip()
+        if image:
+            _delete_image_file(image)
+
+    tournament.bracket = ""
+    db.session.commit()
+
+    return jsonify({"success": True, **_bracket_response(tournament, True)})
 
 
 @bp.route("/tournaments/<tournament_url>/bracket-upload-bytes", methods=["POST"])
