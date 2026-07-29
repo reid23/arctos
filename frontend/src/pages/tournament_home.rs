@@ -381,7 +381,7 @@ fn TournamentHomeContent(url: String, initial_tab: Option<String>) -> Element {
                         Link { to: Route::Schedule { url: url.clone() }, class: "btn btn-outline-secondary", "Schedule (Not Published)" }
                     }
                     Link { to: Route::Results { url: url.clone() }, class: "btn btn-outline-primary", "Results" }
-                    if d.tournament.bracket && (d.tournament.schedule_published || is_current_user_to(me_res.read().as_ref(), &d.to_entries)) {
+                    if d.tournament.schedule_published || is_current_user_to(me_res.read().as_ref(), &d.to_entries) {
                         Link { to: Route::Bracket { url: url.clone() }, class: "btn btn-outline-primary", "Bracket" }
                     }
                     if d.manual_footage_uploads_enabled {
@@ -674,7 +674,7 @@ fn TournamentHomeContent(url: String, initial_tab: Option<String>) -> Element {
                                             div { class: "card-body",
                                                 div { class: "d-grid gap-2",
                                                     Link { to: Route::TournamentSettings { url: url.clone() }, class: "btn btn-outline-secondary", "Settings" }
-                                                    Link { to: Route::BracketSetup { url: url.clone() }, class: "btn btn-outline-secondary", "Bracket Setup" }
+                                                    Link { to: Route::Bracket { url: url.clone() }, class: "btn btn-outline-secondary", "Bracket Builder" }
                                                     if let Some(ref l) = d.tournament.league {
                                                         Link { to: Route::LeagueManage { league_url: l.league_url.clone() }, class: "btn btn-outline-warning", "Registration Management" }
                                                     } else {

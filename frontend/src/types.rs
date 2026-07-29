@@ -296,12 +296,150 @@ pub struct RosterRegistration {
     pub amount_paid: f64,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// Canvas bracket payload returned by ``GET /tournaments/:url/bracket``.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct BracketResponse {
     pub tournament: Tournament,
-    pub brackets: Vec<BracketItem>,
+    #[serde(default)]
+    pub is_to: bool,
+    #[serde(default)]
+    pub team_options: Vec<TeamOption>,
+    #[serde(default)]
+    pub tags: Vec<TagSetupData>,
+    #[serde(default)]
+    pub matches: Vec<BracketMatchData>,
+    #[serde(default)]
+    pub texts: Vec<BracketTextData>,
+    #[serde(default)]
+    pub labeled_teams: Vec<BracketLabeledTeamData>,
+    #[serde(default)]
+    pub images: Vec<BracketImageData>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct BracketTextData {
+    pub id: String,
+    #[serde(default)]
+    pub text: String,
+    pub x_pos: f64,
+    pub y_pos: f64,
+    #[serde(default = "default_text_size")]
+    pub size: f64,
+}
+
+fn default_text_size() -> f64 {
+    18.0
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct BracketLabeledTeamData {
+    pub id: String,
+    /// Short caption (max 50). Shown alone until the team resolves.
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub team: String,
+    /// ``"LABEL"`` or ``"NET"``.
+    #[serde(default = "default_port_label")]
+    pub kind: String,
+    pub x_pos: f64,
+    pub y_pos: f64,
+    #[serde(default)]
+    pub team_id: Option<String>,
+    #[serde(default)]
+    pub display_text: String,
+    #[serde(default)]
+    pub profile_photo: Option<String>,
+    #[serde(default)]
+    pub shortname: Option<String>,
+    /// True when ``team`` has resolved to a concrete registered team.
+    #[serde(default)]
+    pub resolved: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct BracketImageData {
+    pub id: String,
+    pub image: String,
+    pub x_pos: f64,
+    pub y_pos: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+/// One playable match plus optional canvas placement.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct BracketMatchData {
+    pub uuid: String,
+    pub name: String,
+    pub team1: Option<String>,
+    pub team2: Option<String>,
+    pub team1_name: String,
+    pub team2_name: String,
+    #[serde(default)]
+    pub team1_shortname: Option<String>,
+    #[serde(default)]
+    pub team2_shortname: Option<String>,
+    #[serde(default)]
+    pub team1_photo: Option<String>,
+    #[serde(default)]
+    pub team2_photo: Option<String>,
+    pub team1_initial: Option<String>,
+    pub team2_initial: Option<String>,
+    pub status: String,
+    pub match_winner: Option<String>,
+    #[serde(default)]
+    pub schedule_type: Option<String>,
+    pub placement: Option<BracketPlacementData>,
+}
+
+/// Layout + port mode for a match on the bracket canvas.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct BracketPlacementData {
+    pub x_pos: Option<f64>,
+    pub y_pos: Option<f64>,
+    #[serde(default = "default_bracket_width")]
+    pub width: f64,
+    #[serde(default = "default_bracket_height")]
+    pub height: f64,
+    /// ``"LABEL"`` or ``"NET"``.
+    #[serde(default = "default_port_label")]
+    pub team1: String,
+    /// ``"LABEL"`` or ``"NET"``.
+    #[serde(default = "default_port_label")]
+    pub team2: String,
+    /// When true, team2 is drawn above team1 (inputs swapped vertically).
+    #[serde(default)]
+    pub inputs_flipped: bool,
+    #[serde(default)]
+    pub placed: bool,
+}
+
+fn default_bracket_width() -> f64 {
+    280.0
+}
+fn default_bracket_height() -> f64 {
+    100.0
+}
+fn default_port_label() -> String {
+    "LABEL".to_string()
+}
+
+impl BracketPlacementData {
+    pub fn is_placed(&self) -> bool {
+        self.placed || (self.x_pos.is_some() && self.y_pos.is_some())
+    }
+
+    pub fn is_net_team1(&self) -> bool {
+        self.team1.eq_ignore_ascii_case("NET")
+    }
+
+    pub fn is_net_team2(&self) -> bool {
+        self.team2.eq_ignore_ascii_case("NET")
+    }
+}
+
+// Legacy image-bracket types (bracket-setup page)
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BracketItem {
     pub name: String,

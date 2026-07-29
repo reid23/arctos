@@ -22,6 +22,7 @@ from flask import Blueprint
 from flask_executor import Executor
 
 from models import (
+    BracketPlacement,
     Camera,
     CameraTimepoint,
     Match,
@@ -128,6 +129,7 @@ def delete_matches_with_children(match_uuids: list[str]) -> None:
     MatchNote.query.filter(MatchNote.match.in_(match_uuids)).delete(synchronize_session=False)
     MatchReferee.query.filter(MatchReferee.match_uuid.in_(match_uuids)).delete(synchronize_session=False)
     MatchPlayer.query.filter(MatchPlayer.match_uuid.in_(match_uuids)).delete(synchronize_session=False)
+    BracketPlacement.query.filter(BracketPlacement.match.in_(match_uuids)).delete(synchronize_session=False)
 
     # Clear self-referential chain links so deleting the matches doesn't trip the
     # previous_match / next_match FKs (covers references from outside the batch).

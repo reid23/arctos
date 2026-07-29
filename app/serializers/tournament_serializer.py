@@ -9,7 +9,25 @@ from __future__ import annotations
 
 from app.services.dual_write import get_head_ref_allowlist_ids
 from app.utils.helpers import get_registrable_config
-from models import League, Team
+from models import BracketPlacement, League, Team
+
+
+def _tournament_has_bracket(t) -> bool:
+    """True when the tournament has a legacy image bracket or canvas placements."""
+    if getattr(t, "bracket", None):
+        return True
+    try:
+        return (
+            BracketPlacement.query.filter(
+                BracketPlacement.event == t.url,
+                BracketPlacement.x_pos.isnot(None),
+                BracketPlacement.y_pos.isnot(None),
+            ).first()
+            is not None
+        )
+    except Exception:
+        # Table may not exist yet during early migrations / tests without the model.
+        return False
 
 
 def tournament_to_dict(t) -> dict:
@@ -44,7 +62,7 @@ def tournament_to_dict(t) -> dict:
         "registration_open": bool(team_reg_open or player_reg_open),
         "team_registration_open": bool(team_reg_open),
         "player_registration_open": bool(player_reg_open),
-        "bracket": bool(getattr(t, "bracket", None)),
+        "bracket": _tournament_has_bracket(t),
         "about": getattr(t, "about", None),
         "team_reg_fee": cfg.team_reg_fee if cfg else None,
         "player_reg_fee": cfg.player_reg_fee if cfg else None,
