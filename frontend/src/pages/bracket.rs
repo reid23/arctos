@@ -228,6 +228,11 @@ fn images_json(items: &[BracketImageData]) -> Vec<serde_json::Value> {
         .collect()
 }
 
+/// How far net-labels stick out left of a match (CSS max-width + margin + port).
+const NET_LABEL_LEFT_EXTENT: f64 = 120.0;
+/// Small overhang for port stubs / borders outside the match box.
+const PORT_STUB_EXTENT: f64 = 8.0;
+
 fn content_bounds(
     matches: &[BracketMatchData],
     texts: &[BracketTextData],
@@ -249,7 +254,12 @@ fn content_bounds(
     for m in matches {
         if let Some(p) = &m.placement {
             if let (Some(x), Some(y)) = (p.x_pos, p.y_pos) {
-                bump(x, y, p.width, p.height);
+                // Match body + port stubs on left/right edges.
+                bump(x - PORT_STUB_EXTENT, y, p.width + PORT_STUB_EXTENT * 2.0, p.height);
+                // LABEL-mode inputs render net-label chips to the left of the match.
+                if !is_net(&p.team1) || !is_net(&p.team2) {
+                    bump(x - NET_LABEL_LEFT_EXTENT, y, NET_LABEL_LEFT_EXTENT, p.height);
+                }
             }
         }
     }
@@ -697,6 +707,8 @@ pub fn Bracket(url: String) -> Element {
     let mut team_draft = use_signal(String::new);
     let mut label_draft = use_signal(|| "Label".to_string());
     let mut fit_tick = use_signal(|| 0u32);
+    /// When not editing, wrap height is derived from width-fit scale (px).
+    let mut view_wrap_height = use_signal(|| None::<f64>);
 
     use_effect(move || {
         if initialized() {
@@ -759,10 +771,12 @@ pub fn Bracket(url: String) -> Element {
         });
     }
 
-    // Auto-fit when not editing (and after data load).
+    // Auto-fit when not editing: scale to fill available width, then set
+    // wrap height from that scale so the full bracket is visible (no vertical crop).
     use_effect(move || {
         let _ = fit_tick();
         if edit_mode() {
+            view_wrap_height.set(None);
             return;
         }
         let ms = local_matches();
@@ -770,38 +784,59 @@ pub fn Bracket(url: String) -> Element {
         let ls = local_labeled();
         let im = local_images();
         let (x0, y0, x1, y1) = content_bounds(&ms, &ts, &ls, &im);
-        let pad = 48.0;
+        // Generous padding so left-side net labels / outlines aren't clipped.
+        let pad = 56.0;
         let bw = (x1 - x0).max(80.0) + pad * 2.0;
         let bh = (y1 - y0).max(80.0) + pad * 2.0;
-        let (vw, vh) = {
+        let vw = {
             #[cfg(target_arch = "wasm32")]
             {
                 if let Some(window) = web_sys::window() {
                     if let Some(doc) = window.document() {
                         if let Some(el) = doc.get_element_by_id("bracket-canvas-wrap") {
-                            let r = el.get_bounding_client_rect();
-                            (r.width().max(200.0), r.height().max(200.0))
+                            el.get_bounding_client_rect().width().max(200.0)
+                        } else if let Some(el) = doc.query_selector("main, .container, .container-fluid").ok().flatten() {
+                            el.get_bounding_client_rect().width().max(200.0)
                         } else {
-                            (1000.0, 600.0)
+                            1000.0
                         }
                     } else {
-                        (1000.0, 600.0)
+                        1000.0
                     }
                 } else {
-                    (1000.0, 600.0)
+                    1000.0
                 }
             }
             #[cfg(not(target_arch = "wasm32"))]
             {
-                (1000.0, 600.0)
+                1000.0
             }
         };
-        let z = (vw / bw).min(vh / bh).clamp(MIN_ZOOM, 1.5);
+        // Fill width; allow modest upscale but don't blow past MAX_ZOOM.
+        let z = (vw / bw).clamp(MIN_ZOOM, MAX_ZOOM);
         zoom.set(z);
-        let world_cx = (x0 + x1) * 0.5;
-        let world_cy = (y0 + y1) * 0.5;
-        pan.set((vw * 0.5 - world_cx * z, vh * 0.5 - world_cy * z));
+        // Top-left align content inside the padded view box.
+        pan.set(((pad - x0) * z, (pad - y0) * z));
+        let h = (bh * z).max(120.0);
+        view_wrap_height.set(Some(h));
     });
+
+    // Re-fit on window resize while in view mode.
+    #[cfg(target_arch = "wasm32")]
+    {
+        use_effect(move || {
+            let window = match web_sys::window() {
+                Some(w) => w,
+                None => return,
+            };
+            let mut fit_tick = fit_tick;
+            let cb = wasm_bindgen::closure::Closure::wrap(Box::new(move |_ev: web_sys::Event| {
+                fit_tick.set(fit_tick() + 1);
+            }) as Box<dyn FnMut(_)>);
+            let _ = window.add_event_listener_with_callback("resize", cb.as_ref().unchecked_ref());
+            cb.forget();
+        });
+    }
 
     let val = data.value();
     let backend = api::base_url();
@@ -1350,7 +1385,19 @@ pub fn Bracket(url: String) -> Element {
                         if !show_legacy_fallback {
                             div {
                             id: "bracket-canvas-wrap",
-                            class: if edit_mode() { "bracket-canvas-wrap edit-mode" } else { "bracket-canvas-wrap" },
+                            class: if edit_mode() { "bracket-canvas-wrap edit-mode" } else { "bracket-canvas-wrap view-mode" },
+                            style: {
+                                if edit_mode() {
+                                    // Large fraction of the viewport so a short view-mode
+                                    // diagram doesn't leave a tiny edit workspace. Inline
+                                    // so it always overrides the previous view-mode height.
+                                    "height: min(85vh, calc(100vh - 160px)); min-height: 70vh; max-height: none;".to_string()
+                                } else if let Some(h) = view_wrap_height() {
+                                    format!("height: {h}px; max-height: none;")
+                                } else {
+                                    "height: auto; max-height: none;".to_string()
+                                }
+                            },
                             onwheel: move |ev: Event<WheelData>| {
                                 #[cfg(target_arch = "wasm32")]
                                 {

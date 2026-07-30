@@ -14,15 +14,26 @@
     border-radius: 0.5rem;
     background: #ffffff;
     overflow: hidden;
-    min-height: 520px;
-    max-height: calc(100vh - 220px);
-    height: calc(100vh - 220px);
     user-select: none;
     touch-action: none;
+    width: 100%;
+    box-sizing: border-box;
 }
 
+/* Edit mode: large viewport for pan/zoom workspace (inline style also sets this). */
 .bracket-canvas-wrap.edit-mode {
     cursor: default;
+    min-height: 70vh;
+    height: min(85vh, calc(100vh - 160px));
+    max-height: none;
+}
+
+/* View mode: height is set inline from width-fit scale. */
+.bracket-canvas-wrap.view-mode {
+    min-height: 120px;
+    max-height: none;
+    /* Avoid clipping anti-aliased edges / status outlines. */
+    overflow: hidden;
 }
 
 .bracket-canvas {
