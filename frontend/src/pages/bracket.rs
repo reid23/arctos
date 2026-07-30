@@ -14,6 +14,7 @@ use crate::types::{
 };
 use crate::Route;
 use dioxus::prelude::*;
+use dioxus::html::input_data::MouseButton;
 use std::collections::{HashMap, HashSet};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
@@ -524,6 +525,60 @@ fn focus_bracket_root() {
     }
 }
 
+
+/// World-space origin for newly added elements, inside the current viewport.
+///
+/// ``stagger`` offsets successive adds so they don't stack exactly on top of
+/// each other. Coordinates are clamped to stay non-negative.
+fn view_add_position(zoom: f64, pan: (f64, f64), stagger: usize) -> (f64, f64) {
+    let (vw, vh) = {
+        #[cfg(target_arch = "wasm32")]
+        {
+            if let Some(window) = web_sys::window() {
+                if let Some(doc) = window.document() {
+                    if let Some(el) = doc.get_element_by_id("bracket-canvas-wrap") {
+                        let r = el.get_bounding_client_rect();
+                        (r.width().max(200.0), r.height().max(200.0))
+                    } else {
+                        (1000.0, 600.0)
+                    }
+                } else {
+                    (1000.0, 600.0)
+                }
+            } else {
+                (1000.0, 600.0)
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            (1000.0, 600.0)
+        }
+    };
+    let z = zoom.max(0.001);
+    // Place near the upper-left of the visible area with a small cascade.
+    let step = 28.0;
+    let col = (stagger % 4) as f64;
+    let row = ((stagger / 4) % 6) as f64;
+    let sx = 48.0 + col * step;
+    let sy = 48.0 + row * step + col * 6.0;
+    // Keep inside the viewport if the wrap is tiny.
+    let sx = sx.min((vw * 0.5).max(24.0));
+    let sy = sy.min((vh * 0.5).max(24.0));
+    let wx = (sx - pan.0) / z;
+    let wy = (sy - pan.1) / z;
+    (wx.max(0.0), wy.max(0.0))
+}
+
+fn next_add_stagger(
+    matches: &[BracketMatchData],
+    texts: &[BracketTextData],
+    labeled: &[BracketLabeledTeamData],
+    images: &[BracketImageData],
+) -> usize {
+    let placed = matches.iter().filter(|m| is_placed(m)).count();
+    placed + texts.len() + labeled.len() + images.len()
+}
+
 fn canvas_pointer(ev: &Event<MouseData>, zoom: f64, pan: (f64, f64)) -> (f64, f64) {
     #[cfg(target_arch = "wasm32")]
     {
@@ -693,6 +748,7 @@ pub fn Bracket(url: String) -> Element {
     let mut local_labeled = use_signal(|| Vec::<BracketLabeledTeamData>::new());
     let mut local_images = use_signal(|| Vec::<BracketImageData>::new());
     let mut legacy_brackets = use_signal(|| Vec::<BracketItem>::new());
+    let mut bracket_published = use_signal(|| false);
     let mut interaction = use_signal(Interaction::default);
     let mut active_modal = use_signal(ActiveModal::default);
     let mut add_match_query = use_signal(String::new);
@@ -725,6 +781,7 @@ pub fn Bracket(url: String) -> Element {
                 canvas_size,
             );
             legacy_brackets.set(d.legacy_brackets.clone());
+            bracket_published.set(d.bracket_published || d.tournament.bracket_published);
             initialized.set(true);
             fit_tick.set(fit_tick() + 1);
         }
@@ -984,11 +1041,12 @@ pub fn Bracket(url: String) -> Element {
                                 "x" | "X" => {
                                     ev.prevent_default();
                                     let u = u_key.clone();
-                                    let n = local_texts().len() as f64;
+                                    let stagger = next_add_stagger(&local_matches(), &local_texts(), &local_labeled(), &local_images());
+                                    let (ax, ay) = view_add_position(zoom(), pan(), stagger);
                                     active_modal.set(ActiveModal::None);
                                     saving.set(true);
                                     spawn(async move {
-                                        match api::add_bracket_text(&u, 40.0 + n * 12.0, 40.0 + n * 20.0).await {
+                                        match api::add_bracket_text(&u, ax, ay).await {
                                             Ok(resp) => {
                                                 let new_id = resp.texts.iter().map(|t| t.id.clone()).max_by_key(|id| id.clone());
                                                 apply_response(resp, local_matches, local_texts, local_labeled, local_images, dirty, canvas_size);
@@ -1014,11 +1072,12 @@ pub fn Bracket(url: String) -> Element {
                                 "t" | "T" => {
                                     ev.prevent_default();
                                     let u = u_key.clone();
-                                    let n = local_labeled().len() as f64;
+                                    let stagger = next_add_stagger(&local_matches(), &local_texts(), &local_labeled(), &local_images());
+                                    let (ax, ay) = view_add_position(zoom(), pan(), stagger);
                                     active_modal.set(ActiveModal::None);
                                     saving.set(true);
                                     spawn(async move {
-                                        match api::add_bracket_labeled_team(&u, 40.0 + n * 12.0, 80.0 + n * 28.0).await {
+                                        match api::add_bracket_labeled_team(&u, ax, ay).await {
                                             Ok(resp) => {
                                                 apply_response(resp, local_matches, local_texts, local_labeled, local_images, dirty, canvas_size);
                                                 if let Some(t) = local_labeled().last() {
@@ -1171,6 +1230,50 @@ pub fn Bracket(url: String) -> Element {
                                             }
                                             label { class: "form-check-label small", r#for: "bracketEditMode", "Edit" }
                                         }
+                                        div { class: "form-check form-switch mb-0 ms-2",
+                                            input {
+                                                class: "form-check-input",
+                                                r#type: "checkbox",
+                                                role: "switch",
+                                                id: "bracketPublished",
+                                                checked: "{bracket_published}",
+                                                disabled: "{saving}",
+                                                onchange: {
+                                                    let u = tournament_url.clone();
+                                                    move |e| {
+                                                        let on = e.value() == "true";
+                                                        // Optimistic update; revert on failure.
+                                                        let prev = bracket_published();
+                                                        bracket_published.set(on);
+                                                        saving.set(true);
+                                                        let u = u.clone();
+                                                        spawn(async move {
+                                                            match api::set_bracket_published(&u, on).await {
+                                                                Ok(resp) => {
+                                                                    bracket_published.set(
+                                                                        resp.bracket_published
+                                                                            || resp.tournament.bracket_published,
+                                                                    );
+                                                                }
+                                                                Err(err) => {
+                                                                    bracket_published.set(prev);
+                                                                    #[cfg(target_arch = "wasm32")]
+                                                                    web_sys::console::error_1(&err.into());
+                                                                }
+                                                            }
+                                                            saving.set(false);
+                                                            focus_bracket_root();
+                                                        });
+                                                    }
+                                                }
+                                            }
+                                            label {
+                                                class: "form-check-label small",
+                                                r#for: "bracketPublished",
+                                                title: "When on, non-organizers can view this bracket",
+                                                "Published"
+                                            }
+                                        }
                                     }
                                     if edit_mode() && is_to {
                                         div { class: "dropdown",
@@ -1205,11 +1308,12 @@ pub fn Bracket(url: String) -> Element {
                                                                 let u = tournament_url.clone();
                                                                 move |_| {
                                                                     let u = u.clone();
-                                                                    let n = local_texts().len() as f64;
+                                                                    let stagger = next_add_stagger(&local_matches(), &local_texts(), &local_labeled(), &local_images());
+                                                                    let (ax, ay) = view_add_position(zoom(), pan(), stagger);
                                                                     active_modal.set(ActiveModal::None);
                                                                     saving.set(true);
                                                                     spawn(async move {
-                                                                        if let Ok(resp) = api::add_bracket_text(&u, 40.0 + n * 12.0, 40.0 + n * 20.0).await {
+                                                                        if let Ok(resp) = api::add_bracket_text(&u, ax, ay).await {
                                                                             apply_response(resp, local_matches, local_texts, local_labeled, local_images, dirty, canvas_size);
                                                                             if let Some(t) = local_texts().last() {
                                                                                 text_draft.set(t.text.clone());
@@ -1230,11 +1334,12 @@ pub fn Bracket(url: String) -> Element {
                                                                 let u = tournament_url.clone();
                                                                 move |_| {
                                                                     let u = u.clone();
-                                                                    let n = local_labeled().len() as f64;
+                                                                    let stagger = next_add_stagger(&local_matches(), &local_texts(), &local_labeled(), &local_images());
+                                                                    let (ax, ay) = view_add_position(zoom(), pan(), stagger);
                                                                     active_modal.set(ActiveModal::None);
                                                                     saving.set(true);
                                                                     spawn(async move {
-                                                                        if let Ok(resp) = api::add_bracket_labeled_team(&u, 40.0 + n * 12.0, 80.0 + n * 28.0).await {
+                                                                        if let Ok(resp) = api::add_bracket_labeled_team(&u, ax, ay).await {
                                                                             apply_response(resp, local_matches, local_texts, local_labeled, local_images, dirty, canvas_size);
                                                                             if let Some(t) = local_labeled().last() {
                                                                                 label_draft.set(if t.label.is_empty() { "Label".into() } else { t.label.clone() });
@@ -1316,7 +1421,7 @@ pub fn Bracket(url: String) -> Element {
                                             {underline_label("Delete", 'd')}
                                         }
                                         span { class: "text-muted small ms-1",
-                                            "Ctrl+scroll zoom · Ctrl+drag pan · Shift+click multi-select"
+                                            "Scroll zoom · Right-drag pan · Shift+click multi-select"
                                         }
                                         if saving() {
                                             span { class: "text-muted small", "Saving…" }
@@ -1399,15 +1504,7 @@ pub fn Bracket(url: String) -> Element {
                                 }
                             },
                             onwheel: move |ev: Event<WheelData>| {
-                                #[cfg(target_arch = "wasm32")]
-                                {
-                                    // Ctrl+scroll zoom
-                                    // WheelData modifiers
-                                }
-                                let mods = ev.modifiers();
-                                if !mods.ctrl() && !mods.meta() {
-                                    return;
-                                }
+                                // Zoom with the scroll wheel (no modifier required).
                                 ev.prevent_default();
                                 let dy = ev.delta().strip_units().y;
                                 let factor = if dy > 0.0 { 0.9 } else { 1.1 };
@@ -1603,9 +1700,10 @@ pub fn Bracket(url: String) -> Element {
                                 }
                             }},
                             onmousedown: move |ev: Event<MouseData>| {
-                                let mods = ev.modifiers();
-                                if mods.ctrl() || mods.meta() {
-                                    // pan
+                                // Right-click (or middle-click) drag pans the canvas.
+                                let btn = ev.trigger_button();
+                                if matches!(btn, Some(MouseButton::Secondary) | Some(MouseButton::Auxiliary)) {
+                                    ev.prevent_default();
                                     let (sx, sy) = screen_pointer(&ev);
                                     let mut ix = interaction.write();
                                     ix.drag = Some(DragKind::Pan {
@@ -1615,6 +1713,7 @@ pub fn Bracket(url: String) -> Element {
                                     return;
                                 }
                                 if !edit_mode() { return; }
+                                let mods = ev.modifiers();
                                 let (cx, cy) = canvas_pointer(&ev, zoom(), pan());
                                 let mut ix = interaction.write();
                                 if !mods.shift() {
@@ -1624,6 +1723,10 @@ pub fn Bracket(url: String) -> Element {
                                     start: (cx, cy),
                                     current: (cx, cy),
                                 });
+                            },
+                            // Suppress the browser context menu so right-drag can pan.
+                            oncontextmenu: move |ev: Event<MouseData>| {
+                                ev.prevent_default();
                             },
 
                             div {
@@ -2187,9 +2290,6 @@ pub fn Bracket(url: String) -> Element {
                                                     let mname = m.name.clone();
                                                     let t1 = m.team1_name.clone();
                                                     let t2 = m.team2_name.clone();
-                                                    let n_placed = placed.len() as f64;
-                                                    let nx = 40.0 + (n_placed % 4.0) * 40.0;
-                                                    let ny = 40.0 + n_placed * 24.0;
                                                     rsx! {
                                                         button {
                                                             key: "{mid}",
@@ -2198,6 +2298,9 @@ pub fn Bracket(url: String) -> Element {
                                                                 let u = tournament_url.clone();
                                                                 let mid = mid.clone();
                                                                 move |_| {
+                                                                    // Place in the current viewport at click time.
+                                                                    let stagger = next_add_stagger(&local_matches(), &local_texts(), &local_labeled(), &local_images());
+                                                                    let (nx, ny) = view_add_position(zoom(), pan(), stagger);
                                                                     active_modal.set(ActiveModal::None);
                                                                     saving.set(true);
                                                                     let u = u.clone();
@@ -2431,6 +2534,8 @@ pub fn Bracket(url: String) -> Element {
                                                         if let Some(file) = files.into_iter().next() {
                                                             let u = u.clone();
                                                             let n = local_images().len() as f64;
+                                                            let stagger = next_add_stagger(&local_matches(), &local_texts(), &local_labeled(), &local_images());
+                                                            let (ax, ay) = view_add_position(zoom(), pan(), stagger);
                                                             active_modal.set(ActiveModal::None);
                                                             saving.set(true);
                                                             spawn(async move {
@@ -2446,7 +2551,7 @@ pub fn Bracket(url: String) -> Element {
                                                                         match api::upload_bracket_image_bytes(&u, n as u32, &filename, bytes).await {
                                                                             Ok(path) => {
                                                                                 if let Ok(resp) = api::add_bracket_image_element(
-                                                                                    &u, &path, 40.0 + n * 16.0, 40.0 + n * 16.0, 240.0, 160.0,
+                                                                                    &u, &path, ax, ay, 240.0, 160.0,
                                                                                 ).await {
                                                                                     apply_response(resp, local_matches, local_texts, local_labeled, local_images, dirty, canvas_size);
                                                                                 }

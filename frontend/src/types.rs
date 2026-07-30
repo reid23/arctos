@@ -22,6 +22,9 @@ pub struct Tournament {
     pub n_max_teams: Option<u32>,
     #[serde(default)]
     pub schedule_published: bool,
+    /// When true, non-TOs can view the bracket page.
+    #[serde(default)]
+    pub bracket_published: bool,
     #[serde(default)]
     pub registration_open: bool,
     #[serde(default)]
@@ -317,6 +320,9 @@ pub struct BracketResponse {
     /// Processed legacy image-overlay brackets (from tournament.bracket TOML).
     #[serde(default)]
     pub legacy_brackets: Vec<BracketItem>,
+    /// Whether non-TOs can view the bracket (mirrors tournament.bracket_published).
+    #[serde(default)]
+    pub bracket_published: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

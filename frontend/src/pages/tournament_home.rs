@@ -381,8 +381,10 @@ fn TournamentHomeContent(url: String, initial_tab: Option<String>) -> Element {
                         Link { to: Route::Schedule { url: url.clone() }, class: "btn btn-outline-secondary", "Schedule (Not Published)" }
                     }
                     Link { to: Route::Results { url: url.clone() }, class: "btn btn-outline-primary", "Results" }
-                    if d.tournament.schedule_published || is_current_user_to(me_res.read().as_ref(), &d.to_entries) {
+                    if d.tournament.bracket_published {
                         Link { to: Route::Bracket { url: url.clone() }, class: "btn btn-outline-primary", "Bracket" }
+                    } else if is_current_user_to(me_res.read().as_ref(), &d.to_entries) {
+                        Link { to: Route::Bracket { url: url.clone() }, class: "btn btn-outline-secondary", "Bracket (Not Published)" }
                     }
                     if d.manual_footage_uploads_enabled {
                         if let Some(current_user) = me_res.read().as_ref().and_then(|r| r.as_ref().ok()) {

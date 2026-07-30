@@ -1,4 +1,4 @@
-"""Add bracket canvas tables (placements, texts, labeled teams, images).
+"""Add bracket canvas tables and tournaments.bracket_published.
 
 Interactive open-canvas bracket builder:
 
@@ -8,6 +8,7 @@ Interactive open-canvas bracket builder:
 * ``bracket_labeled_teams`` — standalone team chips with a short ``label``
   caption and LABEL/NET input mode.
 * ``bracket_images`` — uploaded images under ``static/uploads/brackets/``.
+* ``tournaments.bracket_published`` — whether non-TOs can view the bracket.
 
 Revision ID: 0011_bracket_placements
 Revises: 0010_normalize_match_names
@@ -117,8 +118,19 @@ def upgrade() -> None:
     )
     op.create_index("ix_bracket_images_event", "bracket_images", ["event"], unique=False)
 
+    op.add_column(
+        "tournaments",
+        sa.Column(
+            "bracket_published",
+            sa.Boolean(),
+            nullable=False,
+            server_default=sa.false(),
+        ),
+    )
+
 
 def downgrade() -> None:
+    op.drop_column("tournaments", "bracket_published")
     op.drop_index("ix_bracket_images_event", table_name="bracket_images")
     op.drop_table("bracket_images")
     op.drop_index("ix_bracket_labeled_teams_event", table_name="bracket_labeled_teams")

@@ -588,10 +588,18 @@ class RegistrationService:
             return Err(ValidationError("Cannot deregister once your team has played in a match that is in progress."))
 
         team_registration.status = RegistrationStatus.CANCELLED
+        pseudonym = getattr(team_registration, "pseudonym", None)
 
         if scope.is_league:
             PlayerRegistration.query.filter_by(league_id=scope.league_url, team=team_id).update(
                 {"status": RegistrationStatus.CANCELLED}
+            )
+            from app.services.bracket_cleanup_service import scrub_deleted_teams_for_league
+
+            scrub_deleted_teams_for_league(
+                scope.league_url,
+                [team_id],
+                pseudonyms=[pseudonym] if pseudonym else None,
             )
         else:
             affected_player_ids = [
@@ -607,6 +615,14 @@ class RegistrationService:
             from app.services.sidecomp_service import SideCompService
 
             SideCompService.cancel_players_in_event(scope.event_url, affected_player_ids)
+
+            from app.services.bracket_cleanup_service import scrub_deleted_teams
+
+            scrub_deleted_teams(
+                scope.event_url,
+                [team_id],
+                pseudonyms=[pseudonym] if pseudonym else None,
+            )
 
         db.session.commit()
         return Ok(None)

@@ -520,6 +520,7 @@ def _bracket_response(tournament, is_to: bool) -> dict:
         "labeled_teams": labeled,
         "images": images,
         "legacy_brackets": _process_legacy_brackets(tournament),
+        "bracket_published": bool(getattr(tournament, "bracket_published", False)),
     }
 
 
@@ -527,7 +528,7 @@ def _bracket_response(tournament, is_to: bool) -> dict:
 def tournament_bracket_api(tournament_url):
     """Canvas bracket data: playable matches + placements + token metadata.
 
-    Available when the schedule is published, or always for TOs.  Returns an
+    Available when the bracket is published, or always for TOs.  Returns an
     empty match list rather than 404 when nothing is configured yet so TOs
     can open edit mode and start placing matches.
     """
@@ -536,10 +537,37 @@ def tournament_bracket_api(tournament_url):
         return jsonify({"error": "Not found"}), 404
 
     is_to = _check_to(tournament_url)
-    if not tournament.schedule_published and not is_to:
+    if not bool(getattr(tournament, "bracket_published", False)) and not is_to:
         return jsonify({"error": "Bracket is not available"}), 403
 
     return jsonify(_bracket_response(tournament, is_to))
+
+
+@bp.route("/tournaments/<tournament_url>/bracket-published", methods=["PUT"])
+@login_required
+@require_json_body()
+def tournament_bracket_published_api(tournament_url):
+    """Toggle whether the bracket is visible to non-TOs (TO only).
+
+    Body: ``{"published": true|false}``.
+    """
+    if not _check_to(tournament_url):
+        return jsonify({"error": "Forbidden"}), 403
+
+    tournament = Tournament.query.filter_by(url=tournament_url).first_or_404()
+    data = g.json_body or {}
+    if "published" not in data:
+        return jsonify({"error": "published is required"}), 400
+
+    tournament.bracket_published = bool(data.get("published"))
+    db.session.commit()
+    return jsonify(
+        {
+            "success": True,
+            "bracket_published": bool(tournament.bracket_published),
+            **_bracket_response(tournament, True),
+        }
+    )
 
 
 @bp.route("/tournaments/<tournament_url>/bracket-placements", methods=["PUT"])

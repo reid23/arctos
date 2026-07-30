@@ -1511,6 +1511,35 @@ pub async fn clear_legacy_brackets(tournament_url: &str) -> Result<BracketRespon
     response_json(r).await
 }
 
+/// Set whether the bracket is visible to non-TOs (TO only).
+pub async fn set_bracket_published(
+    tournament_url: &str,
+    published: bool,
+) -> Result<BracketResponse, String> {
+    let c = client();
+    let body = serde_json::json!({ "published": published });
+    let r = with_credentials(
+        c.put(format!(
+            "{}/_api/tournaments/{}/bracket-published",
+            base(),
+            tournament_url
+        ))
+        .json(&body),
+    )
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    if !r.status().is_success() {
+        let msg = r
+            .text()
+            .await
+            .unwrap_or_else(|_| "Failed to update bracket published state".to_string());
+        return Err(msg);
+    }
+    response_json(r).await
+}
+
+
 /// Persist bracket canvas state (match placements + annotations) for a tournament (TO only).
 pub async fn save_bracket_placements(
     tournament_url: &str,

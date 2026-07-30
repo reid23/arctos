@@ -115,10 +115,23 @@ def delete_matches_with_children(match_uuids: list[str]) -> None:
     Deletes child rows (points, notes, referee/player join rows, cameras and
     their timepoints) and clears the self-referential chain links before
     deleting the matches themselves, so foreign-key constraints don't block the
-    delete. Does not commit; the caller owns the transaction.
+    delete. Also scrubs soft bracket/diagram refs that pointed at the deleted
+    matches by name. Does not commit; the caller owns the transaction.
     """
     if not match_uuids:
         return
+
+    # Scrub diagram soft-refs (MatchName::winner/loser) before rows disappear.
+    doomed = Match.query.filter(Match.uuid.in_(match_uuids)).all()
+    by_event: dict[str, set[str]] = {}
+    for m in doomed:
+        if m.event and m.name:
+            by_event.setdefault(m.event, set()).add(m.name)
+    if by_event:
+        from app.services.bracket_cleanup_service import scrub_deleted_matches
+
+        for event_url, names in by_event.items():
+            scrub_deleted_matches(event_url, names)
 
     camera_uuids = [c.uuid for c in Camera.query.filter(Camera.match_uuid.in_(match_uuids)).all()]
     if camera_uuids:
