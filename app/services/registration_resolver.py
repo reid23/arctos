@@ -222,16 +222,21 @@ def is_team_registered(tournament, team_id: str) -> bool:
     )
 
 
-def player_registration_for_tournament(tournament, player_id: str):
-    """Single player registration for (tournament, player_id), or None."""
+def player_registration_for_tournament(tournament, player_id: str, *, statuses=None):
+    """Single player registration for (tournament, player_id), or None.
 
-    prs = player_registrations_for_tournament(
-        tournament,
-        statuses=[
+    Args:
+        tournament: Tournament instance (standalone or league event).
+        player_id: Player id to look up.
+        statuses: Optional list of :class:`~app.domain.enums.RegistrationStatus`
+            values. Defaults to pending + confirmed.
+    """
+    if statuses is None:
+        statuses = [
             RegistrationStatus.PENDING_TEAM_APPROVAL,
             RegistrationStatus.CONFIRMED,
-        ],
-    )
+        ]
+    prs = player_registrations_for_tournament(tournament, statuses=statuses)
     for pr in prs:
         if pr.player == player_id:
             return pr
