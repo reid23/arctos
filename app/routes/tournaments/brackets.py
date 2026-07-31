@@ -12,16 +12,16 @@ from datetime import datetime, timezone
 from flask import current_app, g, jsonify, request
 from flask_login import current_user, login_required
 
-from app.domain.enums import MatchStatus, RegistrationStatus
+from app.domain.enums import MatchStatus
 from app.serializers.tournament_serializer import tournament_to_dict
 from app.services.permission_service import PermissionService
 from app.utils.decorators import require_json_body
+from app.services.registration_resolver import team_registration_for_tournament
 from app.utils.helpers import check_tournament_access
 from models import (
     Match,
     Tag,
     Team,
-    TeamRegistration,
     Tournament,
     db,
 )
@@ -33,6 +33,23 @@ def _check_to(tournament_url):
     if not current_user.is_authenticated:
         return False
     return PermissionService.is_tournament_organizer(tournament_url, current_user)
+
+
+def _team_info_payload(tournament, team_id: str) -> dict | None:
+    """Build display dict for a confirmed team registration (event or league)."""
+    if not team_id:
+        return None
+    team_reg = team_registration_for_tournament(tournament, team_id)
+    if not team_reg:
+        return None
+    team = Team.query.get(team_id)
+    return {
+        "id": team_id,
+        "pseudonym": team_reg.pseudonym,
+        "shortname": team_reg.shortname,
+        "profile_photo": team.profile_photo if team else None,
+        "display_text": team_reg.pseudonym,
+    }
 
 
 @bp.route("/tournaments/<tournament_url>/bracket-setup-data", methods=["GET"])
@@ -222,21 +239,8 @@ def tournament_bracket_api(tournament_url):
                 if tag_name:
                     tag = Tag.query.filter_by(event=tournament_url, name=tag_name).first()
                     if tag and tag.team:
-                        team_reg = TeamRegistration.query.filter_by(
-                            event=tournament_url,
-                            team=tag.team,
-                            status=RegistrationStatus.CONFIRMED,
-                        ).first()
-                        if team_reg:
-                            team = Team.query.get(tag.team)
-                            team_info = {
-                                "id": tag.team,
-                                "pseudonym": team_reg.pseudonym,
-                                "shortname": team_reg.shortname,
-                                "profile_photo": team.profile_photo if team else None,
-                                "display_text": team_reg.pseudonym,
-                            }
-                        else:
+                        team_info = _team_info_payload(tournament, tag.team)
+                        if not team_info:
                             team_info = {"display_text": f"tag::{tag_name}"}
                             is_tag = True
                     elif tag:
@@ -255,20 +259,8 @@ def tournament_bracket_api(tournament_url):
                     else:
                         team_id = None
                     if team_id:
-                        team_reg = TeamRegistration.query.filter_by(
-                            event=tournament_url,
-                            team=team_id,
-                            status=RegistrationStatus.CONFIRMED,
-                        ).first()
-                        if team_reg:
-                            team = Team.query.get(team_id)
-                            team_info = {
-                                "id": team_id,
-                                "pseudonym": team_reg.pseudonym,
-                                "shortname": team_reg.shortname,
-                                "profile_photo": team.profile_photo if team else None,
-                                "display_text": team_reg.pseudonym,
-                            }
+                        team_info = _team_info_payload(tournament, team_id)
+                        if team_info:
                             is_reference = True
                 elif match:
                     team_info = {"display_text": team_ref.replace("::", " ")}
@@ -277,38 +269,12 @@ def tournament_bracket_api(tournament_url):
                     team_info = {"display_text": team_ref.replace("::", " ")}
                     is_reference = True
             elif team_ref:
-                team_reg = TeamRegistration.query.filter_by(
-                    event=tournament_url,
-                    team=team_ref,
-                    status=RegistrationStatus.CONFIRMED,
-                ).first()
-                if team_reg:
-                    team = Team.query.get(team_ref)
-                    team_info = {
-                        "id": team_ref,
-                        "pseudonym": team_reg.pseudonym,
-                        "shortname": team_reg.shortname,
-                        "profile_photo": team.profile_photo if team else None,
-                        "display_text": team_reg.pseudonym,
-                    }
-                else:
+                team_info = _team_info_payload(tournament, team_ref)
+                if not team_info:
                     tag = Tag.query.filter_by(event=tournament_url, name=team_ref).first()
                     if tag and tag.team:
-                        team_reg = TeamRegistration.query.filter_by(
-                            event=tournament_url,
-                            team=tag.team,
-                            status=RegistrationStatus.CONFIRMED,
-                        ).first()
-                        if team_reg:
-                            team = Team.query.get(tag.team)
-                            team_info = {
-                                "id": tag.team,
-                                "pseudonym": team_reg.pseudonym,
-                                "shortname": team_reg.shortname,
-                                "profile_photo": team.profile_photo if team else None,
-                                "display_text": team_reg.pseudonym,
-                            }
-                        else:
+                        team_info = _team_info_payload(tournament, tag.team)
+                        if not team_info:
                             team_info = {"display_text": f"tag::{tag.name}"}
                             is_tag = True
                     elif tag:
