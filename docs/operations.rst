@@ -8,5 +8,4 @@ maintain the Arctos backend.
    :maxdepth: 2
 
    DEPLOY
-   schema-improvements
    env-vars

@@ -18,6 +18,8 @@ bp = Blueprint("filters", __name__)
 def team_registration_for_tournament(team_id: str | None, tournament_url: str) -> "TeamRegistration | None":
     """Return the team registration record for the given team and tournament.
 
+    Honours league-scoped registrations when the tournament belongs to a league.
+
     Args:
         team_id: The team's unique identifier, or ``None`` / falsy to skip
             the database lookup.
@@ -29,12 +31,20 @@ def team_registration_for_tournament(team_id: str | None, tournament_url: str) -
     """
     if not team_id:
         return None
-    return TeamRegistration.query.filter_by(team=team_id, event=tournament_url).first()
+    from models import Tournament
+    from app.services.registration_resolver import team_registration_for_tournament as _resolve
+
+    tournament = Tournament.query.get(tournament_url)
+    if tournament is None:
+        return None
+    return _resolve(tournament, team_id)
 
 
 @bp.app_template_filter("team_by_pseudonym_for_tournament")
 def team_by_pseudonym_for_tournament(pseudonym: str | None, tournament_url: str) -> "TeamRegistration | None":
     """Return the team registration matching a pseudonym within a tournament.
+
+    Honours league-scoped registrations when the tournament belongs to a league.
 
     Args:
         pseudonym: The pseudonym string to search, or ``None`` / falsy to
@@ -47,7 +57,16 @@ def team_by_pseudonym_for_tournament(pseudonym: str | None, tournament_url: str)
     """
     if not pseudonym:
         return None
-    return TeamRegistration.query.filter_by(pseudonym=pseudonym, event=tournament_url).first()
+    from models import Tournament
+    from app.services.registration_resolver import team_registrations_for_tournament
+
+    tournament = Tournament.query.get(tournament_url)
+    if tournament is None:
+        return None
+    for reg in team_registrations_for_tournament(tournament):
+        if reg.pseudonym == pseudonym:
+            return reg
+    return None
 
 
 @bp.app_template_filter("is_head_ref")
@@ -130,6 +149,7 @@ def render_markdown(text: str | None) -> str:
             "extra",  # tables, fenced code, etc.
             "sane_lists",
             "smarty",
+            "toc",
             "admonition",  # !!! note "Title" style callouts
         ],
         output_format="html5",

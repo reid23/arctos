@@ -397,7 +397,7 @@ def delete_point_note(tournament_url: str):
 
     from app.utils.helpers import can_head_ref_match
 
-    if not can_head_ref_match(tournament_url, current_user.id, note.match):
+    if not can_head_ref_match(tournament_url, current_user.id, match):
         return json_error("Not authorized", status_code=403)
 
     db.session.delete(note)

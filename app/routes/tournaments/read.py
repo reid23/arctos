@@ -509,6 +509,18 @@ def tournament_invitations_api(tournament_url):
         return jsonify({"error": "Only teams can view invitations"}), 403
 
     tournament = Tournament.query.filter_by(url=tournament_url).first_or_404()
+    # League events register at the league scope — point teams there.
+    if tournament.league_id:
+        return (
+            jsonify(
+                {
+                    "error": "Registration management for league events is on the league page.",
+                    "league_url": tournament.league_id,
+                }
+            ),
+            403,
+        )
+
     team_registration = TeamRegistration.query.filter_by(
         event=tournament_url, team=current_user.id, status=RegistrationStatus.CONFIRMED
     ).first()
@@ -1034,15 +1046,20 @@ def tournament_match_detail(tournament_url):
     team2_selected = set(get_match_player_ids(match, WinnerSide.TEAM2))
 
     # Helper to add players from a team (registration). Skip any player whose id is in exclude_ids (e.g. playing for the other team).
+    from app.services.registration_resolver import (
+        player_registration_for_tournament,
+        player_registrations_for_tournament,
+    )
+
     def add_team_players(team_id, team_side, selected_ids, exclude_ids=None):
         exclude_ids = exclude_ids or set()
         if not team_id:
             return
-        regs = PlayerRegistration.query.filter_by(
-            event=tournament_url,
-            team=team_id,
-            status=RegistrationStatus.CONFIRMED,
-        ).all()
+        regs = player_registrations_for_tournament(
+            tournament,
+            team_id=team_id,
+            statuses=[RegistrationStatus.CONFIRMED],
+        )
 
         for pr in regs:
             if pr.player in exclude_ids:
@@ -1073,11 +1090,11 @@ def tournament_match_detail(tournament_url):
             continue
         player = Player.query.get(pid)
         if player:
-            pr = PlayerRegistration.query.filter_by(
-                event=tournament_url,
-                player=pid,
-                status=RegistrationStatus.CONFIRMED,
-            ).first()
+            pr = player_registration_for_tournament(
+                tournament,
+                pid,
+                statuses=[RegistrationStatus.CONFIRMED],
+            )
             display = get_player_display_from_registration(player, pr) if pr else (player.name or pid)
             match_players.append(
                 {
@@ -1096,11 +1113,11 @@ def tournament_match_detail(tournament_url):
             continue
         player = Player.query.get(pid)
         if player:
-            pr = PlayerRegistration.query.filter_by(
-                event=tournament_url,
-                player=pid,
-                status=RegistrationStatus.CONFIRMED,
-            ).first()
+            pr = player_registration_for_tournament(
+                tournament,
+                pid,
+                statuses=[RegistrationStatus.CONFIRMED],
+            )
             display = get_player_display_from_registration(player, pr) if pr else (player.name or pid)
             match_players.append(
                 {

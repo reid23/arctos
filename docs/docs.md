@@ -72,7 +72,7 @@ create a bunch of fake teams on the official site. What can i do?**
 
    - You can change your *display name*, but your username is
      permanent. This is to ensure links to your profile anywhere will
-     always work (unless you delete your aaccount).
+     always work (unless you delete your account).
 
 **How is my data used? What can and can't other people see?**
 

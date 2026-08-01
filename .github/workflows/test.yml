@@ -29,3 +29,9 @@ jobs:
 
       - name: Run test suite with coverage
         run: just coverage-check
+
+      - name: Run linter
+        run: just lint
+
+      - name: Run format checker
+        run: uv run ruff format --check .
