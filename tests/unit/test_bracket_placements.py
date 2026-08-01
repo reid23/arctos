@@ -1,4 +1,8 @@
-"""Tests for the interactive bracket canvas placement API."""
+"""Tests for the interactive bracket canvas placement API.
+
+Layout lives on ``GET/PUT …/bracket`` (+ mutation responses).
+Match bodies live on ``GET …/bracket-matches`` and are joined client-side.
+"""
 
 from __future__ import annotations
 
@@ -21,6 +25,7 @@ def bracket_tournament(test_db, player):
         start_date=datetime.now(timezone.utc),
         published=True,
         schedule_published=True,
+        bracket_published=True,
         registrable_config_id=cfg.id,
     )
     db.session.add(t)
@@ -54,14 +59,32 @@ def bracket_tournament(test_db, player):
     return t
 
 
-def test_bracket_get_empty(client, bracket_tournament, player):
+def _placements_by_match(layout: dict) -> dict[str, dict]:
+    return {p["match"]: p for p in layout.get("placements", [])}
+
+
+def test_bracket_get_layout_and_matches(client, bracket_tournament, player):
     login_as(client, player)
-    r = client.get(f"/_api/tournaments/{bracket_tournament.url}/bracket")
+    url = bracket_tournament.url
+
+    r = client.get(f"/_api/tournaments/{url}/bracket")
     assert r.status_code == 200
-    data = r.get_json()
-    assert data["is_to"] is True
-    assert len(data["matches"]) == 2
-    assert all(m["placement"] is None for m in data["matches"])
+    layout = r.get_json()
+    assert layout["is_to"] is True
+    assert layout["placements"] == []
+    assert "matches" not in layout
+    assert layout["texts"] == []
+    assert layout["labeled_teams"] == []
+    assert layout["images"] == []
+
+    r = client.get(f"/_api/tournaments/{url}/bracket-matches")
+    assert r.status_code == 200
+    matches_payload = r.get_json()
+    assert len(matches_payload["matches"]) == 2
+    assert "placement" not in matches_payload["matches"][0]
+    # TO gets pickers for the labeled-team editor
+    assert isinstance(matches_payload["team_options"], list)
+    assert isinstance(matches_payload["tags"], list)
 
 
 def test_add_placement_auto_nets_when_source_placed(client, bracket_tournament, player):
@@ -79,13 +102,12 @@ def test_add_placement_auto_nets_when_source_placed(client, bracket_tournament, 
         json={"match": "22222222-2222-2222-2222-222222222222", "x_pos": 400, "y_pos": 20},
     )
     assert r.status_code == 200, r.get_json()
-    data = r.get_json()
-    by_uuid = {m["uuid"]: m for m in data["matches"]}
-    final = by_uuid["22222222-2222-2222-2222-222222222222"]
-    assert final["placement"]["team1"] == "NET"
-    assert final["placement"]["team2"] == "LABEL"
-    assert final["placement"]["placed"] is True
-    assert final["placement"]["inputs_flipped"] is False
+    by_match = _placements_by_match(r.get_json())
+    final = by_match["22222222-2222-2222-2222-222222222222"]
+    assert final["team1"] == "NET"
+    assert final["team2"] == "LABEL"
+    assert final["placed"] is True
+    assert final["inputs_flipped"] is False
 
 
 def test_save_placements_persists_inputs_flipped(client, bracket_tournament, player):
@@ -117,9 +139,8 @@ def test_save_placements_persists_inputs_flipped(client, bracket_tournament, pla
         },
     )
     assert r.status_code == 200, r.get_json()
-    data = r.get_json()
-    m = next(mm for mm in data["matches"] if mm["uuid"] == mid)
-    assert m["placement"]["inputs_flipped"] is True
+    placement = _placements_by_match(r.get_json())[mid]
+    assert placement["inputs_flipped"] is True
 
     row = BracketPlacement.query.filter_by(event=url, match=mid).first()
     assert row is not None and row.inputs_flipped is True
@@ -134,8 +155,8 @@ def test_convert_port_label_to_net_places_source(client, bracket_tournament, pla
         json={"match": "22222222-2222-2222-2222-222222222222", "x_pos": 400, "y_pos": 40},
     )
     assert r.status_code == 200
-    final = next(m for m in r.get_json()["matches"] if m["name"] == "Final")
-    assert final["placement"]["team1"] == "LABEL"
+    final = _placements_by_match(r.get_json())["22222222-2222-2222-2222-222222222222"]
+    assert final["team1"] == "LABEL"
 
     r = client.post(
         f"/_api/tournaments/{url}/bracket-placements/convert-port",
@@ -146,11 +167,9 @@ def test_convert_port_label_to_net_places_source(client, bracket_tournament, pla
         },
     )
     assert r.status_code == 200, r.get_json()
-    data = r.get_json()
-    by_name = {m["name"]: m for m in data["matches"]}
-    assert by_name["Final"]["placement"]["team1"] == "NET"
-    assert by_name["Semi 1"]["placement"] is not None
-    assert by_name["Semi 1"]["placement"]["placed"] is True
+    by_match = _placements_by_match(r.get_json())
+    assert by_match["22222222-2222-2222-2222-222222222222"]["team1"] == "NET"
+    assert by_match["11111111-1111-1111-1111-111111111111"]["placed"] is True
 
     src = BracketPlacement.query.filter_by(event=url, match="11111111-1111-1111-1111-111111111111").first()
     assert src is not None and src.is_placed
@@ -177,26 +196,26 @@ def test_convert_port_net_to_label_leaves_matches(client, bracket_tournament, pl
         },
     )
     assert r.status_code == 200
-    data = r.get_json()
-    by_name = {m["name"]: m for m in data["matches"]}
-    assert by_name["Final"]["placement"]["team1"] == "LABEL"
-    assert by_name["Semi 1"]["placement"]["placed"] is True
+    by_match = _placements_by_match(r.get_json())
+    assert by_match["22222222-2222-2222-2222-222222222222"]["team1"] == "LABEL"
+    assert by_match["11111111-1111-1111-1111-111111111111"]["placed"] is True
 
 
 def test_put_placements_unplace(client, bracket_tournament, player):
     login_as(client, player)
     url = bracket_tournament.url
+    mid = "11111111-1111-1111-1111-111111111111"
 
     client.post(
         f"/_api/tournaments/{url}/bracket-placements/add",
-        json={"match": "11111111-1111-1111-1111-111111111111", "x_pos": 10, "y_pos": 20},
+        json={"match": mid, "x_pos": 10, "y_pos": 20},
     )
     r = client.put(
         f"/_api/tournaments/{url}/bracket-placements",
         json={
             "placements": [
                 {
-                    "match": "11111111-1111-1111-1111-111111111111",
+                    "match": mid,
                     "x_pos": None,
                     "y_pos": None,
                     "width": 280,
@@ -208,11 +227,11 @@ def test_put_placements_unplace(client, bracket_tournament, player):
         },
     )
     assert r.status_code == 200
-    m = next(m for m in r.get_json()["matches"] if m["uuid"].startswith("1111"))
-    assert m["placement"]["placed"] is False
-    assert m["placement"]["x_pos"] is None
+    placement = _placements_by_match(r.get_json())[mid]
+    assert placement["placed"] is False
+    assert placement["x_pos"] is None
 
-    row = BracketPlacement.query.filter_by(event=url, match="11111111-1111-1111-1111-111111111111").first()
+    row = BracketPlacement.query.filter_by(event=url, match=mid).first()
     assert row is not None
     assert row.x_pos is None
 
@@ -294,10 +313,11 @@ def test_add_text_labeled_team_and_image(client, bracket_tournament, player, app
     assert len(data["images"]) == 1
     img_id = data["images"][0]["id"]
 
-    # GET includes all three
+    # GET layout includes all three (still no match bodies)
     r = client.get(f"/_api/tournaments/{url}/bracket")
     assert r.status_code == 200
     data = r.get_json()
+    assert "matches" not in data
     assert len(data["texts"]) == 1
     assert len(data["labeled_teams"]) == 1
     assert len(data["images"]) == 1
@@ -328,5 +348,4 @@ def test_add_text_labeled_team_and_image(client, bracket_tournament, player, app
     assert data["labeled_teams"][0]["kind"] == "NET"
     assert data["labeled_teams"][0]["label"] == "Finalist"
     assert data["images"] == []
-    # image row deleted
     assert all(i["id"] != img_id for i in data["images"])
