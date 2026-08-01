@@ -32,14 +32,17 @@
 .bracket-canvas-wrap.view-mode {
     min-height: 120px;
     max-height: none;
-    /* Avoid clipping anti-aliased edges / status outlines. */
+    /* Static diagram — no pan chrome; clip to fit box. */
     overflow: hidden;
+    cursor: default;
 }
 
 .bracket-canvas {
     position: relative;
     min-width: 1200px;
     min-height: 800px;
+    /* Allow items dragged past 0,0 to remain paintable while panning. */
+    overflow: visible;
 }
 
 .bracket-wires-layer {
@@ -86,7 +89,7 @@
     border-radius: 6px;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
     /* Absolute children pin team rows to the same Y as the input ports
-       (PORT_INSET_Y_FRAC_TOP/BOT = 28% / 72% in bracket.rs). */
+       (PORT_INSET_Y_FRAC_TOP/BOT = 30% / 70% in bracket.rs). */
     padding: 0;
     box-sizing: border-box;
     min-width: 160px;
@@ -158,11 +161,11 @@
    slot-top/bot are geometric (winner/loser output side); team content
    is assigned to them based on inputs_flipped. */
 .bracket-match-row.slot-top {
-    top: 28%;
+    top: 30%;
 }
 
 .bracket-match-row.slot-bot {
-    top: 72%;
+    top: 70%;
 }
 
 .bracket-team-slot {
@@ -226,6 +229,21 @@
     background: #f8d7da;
     border-color: #dc3545;
     color: #842029;
+}
+
+.bracket-port-badge.clickable {
+    cursor: pointer;
+    user-select: none;
+}
+.bracket-canvas-wrap.edit-mode .bracket-port-badge.clickable:hover {
+    filter: brightness(0.92);
+    box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.35);
+}
+.bracket-port-badge.clickable.unused {
+    opacity: 0.55;
+}
+.bracket-canvas-wrap.edit-mode .bracket-port-badge.clickable.unused:hover {
+    opacity: 1;
 }
 
 /* External input/output port stubs */
@@ -519,4 +537,143 @@
 
 .bracket-status {
     font-size: 0.85rem;
+}
+
+
+/* Infinite snap grid — dots (screen space, pan/zoom locked, max detail via --grid-size). */
+.bracket-canvas-wrap.show-grid {
+    background-color: #ffffff;
+    background-image: radial-gradient(
+        circle at center,
+        rgba(13, 110, 253, calc(0.45 * var(--grid-alpha, 1))) 1.1px,
+        transparent 1.25px
+    );
+    background-size: var(--grid-size, 20px) var(--grid-size, 20px);
+    background-position: var(--grid-ox, 0px) var(--grid-oy, 0px);
+}
+
+.bracket-ratsnest-menu {
+    min-width: 11rem;
+    padding: 0.35rem 0;
+}
+
+.bracket-grid-select {
+    width: auto;
+    min-width: 4.5rem;
+    display: inline-block;
+    padding-top: 0.15rem;
+    padding-bottom: 0.15rem;
+}
+
+/* Already-placed rows in Add Match modal */
+.bracket-add-match-item.already-placed {
+    opacity: 0.45;
+    cursor: not-allowed;
+    background: #f1f3f5;
+    color: #6c757d;
+}
+.bracket-add-match-item.already-placed:hover {
+    background: #f1f3f5;
+}
+.bracket-add-match-item .already-tag {
+    font-style: italic;
+    color: #868e96;
+}
+
+/* Airwires (refs / field) — always on top, straight strokes */
+.bracket-airwires-layer {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    overflow: visible;
+    z-index: 50;
+}
+
+.bracket-airwire {
+    fill: none;
+    stroke-width: 1.25;
+    stroke-linecap: round;
+    pointer-events: none;
+    opacity: 0.9;
+}
+
+.bracket-airwire.ref {
+    stroke: #e6c200;
+}
+
+.bracket-airwire.field {
+    /* stroke set inline per field color */
+}
+
+/* Field hover highlight is pure CSS driven by .field-hovering on the wrap
+   + .field-hot on matching [data-field] nodes (toggled in JS, no re-render). */
+.bracket-airwire-group.field {
+    pointer-events: stroke;
+    cursor: default;
+}
+
+.bracket-airwire-hit.field {
+    fill: none;
+    stroke-width: 14;
+    stroke-linecap: round;
+    pointer-events: stroke;
+}
+
+.bracket-canvas-wrap.field-hovering .bracket-match[data-field] {
+    opacity: 0.35;
+    filter: grayscale(0.35);
+}
+
+.bracket-canvas-wrap.field-hovering .bracket-match.field-hot {
+    opacity: 1;
+    filter: none;
+    border-color: #0d6efd;
+    box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.45), 0 4px 14px rgba(13, 110, 253, 0.2);
+    z-index: 8;
+}
+
+.bracket-canvas-wrap.field-hovering .bracket-airwire.field {
+    opacity: 0.18;
+}
+
+.bracket-canvas-wrap.field-hovering .bracket-airwire-group.field-hot .bracket-airwire.field {
+    opacity: 1;
+    stroke-width: 3;
+    filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.35));
+}
+
+/* Floating field-name tip (HTML, not SVG <title>) */
+.bracket-field-tooltip {
+    position: fixed;
+    z-index: 10000;
+    pointer-events: none;
+    background: rgba(33, 37, 41, 0.92);
+    color: #fff;
+    font-size: 0.75rem;
+    line-height: 1.2;
+    padding: 0.25rem 0.45rem;
+    border-radius: 0.25rem;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    white-space: nowrap;
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.bracket-airwire-group.ref {
+    pointer-events: stroke;
+    cursor: default;
+}
+
+.bracket-airwire-hit.ref {
+    fill: none;
+    stroke-width: 14;
+    stroke-linecap: round;
+    pointer-events: stroke;
+}
+
+.bracket-airwire.ref.rtl {
+    stroke: #e6194b;
 }

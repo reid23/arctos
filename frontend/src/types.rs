@@ -299,18 +299,26 @@ pub struct RosterRegistration {
     pub amount_paid: f64,
 }
 
-/// Canvas bracket payload returned by ``GET /tournaments/:url/bracket``.
+/// Thin tournament identity for bracket pages (not a full tournament dump).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct BracketResponse {
-    pub tournament: Tournament,
+pub struct BracketTournamentBrief {
+    pub url: String,
+    pub name: String,
+    #[serde(default)]
+    pub bracket_published: bool,
+}
+
+/// Canvas layout only — ``GET /tournaments/:url/bracket`` and mutation responses.
+/// Match bodies live on ``GET .../bracket-matches``; join placements by uuid.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct BracketLayoutResponse {
+    pub tournament: BracketTournamentBrief,
     #[serde(default)]
     pub is_to: bool,
     #[serde(default)]
-    pub team_options: Vec<TeamOption>,
+    pub bracket_published: bool,
     #[serde(default)]
-    pub tags: Vec<TagSetupData>,
-    #[serde(default)]
-    pub matches: Vec<BracketMatchData>,
+    pub placements: Vec<BracketPlacementRow>,
     #[serde(default)]
     pub texts: Vec<BracketTextData>,
     #[serde(default)]
@@ -320,10 +328,42 @@ pub struct BracketResponse {
     /// Processed legacy image-overlay brackets (from tournament.bracket TOML).
     #[serde(default)]
     pub legacy_brackets: Vec<BracketItem>,
-    /// Whether non-TOs can view the bracket (mirrors tournament.bracket_published).
-    #[serde(default)]
-    pub bracket_published: bool,
 }
+
+/// Playable matches for the diagram — ``GET /tournaments/:url/bracket-matches``.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct BracketMatchesResponse {
+    #[serde(default)]
+    pub matches: Vec<BracketMatchInfo>,
+    #[serde(default)]
+    pub team_options: Vec<TeamOption>,
+    #[serde(default)]
+    pub tags: Vec<TagSetupData>,
+}
+
+/// One placement row from the layout API (``match`` is the match uuid).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct BracketPlacementRow {
+    #[serde(rename = "match")]
+    pub match_id: String,
+    pub x_pos: Option<f64>,
+    pub y_pos: Option<f64>,
+    #[serde(default = "default_bracket_width")]
+    pub width: f64,
+    #[serde(default = "default_bracket_height")]
+    pub height: f64,
+    #[serde(default = "default_port_label")]
+    pub team1: String,
+    #[serde(default = "default_port_label")]
+    pub team2: String,
+    #[serde(default)]
+    pub inputs_flipped: bool,
+    #[serde(default)]
+    pub placed: bool,
+}
+
+/// Alias kept for call sites that still say ``BracketResponse`` (layout only).
+pub type BracketResponse = BracketLayoutResponse;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct BracketTextData {
@@ -376,9 +416,9 @@ pub struct BracketImageData {
     pub height: f64,
 }
 
-/// One playable match plus optional canvas placement.
+/// Playable match body from ``bracket-matches`` (no placement).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct BracketMatchData {
+pub struct BracketMatchInfo {
     pub uuid: String,
     pub name: String,
     pub team1: Option<String>,
@@ -399,7 +439,66 @@ pub struct BracketMatchData {
     pub match_winner: Option<String>,
     #[serde(default)]
     pub schedule_type: Option<String>,
+    #[serde(default)]
+    pub field: Option<String>,
+    #[serde(default)]
+    pub scheduled_start_time: Option<String>,
+    #[serde(default)]
+    pub nominal_start_time: Option<String>,
+    #[serde(default)]
+    pub confirmed_start_time: Option<String>,
+}
+
+/// Client-side join of match info + optional placement.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BracketMatchData {
+    pub uuid: String,
+    pub name: String,
+    pub team1: Option<String>,
+    pub team2: Option<String>,
+    pub team1_name: String,
+    pub team2_name: String,
+    pub team1_shortname: Option<String>,
+    pub team2_shortname: Option<String>,
+    pub team1_photo: Option<String>,
+    pub team2_photo: Option<String>,
+    pub team1_initial: Option<String>,
+    pub team2_initial: Option<String>,
+    pub status: String,
+    pub match_winner: Option<String>,
+    pub schedule_type: Option<String>,
+    pub field: Option<String>,
+    pub scheduled_start_time: Option<String>,
+    pub nominal_start_time: Option<String>,
+    pub confirmed_start_time: Option<String>,
     pub placement: Option<BracketPlacementData>,
+}
+
+impl BracketMatchData {
+    pub fn from_info(info: BracketMatchInfo, placement: Option<BracketPlacementData>) -> Self {
+        Self {
+            uuid: info.uuid,
+            name: info.name,
+            team1: info.team1,
+            team2: info.team2,
+            team1_name: info.team1_name,
+            team2_name: info.team2_name,
+            team1_shortname: info.team1_shortname,
+            team2_shortname: info.team2_shortname,
+            team1_photo: info.team1_photo,
+            team2_photo: info.team2_photo,
+            team1_initial: info.team1_initial,
+            team2_initial: info.team2_initial,
+            status: info.status,
+            match_winner: info.match_winner,
+            schedule_type: info.schedule_type,
+            field: info.field,
+            scheduled_start_time: info.scheduled_start_time,
+            nominal_start_time: info.nominal_start_time,
+            confirmed_start_time: info.confirmed_start_time,
+            placement,
+        }
+    }
 }
 
 /// Layout + port mode for a match on the bracket canvas.
@@ -448,7 +547,22 @@ impl BracketPlacementData {
     }
 }
 
-// Legacy image-bracket types (bracket-setup page + legacy fallback view)
+impl BracketPlacementRow {
+    pub fn to_placement_data(&self) -> BracketPlacementData {
+        BracketPlacementData {
+            x_pos: self.x_pos,
+            y_pos: self.y_pos,
+            width: self.width,
+            height: self.height,
+            team1: self.team1.clone(),
+            team2: self.team2.clone(),
+            inputs_flipped: self.inputs_flipped,
+            placed: self.placed,
+        }
+    }
+}
+
+// Legacy image-bracket types (view/delete only; no setup editor)
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct BracketItem {
     pub name: String,
@@ -560,31 +674,6 @@ pub struct TeamMatchDetail {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TeamMatchesResponse {
     pub matches: Vec<TeamMatchDetail>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct BracketTeamConfig {
-    pub team: String,
-    pub x: i32,
-    pub y: i32,
-    pub halign: Option<String>,
-    pub valign: Option<String>,
-    pub size: Option<u32>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct BracketConfig {
-    pub name: String,
-    pub image: String,
-    #[serde(default)]
-    pub teams: Vec<BracketTeamConfig>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct BracketSetupResponse {
-    pub tournament: Tournament,
-    #[serde(default)]
-    pub brackets: Vec<BracketConfig>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

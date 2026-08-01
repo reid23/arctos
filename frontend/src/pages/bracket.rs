@@ -4,32 +4,59 @@
 //! wire winner/loser outputs; multi-select; resize; zoom/pan. Viewers see
 //! the same canvas without editing chrome (auto-fit).
 
-use crate::api;
+use std::collections::{HashMap, HashSet};
+
+use dioxus::html::input_data::MouseButton;
+use dioxus::prelude::*;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::{JsCast, JsValue};
+
+use super::legacy_bracket::LegacyBracketDiagrams;
 use crate::display::short_or_truncate;
 use crate::pages::TeamSelectionField;
-use super::legacy_bracket::LegacyBracketDiagrams;
 use crate::types::{
-    BracketImageData, BracketItem, BracketLabeledTeamData, BracketMatchData, BracketPlacementData,
-    BracketResponse, BracketTextData, MatchSetupData, TagSetupData, TeamOption,
+    BracketImageData,
+    BracketItem,
+    BracketLabeledTeamData,
+    BracketLayoutResponse,
+    BracketMatchData,
+    BracketMatchInfo,
+    BracketMatchesResponse,
+    BracketPlacementData,
+    BracketPlacementRow,
+    BracketTextData,
+    MatchSetupData,
+    TagSetupData,
+    TeamOption,
 };
-use crate::Route;
-use dioxus::prelude::*;
-use dioxus::html::input_data::MouseButton;
-use std::collections::{HashMap, HashSet};
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen::JsCast;
+use crate::{Route, api};
 
 const DEFAULT_WIDTH: f64 = 280.0;
 const DEFAULT_HEIGHT: f64 = 100.0;
 const CANVAS_MIN_W: f64 = 1200.0;
 const CANVAS_MIN_H: f64 = 800.0;
-const PORT_INSET_Y_FRAC_TOP: f64 = 0.28;
-const PORT_INSET_Y_FRAC_BOT: f64 = 0.72;
+const PORT_INSET_Y_FRAC_TOP: f64 = 0.30;
+const PORT_INSET_Y_FRAC_BOT: f64 = 0.70;
 #[allow(dead_code)]
 const LABELED_TEAM_W: f64 = 200.0;
 const LABELED_TEAM_H: f64 = 36.0;
-const MIN_ZOOM: f64 = 0.15;
+/// Effectively unbounded zoom-out (still clamped away from 0 for maths).
+const MIN_ZOOM: f64 = 0.02;
 const MAX_ZOOM: f64 = 3.0;
+/// Minimum on-screen spacing between grid dots before we thin the lattice.
+const MIN_GRID_SCREEN_PX: f64 = 10.0;
+const REF_AIRWIRE_COLOR: &str = "#e6c200";
+const REF_AIRWIRE_RTL_COLOR: &str = "#e6194b";
+/// Distinguishable field colors (yellow #ffe119 + red #e6194b reserved for refs).
+const FIELD_AIRWIRE_COLORS: &[&str] = &[
+    "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#46f0f0", "#f032e6", "#bcf60c",
+    "#fabebe", "#008080", "#e6beff", "#9a6324", "#fffac8", "#800000", "#aaffc3",
+    "#808000", "#ffd8b1", "#000075", "#808080", "#ffffff", "#000000",
+];
+/// Available snap-grid densities (world px). 0 = off.
+#[allow(dead_code)]
+const GRID_SIZE_OPTIONS: [f64; 6] = [0.0, 5.0, 10.0, 20.0, 40.0, 80.0];
+const DEFAULT_GRID_SIZE: f64 = 20.0;
 
 const PAGE_CSS: &str = include_str!("bracket_canvas.css");
 const SCHEDULE_TOKEN_CSS: &str = include_str!("schedule_timeline.css");
@@ -123,6 +150,290 @@ fn wire_path(x1: f64, y1: f64, x2: f64, y2: f64) -> String {
         c1x = x1 + dx,
         c2x = x2 - dx,
     )
+}
+
+/// Straight airwire (no curves) used for ref/field overlays.
+fn airwire_path(x1: f64, y1: f64, x2: f64, y2: f64) -> String {
+    format!("M {x1:.1} {y1:.1} L {x2:.1} {y2:.1}")
+}
+
+fn snap_coord(v: f64, grid: f64) -> f64 {
+    if grid <= 0.0 {
+        v
+    } else {
+        (v / grid).round() * grid
+    }
+}
+
+/// Delta from labeled-team *snap origin* → stored top-left (`x_pos`, `y_pos`).
+///
+/// Chosen so that when the snap origin sits on the default 20px lattice, the
+/// input port (left edge, vertical center) lands halfway between grid squares
+/// (10, 30, 50, …).
+fn labeled_origin_offset() -> (f64, f64) {
+    let half = DEFAULT_GRID_SIZE * 0.5;
+    (half, half - LABELED_TEAM_H * 0.5)
+}
+
+fn labeled_to_snap_origin(x: f64, y: f64) -> (f64, f64) {
+    let (dx, dy) = labeled_origin_offset();
+    (x - dx, y - dy)
+}
+
+fn labeled_from_snap_origin(lx: f64, ly: f64) -> (f64, f64) {
+    let (dx, dy) = labeled_origin_offset();
+    (lx + dx, ly + dy)
+}
+
+/// Snap a multi-select move so the group's shared origin (min x/y) lands on
+/// the grid while preserving internal spacing. Alt/Meta fine-adjust skips snap.
+fn snap_move_delta(
+    origins: &HashMap<String, (f64, f64)>,
+    dx: f64,
+    dy: f64,
+    grid: f64,
+    fine_adjust: bool,
+) -> (f64, f64) {
+    if fine_adjust || grid <= 0.0 || origins.is_empty() {
+        return (dx, dy);
+    }
+    let (ox, oy) = origins
+        .values()
+        .fold((f64::INFINITY, f64::INFINITY), |(mx, my), &(x, y)| {
+            (mx.min(x), my.min(y))
+        });
+    if !ox.is_finite() || !oy.is_finite() {
+        return (dx, dy);
+    }
+    let nx = snap_coord(ox + dx, grid);
+    let ny = snap_coord(oy + dy, grid);
+    (nx - ox, ny - oy)
+}
+
+fn match_field_key(m: &BracketMatchData) -> String {
+    m.field
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "(unassigned)".into())
+}
+
+/// Remembered field hover (not a Dioxus signal — avoids full-tree re-renders).
+std::thread_local! {
+    static FIELD_HOVER: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+fn clear_field_hover() {
+    set_field_hover(None, None);
+}
+
+/// Instant field-ratsnest highlight + floating HTML tooltip (no Dioxus re-render).
+/// `cursor` is client coords for the tooltip; pass None to hide it.
+fn set_field_hover(field: Option<&str>, cursor: Option<(f64, f64)>) {
+    let next = field.filter(|s| !s.is_empty()).map(|s| s.to_string());
+    let changed = FIELD_HOVER.with(|slot| {
+        let prev = slot.borrow().clone();
+        let ch = prev != next;
+        if ch {
+            *slot.borrow_mut() = next.clone();
+        }
+        ch
+    });
+    // Only re-stamp classes when the hovered field changes — re-stamping every
+    // mousemove caused visible blink (remove-all then re-add). VDOM wipes are
+    // repaired by baking FIELD_HOVER into rsx classes + post-render rAF.
+    if changed {
+        apply_field_hover_dom();
+    }
+    update_field_tooltip(next.as_deref(), cursor);
+}
+
+fn current_field_hover() -> Option<String> {
+    FIELD_HOVER.with(|slot| slot.borrow().clone())
+}
+
+fn apply_field_hover_dom() {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let field = FIELD_HOVER.with(|slot| slot.borrow().clone());
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let Some(doc) = window.document() else {
+            return;
+        };
+        let Some(wrap) = doc.get_element_by_id("bracket-canvas-wrap") else {
+            return;
+        };
+        // Clear previous hot marks.
+        if let Ok(nodes) = doc.query_selector_all(".field-hot") {
+            for i in 0..nodes.length() {
+                if let Some(node) = nodes.item(i) {
+                    if let Ok(el) = node.dyn_into::<web_sys::Element>() {
+                        let _ = el.class_list().remove_1("field-hot");
+                    }
+                }
+            }
+        }
+        let _ = wrap.class_list().remove_1("field-hovering");
+
+        let Some(field) = field else {
+            return;
+        };
+        let _ = wrap.class_list().add_1("field-hovering");
+        // Match by data-field attribute (exact string compare — safe for any name).
+        if let Ok(nodes) = doc.query_selector_all("[data-field]") {
+            for i in 0..nodes.length() {
+                if let Some(node) = nodes.item(i) {
+                    if let Ok(el) = node.dyn_into::<web_sys::Element>() {
+                        if el.get_attribute("data-field").as_deref() == Some(field.as_str()) {
+                            let _ = el.class_list().add_1("field-hot");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn ensure_field_tooltip() -> Option<web_sys::HtmlElement> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let window = web_sys::window()?;
+        let doc = window.document()?;
+        if let Some(el) = doc.get_element_by_id("bracket-field-tooltip") {
+            return el.dyn_into::<web_sys::HtmlElement>().ok();
+        }
+        let el = doc.create_element("div").ok()?;
+        el.set_id("bracket-field-tooltip");
+        el.set_class_name("bracket-field-tooltip");
+        // Hidden until first hover.
+        if let Ok(html) = el.clone().dyn_into::<web_sys::HtmlElement>() {
+            let _ = html.style().set_property("display", "none");
+        }
+        doc.body()?.append_child(&el).ok()?;
+        el.dyn_into::<web_sys::HtmlElement>().ok()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        None
+    }
+}
+
+fn update_field_tooltip(field: Option<&str>, cursor: Option<(f64, f64)>) {
+    update_hover_tooltip(field.map(|n| format!("Field: {n}")).as_deref(), cursor);
+}
+
+fn update_hover_tooltip(text: Option<&str>, cursor: Option<(f64, f64)>) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let Some(tip) = ensure_field_tooltip() else {
+            return;
+        };
+        match (text, cursor) {
+            (Some(msg), Some((x, y))) => {
+                tip.set_text_content(Some(msg));
+                let style = tip.style();
+                let _ = style.set_property("display", "block");
+                // Offset so the cursor isn't on top of the tip (which would steal hits).
+                let _ = style.set_property("left", &format!("{:.0}px", x + 14.0));
+                let _ = style.set_property("top", &format!("{:.0}px", y + 16.0));
+            }
+            _ => {
+                let _ = tip.style().set_property("display", "none");
+            }
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (text, cursor);
+    }
+}
+
+/// Track field/ref airwire hover via elementFromPoint (SVG enter/leave is flaky).
+fn track_field_hover_from_mouse(ev: &Event<MouseData>) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let cx = ev.client_coordinates().x;
+        let cy = ev.client_coordinates().y;
+        let hit = (|| {
+            let window = web_sys::window()?;
+            let doc = window.document()?;
+            if let Some(tip) = doc.get_element_by_id("bracket-field-tooltip") {
+                if let Ok(html) = tip.dyn_into::<web_sys::HtmlElement>() {
+                    let _ = html.style().set_property("pointer-events", "none");
+                }
+            }
+            let el = doc.element_from_point(cx as f32, cy as f32)?;
+            if let Some(group) = el.closest(".bracket-airwire-group.field").ok().flatten() {
+                let field = group.get_attribute("data-field")?;
+                return Some(("field", field));
+            }
+            if let Some(group) = el.closest(".bracket-airwire-group.ref").ok().flatten() {
+                let rtl = group.get_attribute("data-rtl").as_deref() == Some("1");
+                let msg = if rtl {
+                    "warning: lhs match depends on rhs match for refs".to_string()
+                } else {
+                    return Some(("ref", String::new()));
+                };
+                return Some(("ref-rtl", msg));
+            }
+            None
+        })();
+        match hit {
+            Some(("field", field)) => {
+                set_field_hover(Some(&field), Some((cx, cy)));
+            }
+            Some(("ref-rtl", msg)) => {
+                // Clear field highlight; show RTL warning tip.
+                set_field_hover(None, None);
+                update_hover_tooltip(Some(&msg), Some((cx, cy)));
+            }
+            _ => {
+                set_field_hover(None, None);
+            }
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = ev;
+    }
+}
+
+/// Stable color from the fixed distinguishable palette (excludes ref yellow/red).
+fn field_airwire_color(field: &str) -> String {
+    let mut h: u32 = 2166136261;
+    for b in field.bytes() {
+        h ^= b as u32;
+        h = h.wrapping_mul(16777619);
+    }
+    let idx = (h as usize) % FIELD_AIRWIRE_COLORS.len();
+    FIELD_AIRWIRE_COLORS[idx].to_string()
+}
+
+/// On-screen grid pitch: start from world `base`, thin by ×5 until ≥ MIN_GRID_SCREEN_PX.
+fn grid_screen_pitch(base_world: f64, zoom: f64) -> f64 {
+    let z = zoom.max(0.001);
+    let mut pitch = base_world.max(1.0) * z;
+    // Every fifth, then every 25th, etc.
+    while pitch + f64::EPSILON < MIN_GRID_SCREEN_PX {
+        pitch *= 5.0;
+    }
+    pitch
+}
+
+/// Play-order key for field airwire chains (earlier first).
+fn match_play_order_key(m: &BracketMatchData) -> (i32, String, String) {
+    // Prefer confirmed, then nominal, then scheduled; missing sorts last.
+    let t = m
+        .confirmed_start_time
+        .as_ref()
+        .or(m.nominal_start_time.as_ref())
+        .or(m.scheduled_start_time.as_ref())
+        .cloned()
+        .unwrap_or_else(|| "\u{ffff}".into());
+    let has = if t == "\u{ffff}" { 1 } else { 0 };
+    (has, t, m.name.clone())
 }
 
 fn sel_match(uuid: &str) -> String {
@@ -229,7 +540,8 @@ fn images_json(items: &[BracketImageData]) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// How far net-labels stick out left of a match (CSS max-width + margin + port).
+/// How far net-labels stick out left of a match (CSS max-width + margin +
+/// port).
 const NET_LABEL_LEFT_EXTENT: f64 = 120.0;
 /// Small overhang for port stubs / borders outside the match box.
 const PORT_STUB_EXTENT: f64 = 8.0;
@@ -256,10 +568,20 @@ fn content_bounds(
         if let Some(p) = &m.placement {
             if let (Some(x), Some(y)) = (p.x_pos, p.y_pos) {
                 // Match body + port stubs on left/right edges.
-                bump(x - PORT_STUB_EXTENT, y, p.width + PORT_STUB_EXTENT * 2.0, p.height);
+                bump(
+                    x - PORT_STUB_EXTENT,
+                    y,
+                    p.width + PORT_STUB_EXTENT * 2.0,
+                    p.height,
+                );
                 // LABEL-mode inputs render net-label chips to the left of the match.
                 if !is_net(&p.team1) || !is_net(&p.team2) {
-                    bump(x - NET_LABEL_LEFT_EXTENT, y, NET_LABEL_LEFT_EXTENT, p.height);
+                    bump(
+                        x - NET_LABEL_LEFT_EXTENT,
+                        y,
+                        NET_LABEL_LEFT_EXTENT,
+                        p.height,
+                    );
                 }
             }
         }
@@ -298,8 +620,26 @@ fn fit_canvas_size(
     canvas_size.set((x1.max(CANVAS_MIN_W) + 240.0, y1.max(CANVAS_MIN_H) + 240.0));
 }
 
-fn apply_response(
-    resp: BracketResponse,
+fn join_matches_with_placements(
+    infos: Vec<BracketMatchInfo>,
+    placements: &[BracketPlacementRow],
+) -> Vec<BracketMatchData> {
+    let place_map: HashMap<String, BracketPlacementData> = placements
+        .iter()
+        .map(|p| (p.match_id.clone(), p.to_placement_data()))
+        .collect();
+    infos
+        .into_iter()
+        .map(|info| {
+            let p = place_map.get(&info.uuid).cloned();
+            BracketMatchData::from_info(info, p)
+        })
+        .collect()
+}
+
+/// Apply layout-only mutation/GET payload: merge placements onto existing matches.
+fn apply_layout(
+    resp: BracketLayoutResponse,
     mut local_matches: Signal<Vec<BracketMatchData>>,
     mut local_texts: Signal<Vec<BracketTextData>>,
     mut local_labeled: Signal<Vec<BracketLabeledTeamData>>,
@@ -307,17 +647,40 @@ fn apply_response(
     mut dirty: Signal<bool>,
     canvas_size: Signal<(f64, f64)>,
 ) {
-    fit_canvas_size(
-        &resp.matches,
-        &resp.texts,
-        &resp.labeled_teams,
-        &resp.images,
-        canvas_size,
-    );
-    local_matches.set(resp.matches);
+    let place_map: HashMap<String, BracketPlacementData> = resp
+        .placements
+        .iter()
+        .map(|p| (p.match_id.clone(), p.to_placement_data()))
+        .collect();
+    let mut ms = local_matches();
+    for m in ms.iter_mut() {
+        m.placement = place_map.get(&m.uuid).cloned();
+    }
+    fit_canvas_size(&ms, &resp.texts, &resp.labeled_teams, &resp.images, canvas_size);
+    local_matches.set(ms);
     local_texts.set(resp.texts);
     local_labeled.set(resp.labeled_teams);
     local_images.set(resp.images);
+    dirty.set(false);
+}
+
+/// Full initial hydrate from layout + matches endpoints.
+fn apply_bootstrap(
+    layout: BracketLayoutResponse,
+    matches_resp: BracketMatchesResponse,
+    mut local_matches: Signal<Vec<BracketMatchData>>,
+    mut local_texts: Signal<Vec<BracketTextData>>,
+    mut local_labeled: Signal<Vec<BracketLabeledTeamData>>,
+    mut local_images: Signal<Vec<BracketImageData>>,
+    mut dirty: Signal<bool>,
+    canvas_size: Signal<(f64, f64)>,
+) {
+    let joined = join_matches_with_placements(matches_resp.matches, &layout.placements);
+    fit_canvas_size(&joined, &layout.texts, &layout.labeled_teams, &layout.images, canvas_size);
+    local_matches.set(joined);
+    local_texts.set(layout.texts);
+    local_labeled.set(layout.labeled_teams);
+    local_images.set(layout.images);
     dirty.set(false);
 }
 
@@ -343,7 +706,7 @@ fn persist_all(
     saving.set(true);
     spawn(async move {
         match api::save_bracket_placements(&url, &p, &t, &l, &i, clear_missing).await {
-            Ok(resp) => apply_response(
+            Ok(resp) => apply_layout(
                 resp,
                 local_matches,
                 local_texts,
@@ -380,7 +743,7 @@ fn convert_match_port(
     saving.set(true);
     spawn(async move {
         match api::convert_bracket_port(&url, &match_uuid, &side, &mode).await {
-            Ok(resp) => apply_response(
+            Ok(resp) => apply_layout(
                 resp,
                 local_matches,
                 local_texts,
@@ -394,6 +757,156 @@ fn convert_match_port(
                 web_sys::console::error_1(&format!("Convert failed: {e}").into());
                 let _ = e;
             }
+        }
+        saving.set(false);
+    });
+}
+
+/// Toggle LABEL↔NET on every consumer of `source`'s winner or loser output.
+/// Same semantics as clicking a net-label / wire on each consumer input:
+/// NET → LABEL, LABEL → NET (auto-placing unplaced consumers first).
+fn toggle_output_consumers(
+    url: String,
+    source: &BracketMatchData,
+    qual: Qual,
+    local_matches: Signal<Vec<BracketMatchData>>,
+    local_texts: Signal<Vec<BracketTextData>>,
+    local_labeled: Signal<Vec<BracketLabeledTeamData>>,
+    local_images: Signal<Vec<BracketImageData>>,
+    dirty: Signal<bool>,
+    mut saving: Signal<bool>,
+    canvas_size: Signal<(f64, f64)>,
+) {
+    let src_name = source.name.clone();
+    let sp = placement_or_default(source);
+    let (sx, sy) = (
+        sp.x_pos.unwrap_or(40.0),
+        sp.y_pos.unwrap_or(40.0),
+    );
+
+    #[derive(Clone)]
+    enum Action {
+        /// Place match then convert side to mode.
+        Match {
+            uuid: String,
+            side: String,
+            mode: String,
+            place_at: Option<(f64, f64)>,
+        },
+        Labeled { id: String, mode: String },
+    }
+
+    let mut actions: Vec<Action> = Vec::new();
+    let mut place_i = 0usize;
+
+    for m in local_matches().iter() {
+        if m.uuid == source.uuid {
+            continue;
+        }
+        for (side, initial, port_is_net) in [
+            (
+                "team1",
+                m.team1_initial.as_deref(),
+                m.placement.as_ref().map(|p| is_net(&p.team1)).unwrap_or(false),
+            ),
+            (
+                "team2",
+                m.team2_initial.as_deref(),
+                m.placement.as_ref().map(|p| is_net(&p.team2)).unwrap_or(false),
+            ),
+        ] {
+            let Some(init) = initial else { continue };
+            let Some((ref_name, q)) = parse_match_ref(init) else { continue };
+            if !ref_name.eq_ignore_ascii_case(&src_name) || q != qual {
+                continue;
+            }
+            let mode = if port_is_net { "LABEL" } else { "NET" };
+            let place_at = if !is_placed(m) && mode == "NET" {
+                let nx = sx + sp.width + 80.0;
+                let ny = sy + (place_i as f64) * (DEFAULT_HEIGHT + 24.0);
+                place_i += 1;
+                Some((nx, ny))
+            } else if !is_placed(m) {
+                // Unplaced + already would be LABEL — nothing to do.
+                continue;
+            } else {
+                None
+            };
+            actions.push(Action::Match {
+                uuid: m.uuid.clone(),
+                side: side.into(),
+                mode: mode.into(),
+                place_at,
+            });
+        }
+    }
+
+    for lt in local_labeled().iter() {
+        let Some((ref_name, q)) = parse_match_ref(&lt.team) else { continue };
+        if !ref_name.eq_ignore_ascii_case(&src_name) || q != qual {
+            continue;
+        }
+        let mode = if is_net(&lt.kind) { "LABEL" } else { "NET" };
+        actions.push(Action::Labeled {
+            id: lt.id.clone(),
+            mode: mode.into(),
+        });
+    }
+
+    if actions.is_empty() {
+        return;
+    }
+
+    saving.set(true);
+    spawn(async move {
+        let mut last_ok = None;
+        for act in actions {
+            match act {
+                Action::Match {
+                    uuid,
+                    side,
+                    mode,
+                    place_at,
+                } => {
+                    if let Some((nx, ny)) = place_at {
+                        match api::add_bracket_placement(&url, &uuid, nx, ny).await {
+                            Ok(resp) => last_ok = Some(resp),
+                            Err(e) => {
+                                #[cfg(target_arch = "wasm32")]
+                                web_sys::console::error_1(&e.into());
+                                continue;
+                            }
+                        }
+                    }
+                    match api::convert_bracket_port(&url, &uuid, &side, &mode).await {
+                        Ok(resp) => last_ok = Some(resp),
+                        Err(e) => {
+                            #[cfg(target_arch = "wasm32")]
+                            web_sys::console::error_1(&e.into());
+                        }
+                    }
+                }
+                Action::Labeled { id, mode } => {
+                    match api::convert_labeled_team_port(&url, &id, &mode).await {
+                        Ok(resp) => last_ok = Some(resp),
+                        Err(e) => {
+                            #[cfg(target_arch = "wasm32")]
+                            web_sys::console::error_1(&e.into());
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(resp) = last_ok {
+            apply_layout(
+                resp,
+                local_matches,
+                local_texts,
+                local_labeled,
+                local_images,
+                dirty,
+                canvas_size,
+            );
         }
         saving.set(false);
     });
@@ -525,11 +1038,19 @@ fn focus_bracket_root() {
     }
 }
 
-
 /// World-space origin for newly added elements, inside the current viewport.
 ///
 /// ``stagger`` offsets successive adds so they don't stack exactly on top of
 /// each other. Coordinates are clamped to stay non-negative.
+/// Place a new labeled team so its snap origin lands on `grid` (port → half-cell).
+fn labeled_add_position(zoom: f64, pan: (f64, f64), stagger: usize, grid: f64) -> (f64, f64) {
+    let (ax, ay) = view_add_position(zoom, pan, stagger);
+    let g = if grid > 0.0 { grid } else { DEFAULT_GRID_SIZE };
+    let (lx, ly) = labeled_to_snap_origin(ax, ay);
+    let (lx, ly) = (snap_coord(lx, g), snap_coord(ly, g));
+    labeled_from_snap_origin(lx, ly)
+}
+
 fn view_add_position(zoom: f64, pan: (f64, f64), stagger: usize) -> (f64, f64) {
     let (vw, vh) = {
         #[cfg(target_arch = "wasm32")]
@@ -562,11 +1083,11 @@ fn view_add_position(zoom: f64, pan: (f64, f64), stagger: usize) -> (f64, f64) {
     let sx = 48.0 + col * step;
     let sy = 48.0 + row * step + col * 6.0;
     // Keep inside the viewport if the wrap is tiny.
-    let sx = sx.min((vw * 0.5).max(24.0));
-    let sy = sy.min((vh * 0.5).max(24.0));
+    let sx = sx.min((vw * 0.5_f64).max(24.0));
+    let sy = sy.min((vh * 0.5_f64).max(24.0));
     let wx = (sx - pan.0) / z;
     let wy = (sy - pan.1) / z;
-    (wx.max(0.0), wy.max(0.0))
+    (wx, wy)
 }
 
 fn next_add_stagger(
@@ -605,7 +1126,8 @@ fn screen_pointer(ev: &Event<MouseData>) -> (f64, f64) {
 }
 
 fn underline_label(label: &str, key: char) -> Element {
-    // Render label with the shortcut letter underlined (first match, case-insensitive).
+    // Render label with the shortcut letter underlined (first match,
+    // case-insensitive).
     let lower_key = key.to_ascii_lowercase();
     let mut chars: Vec<char> = label.chars().collect();
     let mut idx = None;
@@ -669,6 +1191,7 @@ struct Interaction {
 enum ActiveModal {
     None,
     AddMenu,
+    RatsnestMenu,
     AddMatch,
     EditText { id: String },
     EditLabeledTeam { id: String },
@@ -739,7 +1262,13 @@ pub fn Bracket(url: String) -> Element {
     let url_for_data = url.clone();
     let mut data = use_resource(move || {
         let u = url_for_data.clone();
-        async move { api::tournament_bracket(&u).await.map_err(|e| e.to_string()) }
+        async move {
+            let layout = api::tournament_bracket(&u).await.map_err(|e| e.to_string())?;
+            let matches = api::tournament_bracket_matches(&u)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok::<(BracketLayoutResponse, BracketMatchesResponse), String>((layout, matches))
+        }
     });
 
     let mut edit_mode = use_signal(|| false);
@@ -749,6 +1278,10 @@ pub fn Bracket(url: String) -> Element {
     let mut local_images = use_signal(|| Vec::<BracketImageData>::new());
     let mut legacy_brackets = use_signal(|| Vec::<BracketItem>::new());
     let mut bracket_published = use_signal(|| false);
+    let mut team_options_sig = use_signal(|| Vec::<TeamOption>::new());
+    let mut tags_sig = use_signal(|| Vec::<TagSetupData>::new());
+    let mut tournament_name_sig = use_signal(|| String::new());
+    let mut is_to_sig = use_signal(|| false);
     let mut interaction = use_signal(Interaction::default);
     let mut active_modal = use_signal(ActiveModal::default);
     let mut add_match_query = use_signal(String::new);
@@ -765,14 +1298,60 @@ pub fn Bracket(url: String) -> Element {
     let mut fit_tick = use_signal(|| 0u32);
     /// When not editing, wrap height is derived from width-fit scale (px).
     let mut view_wrap_height = use_signal(|| None::<f64>);
+    /// Snap pitch in world px; 0 = free move. Visual grid uses the same pitch.
+    let mut grid_size = use_signal(|| DEFAULT_GRID_SIZE);
+    let mut show_refs = use_signal(|| false);
+    let mut show_field = use_signal(|| false);
+    /// When set, Cancel on the edit dialog deletes this just-created element.
+    /// Cleared after the first Save (subsequent edits keep the element on cancel).
+    let mut pending_create = use_signal(|| None::<(String, String)>);
+    let navigator = use_navigator();
+
+    // Hoist resource read handle so effects/rsx share one stable Readable
+    // (calling data.value() inside use_effect can ValueDroppedError).
+    let val = data.value();
+
+    // After any canvas re-render, re-stamp field-hover classes (VDOM resets `class`
+    // on airwire groups). rAF so we run after the browser applies the patch.
+    use_effect(move || {
+        let _ = local_matches();
+        let _ = local_texts();
+        let _ = local_labeled();
+        let _ = local_images();
+        let _ = zoom();
+        let _ = pan();
+        let _ = show_field();
+        let _ = edit_mode();
+        apply_field_hover_dom();
+        #[cfg(target_arch = "wasm32")]
+        {
+            if let Some(window) = web_sys::window() {
+                let cb = wasm_bindgen::closure::Closure::once_into_js(move |_: JsValue| {
+                    apply_field_hover_dom();
+                });
+                let _ = window.request_animation_frame(cb.as_ref().unchecked_ref());
+            }
+        }
+    });
 
     use_effect(move || {
         if initialized() {
             return;
         }
-        if let Some(Ok(d)) = data.value().read().as_ref() {
-            apply_response(
-                d.clone(),
+        let borrow = val.read();
+        if let Some(Ok((layout, matches_resp))) = borrow.as_ref() {
+            let layout = layout.clone();
+            let matches_resp = matches_resp.clone();
+            drop(borrow);
+            team_options_sig.set(matches_resp.team_options.clone());
+            tags_sig.set(matches_resp.tags.clone());
+            tournament_name_sig.set(layout.tournament.name.clone());
+            is_to_sig.set(layout.is_to);
+            legacy_brackets.set(layout.legacy_brackets.clone());
+            bracket_published.set(layout.bracket_published || layout.tournament.bracket_published);
+            apply_bootstrap(
+                layout,
+                matches_resp,
                 local_matches,
                 local_texts,
                 local_labeled,
@@ -780,8 +1359,6 @@ pub fn Bracket(url: String) -> Element {
                 dirty,
                 canvas_size,
             );
-            legacy_brackets.set(d.legacy_brackets.clone());
-            bracket_published.set(d.bracket_published || d.tournament.bracket_published);
             initialized.set(true);
             fit_tick.set(fit_tick() + 1);
         }
@@ -800,28 +1377,38 @@ pub fn Bracket(url: String) -> Element {
                 Some(d) => d,
                 None => return,
             };
-            let focus_cb = wasm_bindgen::closure::Closure::wrap(Box::new(move |_ev: web_sys::Event| {
-                focus_bracket_root();
-            }) as Box<dyn FnMut(_)>);
-            let click_cb = wasm_bindgen::closure::Closure::wrap(Box::new(move |ev: web_sys::Event| {
-                // Don't steal focus from real form controls.
-                if let Some(t) = ev.target() {
-                    if let Some(el) = t.dyn_ref::<web_sys::Element>() {
-                        let tag = el.tag_name().to_ascii_lowercase();
-                        if matches!(tag.as_str(), "input" | "textarea" | "select" | "button" | "a") {
-                            return;
-                        }
-                        // contenteditable
-                        if el.get_attribute("contenteditable").as_deref() == Some("true") {
-                            return;
+            let focus_cb =
+                wasm_bindgen::closure::Closure::wrap(Box::new(move |_ev: web_sys::Event| {
+                    focus_bracket_root();
+                }) as Box<dyn FnMut(_)>);
+            let click_cb =
+                wasm_bindgen::closure::Closure::wrap(Box::new(move |ev: web_sys::Event| {
+                    // Don't steal focus from real form controls.
+                    if let Some(t) = ev.target() {
+                        if let Some(el) = t.dyn_ref::<web_sys::Element>() {
+                            let tag = el.tag_name().to_ascii_lowercase();
+                            if matches!(
+                                tag.as_str(),
+                                "input" | "textarea" | "select" | "button" | "a"
+                            ) {
+                                return;
+                            }
+                            // contenteditable
+                            if el.get_attribute("contenteditable").as_deref() == Some("true") {
+                                return;
+                            }
                         }
                     }
-                }
-                focus_bracket_root();
-            }) as Box<dyn FnMut(_)>);
-            let _ = window.add_event_listener_with_callback("focus", focus_cb.as_ref().unchecked_ref());
-            let _ = doc.add_event_listener_with_callback("visibilitychange", focus_cb.as_ref().unchecked_ref());
-            let _ = doc.add_event_listener_with_callback("click", click_cb.as_ref().unchecked_ref());
+                    focus_bracket_root();
+                }) as Box<dyn FnMut(_)>);
+            let _ =
+                window.add_event_listener_with_callback("focus", focus_cb.as_ref().unchecked_ref());
+            let _ = doc.add_event_listener_with_callback(
+                "visibilitychange",
+                focus_cb.as_ref().unchecked_ref(),
+            );
+            let _ =
+                doc.add_event_listener_with_callback("click", click_cb.as_ref().unchecked_ref());
             // Leak listeners for the page lifetime (component is long-lived).
             focus_cb.forget();
             click_cb.forget();
@@ -829,7 +1416,8 @@ pub fn Bracket(url: String) -> Element {
     }
 
     // Auto-fit when not editing: scale to fill available width, then set
-    // wrap height from that scale so the full bracket is visible (no vertical crop).
+    // wrap height from that scale so the full bracket is visible (no vertical
+    // crop).
     use_effect(move || {
         let _ = fit_tick();
         if edit_mode() {
@@ -852,7 +1440,11 @@ pub fn Bracket(url: String) -> Element {
                     if let Some(doc) = window.document() {
                         if let Some(el) = doc.get_element_by_id("bracket-canvas-wrap") {
                             el.get_bounding_client_rect().width().max(200.0)
-                        } else if let Some(el) = doc.query_selector("main, .container, .container-fluid").ok().flatten() {
+                        } else if let Some(el) = doc
+                            .query_selector("main, .container, .container-fluid")
+                            .ok()
+                            .flatten()
+                        {
                             el.get_bounding_client_rect().width().max(200.0)
                         } else {
                             1000.0
@@ -895,19 +1487,18 @@ pub fn Bracket(url: String) -> Element {
         });
     }
 
-    let val = data.value();
     let backend = api::base_url();
 
     rsx! {
         style { {PAGE_CSS} }
         style { {SCHEDULE_TOKEN_CSS} }
 
-        if let Some(Ok(d)) = val.read().as_ref() {
+        if let Some(Ok((_layout, _matches_boot))) = val.read().as_ref() {
             {
-                let is_to = d.is_to;
-                let team_options = d.team_options.clone();
-                let tags = d.tags.clone();
-                let tournament_name = d.tournament.name.clone();
+                let is_to = is_to_sig();
+                let team_options = team_options_sig();
+                let tags = tags_sig();
+                let tournament_name = tournament_name_sig();
                 let tournament_url = url.clone();
 
                 let matches_snap = local_matches();
@@ -933,12 +1524,6 @@ pub fn Bracket(url: String) -> Element {
                     .filter(|m| is_placed(m))
                     .cloned()
                     .collect();
-                let unplaced: Vec<BracketMatchData> = matches_snap
-                    .iter()
-                    .filter(|m| !is_placed(m))
-                    .cloned()
-                    .collect();
-
                 // Used outputs + wires (matches + labeled teams)
                 let mut used_outputs: HashSet<(String, Qual)> = HashSet::new();
                 #[derive(Clone)]
@@ -1000,22 +1585,119 @@ pub fn Bracket(url: String) -> Element {
                     });
                 }
 
+                // Ref airwires: every match-ref input (LABEL or NET) → straight yellow line
+                // from source W/L port to center of the target match's left edge.
+                #[derive(Clone)]
+                struct AirwireDesc {
+                    key: String,
+                    path: String,
+                    color: String,
+                    /// Set for field ratsnest wires (hover highlight key / tooltip).
+                    field: Option<String>,
+                    /// Ref wire points right-to-left (source is to the right of sink).
+                    rtl: bool,
+                }
+                let mut ref_airwires: Vec<AirwireDesc> = Vec::new();
+                if edit_mode() && is_to && show_refs() {
+                    for m in &placed {
+                        let p = placement_or_default(m);
+                        let (tx, ty) = match (p.x_pos, p.y_pos) {
+                            (Some(x), Some(y)) => (x, y),
+                            _ => continue,
+                        };
+                        let in_y = ty + p.height * 0.5;
+                        for (side_tag, initial) in [
+                            ("t1", m.team1_initial.as_deref()),
+                            ("t2", m.team2_initial.as_deref()),
+                        ] {
+                            let Some(init) = initial else { continue };
+                            let Some((src_name, qual)) = parse_match_ref(init) else { continue };
+                            let Some(src) = by_name.get(&src_name.to_ascii_lowercase()) else { continue };
+                            if !is_placed(src) { continue; }
+                            let sp = placement_or_default(src);
+                            let (sx, sy) = match (sp.x_pos, sp.y_pos) {
+                                (Some(x), Some(y)) => (x, y),
+                                _ => continue,
+                            };
+                            let x_out = sx + sp.width;
+                            // Wire runs right→left when the source sits to the right of the sink.
+                            let rtl = x_out > tx;
+                            ref_airwires.push(AirwireDesc {
+                                key: format!("ref-{}-{}-{}", src.uuid, m.uuid, side_tag),
+                                path: airwire_path(
+                                    x_out,
+                                    out_port_y(sy, sp.height, qual),
+                                    tx,
+                                    in_y,
+                                ),
+                                color: if rtl {
+                                    REF_AIRWIRE_RTL_COLOR.into()
+                                } else {
+                                    REF_AIRWIRE_COLOR.into()
+                                },
+                                field: None,
+                                rtl,
+                            });
+                        }
+                    }
+                }
+
+                // Field airwires: per-field chain of placed matches in play order.
+                let mut field_airwires: Vec<AirwireDesc> = Vec::new();
+                if edit_mode() && is_to && show_field() {
+                    let mut by_field: HashMap<String, Vec<&BracketMatchData>> = HashMap::new();
+                    for m in &placed {
+                        by_field.entry(match_field_key(m)).or_default().push(m);
+                    }
+                    for (field_name, mut group) in by_field {
+                        group.sort_by_key(|m| match_play_order_key(m));
+                        let color = field_airwire_color(&field_name);
+                        for pair in group.windows(2) {
+                            let a = pair[0];
+                            let b = pair[1];
+                            let pa = placement_or_default(a);
+                            let pb = placement_or_default(b);
+                            let (Some(ax), Some(ay)) = (pa.x_pos, pa.y_pos) else { continue };
+                            let (Some(bx), Some(by)) = (pb.x_pos, pb.y_pos) else { continue };
+                            // Same geometry family as refs: right-side output → left-center input.
+                            // Field chain has no W/L, so use vertical center of the right edge.
+                            let out_y = ay + pa.height * 0.5;
+                            let in_y = by + pb.height * 0.5;
+                            field_airwires.push(AirwireDesc {
+                                key: format!("field-{}-{}-{}", field_name, a.uuid, b.uuid),
+                                path: airwire_path(ax + pa.width, out_y, bx, in_y),
+                                color: color.clone(),
+                                field: Some(field_name.clone()),
+                                rtl: false,
+                            });
+                        }
+                    }
+                }
+
                 let (cw, ch) = canvas_size();
                 let ix = interaction();
                 let z = zoom();
                 let (px, py) = pan();
+                // View mode still uses pan/zoom for auto-fit (not interactive).
                 let transform = format!("translate({px}px, {py}px) scale({z})");
+                let active_field_hover = current_field_hover();
 
                 let add_q = add_match_query();
                 let add_q_lower = add_q.trim().to_ascii_lowercase();
-                let filtered_unplaced: Vec<BracketMatchData> = if add_q_lower.is_empty() {
-                    unplaced.clone()
-                } else {
-                    unplaced.iter().filter(|m| {
-                        m.name.to_ascii_lowercase().contains(&add_q_lower)
-                            || m.team1_name.to_ascii_lowercase().contains(&add_q_lower)
-                            || m.team2_name.to_ascii_lowercase().contains(&add_q_lower)
-                    }).cloned().collect()
+                let filtered_add_matches: Vec<BracketMatchData> = {
+                    let src = &matches_snap;
+                    if add_q_lower.is_empty() {
+                        src.clone()
+                    } else {
+                        src.iter()
+                            .filter(|m| {
+                                m.name.to_ascii_lowercase().contains(&add_q_lower)
+                                    || m.team1_name.to_ascii_lowercase().contains(&add_q_lower)
+                                    || m.team2_name.to_ascii_lowercase().contains(&add_q_lower)
+                            })
+                            .cloned()
+                            .collect()
+                    }
                 };
 
                 let handle_keydown = {
@@ -1048,17 +1730,14 @@ pub fn Bracket(url: String) -> Element {
                                     spawn(async move {
                                         match api::add_bracket_text(&u, ax, ay).await {
                                             Ok(resp) => {
-                                                let new_id = resp.texts.iter().map(|t| t.id.clone()).max_by_key(|id| id.clone());
-                                                apply_response(resp, local_matches, local_texts, local_labeled, local_images, dirty, canvas_size);
-                                                if let Some(id) = new_id {
-                                                    // pick the one just added (last by comparing before)
-                                                    let texts = local_texts();
-                                                    if let Some(t) = texts.last() {
-                                                        text_draft.set(t.text.clone());
-                                                        text_size_draft.set(t.size);
-                                                        active_modal.set(ActiveModal::EditText { id: t.id.clone() });
-                                                    }
-                                                    let _ = id;
+                                                let before: HashSet<String> =
+                                                    local_texts().iter().map(|t| t.id.clone()).collect();
+                                                apply_layout(resp, local_matches, local_texts, local_labeled, local_images, dirty, canvas_size);
+                                                if let Some(t) = local_texts().iter().find(|t| !before.contains(&t.id)) {
+                                                    text_draft.set(t.text.clone());
+                                                    text_size_draft.set(t.size);
+                                                    pending_create.set(Some(("text".into(), t.id.clone())));
+                                                    active_modal.set(ActiveModal::EditText { id: t.id.clone() });
                                                 }
                                             }
                                             Err(e) => {
@@ -1073,16 +1752,19 @@ pub fn Bracket(url: String) -> Element {
                                     ev.prevent_default();
                                     let u = u_key.clone();
                                     let stagger = next_add_stagger(&local_matches(), &local_texts(), &local_labeled(), &local_images());
-                                    let (ax, ay) = view_add_position(zoom(), pan(), stagger);
+                                    let (ax, ay) = labeled_add_position(zoom(), pan(), stagger, grid_size());
                                     active_modal.set(ActiveModal::None);
                                     saving.set(true);
+                                    let before_ids: HashSet<String> =
+                                        local_labeled().iter().map(|t| t.id.clone()).collect();
                                     spawn(async move {
                                         match api::add_bracket_labeled_team(&u, ax, ay).await {
                                             Ok(resp) => {
-                                                apply_response(resp, local_matches, local_texts, local_labeled, local_images, dirty, canvas_size);
-                                                if let Some(t) = local_labeled().last() {
+                                                apply_layout(resp, local_matches, local_texts, local_labeled, local_images, dirty, canvas_size);
+                                                if let Some(t) = local_labeled().iter().find(|t| !before_ids.contains(&t.id)) {
                                                     label_draft.set(if t.label.is_empty() { "Label".into() } else { t.label.clone() });
                                                     team_draft.set(t.team.clone());
+                                                    pending_create.set(Some(("labeled".into(), t.id.clone())));
                                                     active_modal.set(ActiveModal::EditLabeledTeam { id: t.id.clone() });
                                                 }
                                             }
@@ -1107,6 +1789,24 @@ pub fn Bracket(url: String) -> Element {
                         if modal != ActiveModal::None {
                             if key_str == "Escape" {
                                 ev.prevent_default();
+                                // Esc on a just-created element cancels creation (deletes it).
+                                let pend = pending_create();
+                                let should_cancel = match &modal {
+                                    ActiveModal::EditText { id } => {
+                                        pend.as_ref().map(|(k, i)| k == "text" && i == id).unwrap_or(false)
+                                    }
+                                    ActiveModal::EditLabeledTeam { id } => {
+                                        pend.as_ref().map(|(k, i)| k == "labeled" && i == id).unwrap_or(false)
+                                    }
+                                    _ => false,
+                                };
+                                if should_cancel {
+                                    pending_create.set(None);
+                                    cancel_pending_create(
+                                        pend, local_texts, local_labeled, local_images, dirty,
+                                        u_key.clone(), local_matches, saving, canvas_size,
+                                    );
+                                }
                                 active_modal.set(ActiveModal::None);
                                 focus_bracket_root();
                             }
@@ -1211,6 +1911,9 @@ pub fn Bracket(url: String) -> Element {
                                                         if !on {
                                                             interaction.set(Interaction::default());
                                                             active_modal.set(ActiveModal::None);
+                                                            clear_field_hover();
+                                                            show_refs.set(false);
+                                                            show_field.set(false);
                                                             if dirty() {
                                                                 persist_all(
                                                                     u.clone(), local_matches(), local_texts(),
@@ -1250,10 +1953,7 @@ pub fn Bracket(url: String) -> Element {
                                                         spawn(async move {
                                                             match api::set_bracket_published(&u, on).await {
                                                                 Ok(resp) => {
-                                                                    bracket_published.set(
-                                                                        resp.bracket_published
-                                                                            || resp.tournament.bracket_published,
-                                                                    );
+                                                                    bracket_published.set(resp.bracket_published);
                                                                 }
                                                                 Err(err) => {
                                                                     bracket_published.set(prev);
@@ -1314,10 +2014,13 @@ pub fn Bracket(url: String) -> Element {
                                                                     saving.set(true);
                                                                     spawn(async move {
                                                                         if let Ok(resp) = api::add_bracket_text(&u, ax, ay).await {
-                                                                            apply_response(resp, local_matches, local_texts, local_labeled, local_images, dirty, canvas_size);
-                                                                            if let Some(t) = local_texts().last() {
+                                                                            let before: HashSet<String> =
+                                                                                local_texts().iter().map(|t| t.id.clone()).collect();
+                                                                            apply_layout(resp, local_matches, local_texts, local_labeled, local_images, dirty, canvas_size);
+                                                                            if let Some(t) = local_texts().iter().find(|t| !before.contains(&t.id)) {
                                                                                 text_draft.set(t.text.clone());
                                                                                 text_size_draft.set(t.size);
+                                                                                pending_create.set(Some(("text".into(), t.id.clone())));
                                                                                 active_modal.set(ActiveModal::EditText { id: t.id.clone() });
                                                                             }
                                                                         }
@@ -1335,15 +2038,18 @@ pub fn Bracket(url: String) -> Element {
                                                                 move |_| {
                                                                     let u = u.clone();
                                                                     let stagger = next_add_stagger(&local_matches(), &local_texts(), &local_labeled(), &local_images());
-                                                                    let (ax, ay) = view_add_position(zoom(), pan(), stagger);
+                                                                    let (ax, ay) = labeled_add_position(zoom(), pan(), stagger, grid_size());
                                                                     active_modal.set(ActiveModal::None);
                                                                     saving.set(true);
                                                                     spawn(async move {
+                                                                        let before_ids: HashSet<String> =
+                                                                            local_labeled().iter().map(|t| t.id.clone()).collect();
                                                                         if let Ok(resp) = api::add_bracket_labeled_team(&u, ax, ay).await {
-                                                                            apply_response(resp, local_matches, local_texts, local_labeled, local_images, dirty, canvas_size);
-                                                                            if let Some(t) = local_labeled().last() {
+                                                                            apply_layout(resp, local_matches, local_texts, local_labeled, local_images, dirty, canvas_size);
+                                                                            if let Some(t) = local_labeled().iter().find(|t| !before_ids.contains(&t.id)) {
                                                                                 label_draft.set(if t.label.is_empty() { "Label".into() } else { t.label.clone() });
                                                                                 team_draft.set(t.team.clone());
+                                                                                pending_create.set(Some(("labeled".into(), t.id.clone())));
                                                                                 active_modal.set(ActiveModal::EditLabeledTeam { id: t.id.clone() });
                                                                             }
                                                                         }
@@ -1391,6 +2097,100 @@ pub fn Bracket(url: String) -> Element {
                                             }},
                                             {underline_label("Swap Inputs", 's')}
                                         }
+                                        label {
+                                            class: "small text-muted mb-0 ms-1",
+                                            r#for: "bracketSnapSize",
+                                            title: "Round positions to this pitch while moving (Alt/Meta = free)",
+                                            "Snap"
+                                        }
+                                        select {
+                                            id: "bracketSnapSize",
+                                            class: "form-select form-select-sm bracket-grid-select",
+                                            title: "Round moved items to this pitch. Off = free placement (grid still shown as a guide). Alt/Meta also disables snap for one drag.",
+                                            value: "{grid_size()}",
+                                            onchange: move |e| {
+                                                if let Ok(v) = e.value().parse::<f64>() {
+                                                    grid_size.set(v);
+                                                }
+                                                focus_bracket_root();
+                                            },
+                                            option { value: "0", selected: grid_size() == 0.0, "Off" }
+                                            option { value: "5", selected: grid_size() == 5.0, "5px" }
+                                            option { value: "10", selected: grid_size() == 10.0, "10px" }
+                                            option { value: "20", selected: grid_size() == 20.0, "20px" }
+                                            option { value: "40", selected: grid_size() == 40.0, "40px" }
+                                            option { value: "80", selected: grid_size() == 80.0, "80px" }
+                                        }
+                                        div { class: "dropdown",
+                                            button {
+                                                class: "btn btn-sm btn-outline-secondary dropdown-toggle",
+                                                r#type: "button",
+                                                title: "Debug airwire overlays",
+                                                onclick: move |ev: Event<MouseData>| {
+                                                    ev.stop_propagation();
+                                                    if active_modal() == ActiveModal::RatsnestMenu {
+                                                        active_modal.set(ActiveModal::None);
+                                                    } else {
+                                                        active_modal.set(ActiveModal::RatsnestMenu);
+                                                    }
+                                                    focus_bracket_root();
+                                                },
+                                                "Ratsnest"
+                                            }
+                                            if active_modal() == ActiveModal::RatsnestMenu {
+                                                ul {
+                                                    class: "dropdown-menu show bracket-ratsnest-menu",
+                                                    style: "display:block; position:absolute;",
+                                                    onclick: move |ev: Event<MouseData>| ev.stop_propagation(),
+                                                    li { class: "px-3 py-1",
+                                                        div { class: "form-check form-switch mb-0",
+                                                            input {
+                                                                class: "form-check-input",
+                                                                r#type: "checkbox",
+                                                                role: "switch",
+                                                                id: "bracketShowRefs",
+                                                                checked: "{show_refs}",
+                                                                onchange: move |e| {
+                                                                    show_refs.set(e.value() == "true");
+                                                                    focus_bracket_root();
+                                                                },
+                                                            }
+                                                            label {
+                                                                class: "form-check-label small",
+                                                                r#for: "bracketShowRefs",
+                                                                title: "Yellow airwires from winner/loser ports to match inputs",
+                                                                "Show refs"
+                                                            }
+                                                        }
+                                                    }
+                                                    li { class: "px-3 py-1",
+                                                        div { class: "form-check form-switch mb-0",
+                                                            input {
+                                                                class: "form-check-input",
+                                                                r#type: "checkbox",
+                                                                role: "switch",
+                                                                id: "bracketShowField",
+                                                                checked: "{show_field}",
+                                                                onchange: move |e| {
+                                                                    let on = e.value() == "true";
+                                                                    show_field.set(on);
+                                                                    if !on {
+                                                                        clear_field_hover();
+                                                                    }
+                                                                    focus_bracket_root();
+                                                                },
+                                                            }
+                                                            label {
+                                                                class: "form-check-label small",
+                                                                r#for: "bracketShowField",
+                                                                title: "Color-coded airwires chaining matches per field in play order",
+                                                                "Show field"
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
                                         button {
                                             class: "btn btn-sm btn-outline-danger",
                                             disabled: interaction().selected.is_empty(),
@@ -1421,7 +2221,7 @@ pub fn Bracket(url: String) -> Element {
                                             {underline_label("Delete", 'd')}
                                         }
                                         span { class: "text-muted small ms-1",
-                                            "Scroll zoom · Right-drag pan · Shift+click multi-select"
+                                            "Scroll zoom · Right-drag pan · Shift+click multi-select · Alt/Meta drag = fine adjust"
                                         }
                                         if saving() {
                                             span { class: "text-muted small", "Saving…" }
@@ -1431,7 +2231,7 @@ pub fn Bracket(url: String) -> Element {
                             }
                         }
 
-                        
+
                         if has_legacy && !canvas_empty {
                             div { class: "row",
                                 div { class: "col-12",
@@ -1490,9 +2290,24 @@ pub fn Bracket(url: String) -> Element {
                         if !show_legacy_fallback {
                             div {
                             id: "bracket-canvas-wrap",
-                            class: if edit_mode() { "bracket-canvas-wrap edit-mode" } else { "bracket-canvas-wrap view-mode" },
-                            style: {
+                            class: {
+                                let mut c = if edit_mode() {
+                                    String::from("bracket-canvas-wrap edit-mode")
+                                } else {
+                                    String::from("bracket-canvas-wrap view-mode")
+                                };
+                                // Infinite screen-space grid (not on the transformed canvas).
+                                // Always drawn in edit mode; snap pitch is independent (0 = free).
                                 if edit_mode() {
+                                    c.push_str(" show-grid");
+                                }
+                                if active_field_hover.is_some() {
+                                    c.push_str(" field-hovering");
+                                }
+                                c
+                            },
+                            style: {
+                                let mut s = if edit_mode() {
                                     // Large fraction of the viewport so a short view-mode
                                     // diagram doesn't leave a tiny edit workspace. Inline
                                     // so it always overrides the previous view-mode height.
@@ -1501,11 +2316,38 @@ pub fn Bracket(url: String) -> Element {
                                     format!("height: {h}px; max-height: none;")
                                 } else {
                                     "height: auto; max-height: none;".to_string()
+                                };
+                                // Grid lines live on the wrap in *screen* space so they fill
+                                // the viewport forever. Size/offset track pan+zoom so lines
+                                // stay locked to world coordinates (snap pitch when on,
+                                // else a reference DEFAULT_GRID_SIZE).
+                                if edit_mode() {
+                                    let g = if grid_size() > 0.0 {
+                                        grid_size()
+                                    } else {
+                                        DEFAULT_GRID_SIZE
+                                    };
+                                    let z = zoom().max(0.001);
+                                    let screen_g = grid_screen_pitch(g, z);
+                                    let (px, py) = pan();
+                                    // background-position shifts with pan; modulo keeps values small.
+                                    let ox = px.rem_euclid(screen_g);
+                                    let oy = py.rem_euclid(screen_g);
+                                    let faint = if grid_size() > 0.0 { "1" } else { "0.55" };
+                                    s.push_str(&format!(
+                                        " --grid-size: {screen_g}px; --grid-ox: {ox}px; --grid-oy: {oy}px; --grid-alpha: {faint};"
+                                    ));
                                 }
+                                s
                             },
                             onwheel: move |ev: Event<WheelData>| {
+                                if !edit_mode() {
+                                    // View mode: normal page scroll, no canvas zoom.
+                                    return;
+                                }
                                 // Zoom with the scroll wheel (no modifier required).
                                 ev.prevent_default();
+                                clear_field_hover();
                                 let dy = ev.delta().strip_units().y;
                                 let factor = if dy > 0.0 { 0.9 } else { 1.1 };
                                 let old_z = zoom();
@@ -1529,7 +2371,15 @@ pub fn Bracket(url: String) -> Element {
                             },
                             onmousemove: move |ev: Event<MouseData>| {
                                 let mut ix = interaction.write();
-                                let Some(drag) = ix.drag.clone() else { return };
+                                let Some(drag) = ix.drag.clone() else {
+                                    // No drag: continuously resolve field-airwire hover from
+                                    // the element under the cursor (fixes sticky SVG leave).
+                                    drop(ix);
+                                    track_field_hover_from_mouse(&ev);
+                                    return;
+                                };
+                                // Dragging: force-clear so highlight never sticks mid-gesture.
+                                clear_field_hover();
                                 match drag {
                                     DragKind::Pan { pointer_start, pan_start } => {
                                         let (sx, sy) = screen_pointer(&ev);
@@ -1541,8 +2391,17 @@ pub fn Bracket(url: String) -> Element {
                                     }
                                     DragKind::Move { origins, pointer_start } => {
                                         let (cx, cy) = canvas_pointer(&ev, zoom(), pan());
-                                        let dx = cx - pointer_start.0;
-                                        let dy = cy - pointer_start.1;
+                                        let raw_dx = cx - pointer_start.0;
+                                        let raw_dy = cy - pointer_start.1;
+                                        let mods = ev.modifiers();
+                                        let fine = mods.alt() || mods.meta();
+                                        let (dx, dy) = snap_move_delta(
+                                            &origins,
+                                            raw_dx,
+                                            raw_dy,
+                                            grid_size(),
+                                            fine,
+                                        );
                                         let mut ms = local_matches();
                                         let mut ts = local_texts();
                                         let mut ls = local_labeled();
@@ -1551,30 +2410,31 @@ pub fn Bracket(url: String) -> Element {
                                             let key = sel_match(&m.uuid);
                                             if let Some((ox, oy)) = origins.get(&key) {
                                                 if let Some(p) = m.placement.as_mut() {
-                                                    p.x_pos = Some((*ox + dx).max(0.0));
-                                                    p.y_pos = Some((*oy + dy).max(0.0));
+                                                    p.x_pos = Some(*ox + dx);
+                                                    p.y_pos = Some(*oy + dy);
                                                 }
                                             }
                                         }
                                         for t in ts.iter_mut() {
                                             let key = sel_text(&t.id);
                                             if let Some((ox, oy)) = origins.get(&key) {
-                                                t.x_pos = (*ox + dx).max(0.0);
-                                                t.y_pos = (*oy + dy).max(0.0);
+                                                t.x_pos = *ox + dx;
+                                                t.y_pos = *oy + dy;
                                             }
                                         }
                                         for t in ls.iter_mut() {
                                             let key = sel_labeled(&t.id);
                                             if let Some((ox, oy)) = origins.get(&key) {
-                                                t.x_pos = (*ox + dx).max(0.0);
-                                                t.y_pos = (*oy + dy).max(0.0);
+                                                let (x, y) = labeled_from_snap_origin(*ox + dx, *oy + dy);
+                                                t.x_pos = x;
+                                                t.y_pos = y;
                                             }
                                         }
                                         for i in im.iter_mut() {
                                             let key = sel_image(&i.id);
                                             if let Some((ox, oy)) = origins.get(&key) {
-                                                i.x_pos = (*ox + dx).max(0.0);
-                                                i.y_pos = (*oy + dy).max(0.0);
+                                                i.x_pos = *ox + dx;
+                                                i.y_pos = *oy + dy;
                                             }
                                         }
                                         local_matches.set(ms);
@@ -1702,8 +2562,11 @@ pub fn Bracket(url: String) -> Element {
                             onmousedown: move |ev: Event<MouseData>| {
                                 // Right-click (or middle-click) drag pans the canvas.
                                 let btn = ev.trigger_button();
-                                if matches!(btn, Some(MouseButton::Secondary) | Some(MouseButton::Auxiliary)) {
+                                if edit_mode()
+                                    && matches!(btn, Some(MouseButton::Secondary) | Some(MouseButton::Auxiliary))
+                                {
                                     ev.prevent_default();
+                                    clear_field_hover();
                                     let (sx, sy) = screen_pointer(&ev);
                                     let mut ix = interaction.write();
                                     ix.drag = Some(DragKind::Pan {
@@ -1728,6 +2591,9 @@ pub fn Bracket(url: String) -> Element {
                             oncontextmenu: move |ev: Event<MouseData>| {
                                 ev.prevent_default();
                             },
+                            // Safety net: leaving the viewport always drops field highlight
+                            // (SVG stroke mouseleave is unreliable at edges / while panning).
+                            onmouseleave: move |_| clear_field_hover(),
 
                             div {
                                 class: "bracket-canvas",
@@ -1772,7 +2638,7 @@ pub fn Bracket(url: String) -> Element {
                                                                 saving.set(true);
                                                                 spawn(async move {
                                                                     if let Ok(resp) = api::convert_labeled_team_port(&u, &id, "LABEL").await {
-                                                                        apply_response(resp, local_matches, local_texts, local_labeled, local_images, dirty, canvas_size);
+                                                                        apply_layout(resp, local_matches, local_texts, local_labeled, local_images, dirty, canvas_size);
                                                                     }
                                                                     saving.set(false);
                                                                 });
@@ -1978,7 +2844,7 @@ pub fn Bracket(url: String) -> Element {
                                                                     saving.set(true);
                                                                     spawn(async move {
                                                                         if let Ok(resp) = api::convert_labeled_team_port(&u, &id, "NET").await {
-                                                                            apply_response(resp, local_matches, local_texts, local_labeled, local_images, dirty, canvas_size);
+                                                                            apply_layout(resp, local_matches, local_texts, local_labeled, local_images, dirty, canvas_size);
                                                                         }
                                                                         saving.set(false);
                                                                     });
@@ -2049,12 +2915,14 @@ pub fn Bracket(url: String) -> Element {
                                         let flipped = p.inputs_flipped;
                                         let t1_label = short_or_truncate(&m.team1_name, m.team1_shortname.as_deref());
                                         let t2_label = short_or_truncate(&m.team2_name, m.team2_shortname.as_deref());
-                                        let show_w = used_outputs.contains(&(m.uuid.clone(), Qual::Winner));
-                                        let show_l = used_outputs.contains(&(m.uuid.clone(), Qual::Loser));
+                                        let w_used = used_outputs.contains(&(m.uuid.clone(), Qual::Winner));
+                                        let l_used = used_outputs.contains(&(m.uuid.clone(), Qual::Loser));
                                         let label1 = if !is_net(&p.team1) { m.team1_initial.clone() } else { None };
                                         let label2 = if !is_net(&p.team2) { m.team2_initial.clone() } else { None };
                                         let uuid_down = m.uuid.clone();
                                         let uuid_resize = m.uuid.clone();
+                                        let nav_url = tournament_url.clone();
+                                        let nav = navigator;
                                         let p_resize = p.clone();
                                         let y1_port = port_y(y, h, Side::Team1, flipped);
                                         let y2_port = port_y(y, h, Side::Team2, flipped);
@@ -2145,10 +3013,10 @@ pub fn Bracket(url: String) -> Element {
 
                                             div { class: "bracket-port-stub", style: "left: {x}px; top: {y1_port}px;" }
                                             div { class: "bracket-port-stub", style: "left: {x}px; top: {y2_port}px;" }
-                                            if show_w {
+                                            if edit_mode() || w_used {
                                                 div { class: "bracket-port-stub output", style: "left: {x + w}px; top: {out_port_y(y, h, Qual::Winner)}px;" }
                                             }
-                                            if show_l {
+                                            if edit_mode() || l_used {
                                                 div { class: "bracket-port-stub output loser", style: "left: {x + w}px; top: {out_port_y(y, h, Qual::Loser)}px;" }
                                             }
 
@@ -2159,16 +3027,33 @@ pub fn Bracket(url: String) -> Element {
                                                     if selected { c.push_str(" selected"); }
                                                     if flipped { c.push_str(" inputs-flipped"); }
                                                     c.push_str(status_class);
+                                                    let fk = match_field_key(&m);
+                                                    if active_field_hover.as_ref() == Some(&fk) {
+                                                        c.push_str(" field-hot");
+                                                    }
                                                     c
                                                 },
-                                                style: format!("left: {x}px; top: {y}px; width: {w}px; height: {h}px; cursor: {};", if edit_mode() { "grab" } else { "default" }),
+                                                // Used by instant DOM field-hover highlight (see set_field_hover).
+                                                "data-field": "{match_field_key(&m)}",
+                                                style: format!("left: {x}px; top: {y}px; width: {w}px; height: {h}px; cursor: {};", if edit_mode() { "grab" } else { "pointer" }),
                                                 onmousedown: move |ev: Event<MouseData>| {
                                                     if !edit_mode() { return; }
+                                                    // Ctrl/Cmd+click opens the match page instead of dragging.
+                                                    let mods = ev.modifiers();
+                                                    if mods.ctrl() || mods.meta() {
+                                                        ev.prevent_default();
+                                                        ev.stop_propagation();
+                                                        nav.push(Route::MatchPageById {
+                                                            url: nav_url.clone(),
+                                                            match_id: uuid_down.clone(),
+                                                        });
+                                                        return;
+                                                    }
                                                     ev.stop_propagation();
                                                     let (cx, cy) = canvas_pointer(&ev, zoom(), pan());
                                                     let mut ix = interaction.write();
                                                     let id = sel_match(&uuid_down);
-                                                    if ev.modifiers().shift() {
+                                                    if mods.shift() {
                                                         if ix.selected.contains(&id) { ix.selected.remove(&id); } else { ix.selected.insert(id.clone()); }
                                                     } else if !ix.selected.contains(&id) {
                                                         ix.selected.clear();
@@ -2188,18 +3073,64 @@ pub fn Bracket(url: String) -> Element {
                                                             span { class: "winner-badge", title: "Match winner", "Winner" }
                                                         }
                                                     }
-                                                    if show_w {
-                                                        span { class: "bracket-port-badge winner", title: "Winner output", "W" }
+                                                    if edit_mode() || w_used {
+                                                        span {
+                                                            class: if w_used {
+                                                                "bracket-port-badge winner clickable"
+                                                            } else {
+                                                                "bracket-port-badge winner clickable unused"
+                                                            },
+                                                            title: if edit_mode() {
+                                                                if w_used {
+                                                                    "Click to convert winner consumers to labels (unwire)"
+                                                                } else {
+                                                                    "Click to wire/place matches that take this winner"
+                                                                }
+                                                            } else {
+                                                                "Winner output"
+                                                            },
+                                                            onclick: {
+                                                                let u = tournament_url.clone();
+                                                                let src = m.clone();
+                                                                move |ev: Event<MouseData>| {
+                                                                    if !edit_mode() { return; }
+                                                                    ev.prevent_default();
+                                                                    ev.stop_propagation();
+                                                                    toggle_output_consumers(
+                                                                        u.clone(),
+                                                                        &src,
+                                                                        Qual::Winner,
+                                                                        local_matches,
+                                                                        local_texts,
+                                                                        local_labeled,
+                                                                        local_images,
+                                                                        dirty,
+                                                                        saving,
+                                                                        canvas_size,
+                                                                    );
+                                                                }
+                                                            },
+                                                            onmousedown: move |ev: Event<MouseData>| {
+                                                                // Don't start a drag when clicking W/L.
+                                                                ev.stop_propagation();
+                                                            },
+                                                            "W"
+                                                        }
                                                     }
                                                 }
-                                                div { class: "bracket-match-name", title: "{m.name}",
-                                                    Link {
-                                                        to: Route::MatchPageById { url: tournament_url.clone(), match_id: m.uuid.clone() },
-                                                        class: "text-decoration-none text-dark",
-                                                        onclick: move |ev: Event<MouseData>| {
-                                                            if edit_mode() { ev.prevent_default(); ev.stop_propagation(); }
-                                                        },
-                                                        "{m.name}"
+                                                div { class: "bracket-match-name", title: if edit_mode() {
+                                                        format!("{} (Ctrl+click block to open)", m.name)
+                                                    } else {
+                                                        m.name.clone()
+                                                    },
+                                                    if edit_mode() {
+                                                        span { class: "text-dark", "{m.name}" }
+                                                    } else {
+                                                        Link {
+                                                            to: Route::MatchPageById { url: tournament_url.clone(), match_id: m.uuid.clone() },
+                                                            class: "text-decoration-none text-dark",
+                                                            "{m.name}"
+                                                        }
                                                     }
                                                 }
                                                 div { class: "bracket-match-row slot-bot",
@@ -2212,8 +3143,48 @@ pub fn Bracket(url: String) -> Element {
                                                             span { class: "winner-badge", title: "Match winner", "Winner" }
                                                         }
                                                     }
-                                                    if show_l {
-                                                        span { class: "bracket-port-badge loser", title: "Loser output", "L" }
+                                                    if edit_mode() || l_used {
+                                                        span {
+                                                            class: if l_used {
+                                                                "bracket-port-badge loser clickable"
+                                                            } else {
+                                                                "bracket-port-badge loser clickable unused"
+                                                            },
+                                                            title: if edit_mode() {
+                                                                if l_used {
+                                                                    "Click to convert loser consumers to labels (unwire)"
+                                                                } else {
+                                                                    "Click to wire/place matches that take this loser"
+                                                                }
+                                                            } else {
+                                                                "Loser output"
+                                                            },
+                                                            onclick: {
+                                                                let u = tournament_url.clone();
+                                                                let src = m.clone();
+                                                                move |ev: Event<MouseData>| {
+                                                                    if !edit_mode() { return; }
+                                                                    ev.prevent_default();
+                                                                    ev.stop_propagation();
+                                                                    toggle_output_consumers(
+                                                                        u.clone(),
+                                                                        &src,
+                                                                        Qual::Loser,
+                                                                        local_matches,
+                                                                        local_texts,
+                                                                        local_labeled,
+                                                                        local_images,
+                                                                        dirty,
+                                                                        saving,
+                                                                        canvas_size,
+                                                                    );
+                                                                }
+                                                            },
+                                                            onmousedown: move |ev: Event<MouseData>| {
+                                                                ev.stop_propagation();
+                                                            },
+                                                            "L"
+                                                        }
                                                     }
                                                 }
                                                 if edit_mode() {
@@ -2249,6 +3220,78 @@ pub fn Bracket(url: String) -> Element {
                                         }
                                     }
                                 }
+
+                                // Airwires on top of everything (refs + field chains).
+                                if !ref_airwires.is_empty() || !field_airwires.is_empty() {
+                                    svg {
+                                        class: "bracket-airwires-layer",
+                                        width: "{cw}",
+                                        height: "{ch}",
+                                        // Layer itself ignores events except stroke hits on field wires.
+                                        style: "pointer-events: none;",
+                                        for aw in ref_airwires.iter() {
+                                            {
+                                                let aw = aw.clone();
+                                                let rtl_flag = if aw.rtl { "1" } else { "0" };
+                                                let gcls = if aw.rtl {
+                                                    "bracket-airwire-group ref rtl"
+                                                } else {
+                                                    "bracket-airwire-group ref"
+                                                };
+                                                rsx! {
+                                                    g {
+                                                        key: "{aw.key}",
+                                                        class: "{gcls}",
+                                                        "data-rtl": "{rtl_flag}",
+                                                        path {
+                                                            class: "bracket-airwire-hit ref",
+                                                            d: "{aw.path}",
+                                                            stroke: "transparent",
+                                                        }
+                                                        path {
+                                                            class: if aw.rtl {
+                                                                "bracket-airwire ref rtl"
+                                                            } else {
+                                                                "bracket-airwire ref"
+                                                            },
+                                                            d: "{aw.path}",
+                                                            stroke: "{aw.color}",
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        for aw in field_airwires.iter() {
+                                            {
+                                                let aw = aw.clone();
+                                                let fname = aw.field.clone().unwrap_or_default();
+                                                let is_hot = active_field_hover.as_ref() == Some(&fname);
+                                                let gcls = if is_hot {
+                                                    "bracket-airwire-group field field-hot"
+                                                } else {
+                                                    "bracket-airwire-group field"
+                                                };
+                                                rsx! {
+                                                    g {
+                                                        key: "{aw.key}",
+                                                        class: "{gcls}",
+                                                        "data-field": "{fname}",
+                                                        path {
+                                                            class: "bracket-airwire-hit field",
+                                                            d: "{aw.path}",
+                                                            stroke: "transparent",
+                                                        }
+                                                        path {
+                                                            class: "bracket-airwire field",
+                                                            d: "{aw.path}",
+                                                            stroke: "{aw.color}",
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
 
@@ -2278,22 +3321,33 @@ pub fn Bracket(url: String) -> Element {
                                                 },
                                             }
                                         }
-                                        if filtered_unplaced.is_empty() {
+                                        if filtered_add_matches.is_empty() {
                                             p { class: "text-muted px-3 py-2 mb-0",
-                                                if unplaced.is_empty() { "All playable matches are already on the bracket." }
+                                                if matches_snap.is_empty() { "No playable matches in this tournament." }
                                                 else { "No matches match your filter." }
                                             }
                                         } else {
-                                            for m in filtered_unplaced.iter() {
+                                            for m in filtered_add_matches.iter() {
                                                 {
                                                     let mid = m.uuid.clone();
                                                     let mname = m.name.clone();
                                                     let t1 = m.team1_name.clone();
                                                     let t2 = m.team2_name.clone();
+                                                    let already = is_placed(m);
                                                     rsx! {
                                                         button {
                                                             key: "{mid}",
-                                                            class: "bracket-add-match-item",
+                                                            class: if already {
+                                                                "bracket-add-match-item already-placed"
+                                                            } else {
+                                                                "bracket-add-match-item"
+                                                            },
+                                                            disabled: already,
+                                                            title: if already {
+                                                                "Already on the bracket"
+                                                            } else {
+                                                                "Add to bracket"
+                                                            },
                                                             onclick: {
                                                                 let u = tournament_url.clone();
                                                                 let mid = mid.clone();
@@ -2307,7 +3361,7 @@ pub fn Bracket(url: String) -> Element {
                                                                     let mid = mid.clone();
                                                                     spawn(async move {
                                                                         if let Ok(resp) = api::add_bracket_placement(&u, &mid, nx, ny).await {
-                                                                            apply_response(resp, local_matches, local_texts, local_labeled, local_images, dirty, canvas_size);
+                                                                            apply_layout(resp, local_matches, local_texts, local_labeled, local_images, dirty, canvas_size);
                                                                         }
                                                                         saving.set(false);
                                                                         focus_bracket_root();
@@ -2315,7 +3369,12 @@ pub fn Bracket(url: String) -> Element {
                                                                 }
                                                             },
                                                             strong { "{mname}" }
-                                                            div { class: "meta", "{t1} vs {t2}" }
+                                                            div { class: "meta",
+                                                                "{t1} vs {t2}"
+                                                                if already {
+                                                                    span { class: "already-tag", " · on bracket" }
+                                                                }
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -2336,14 +3395,33 @@ pub fn Bracket(url: String) -> Element {
                         if let ActiveModal::EditText { id } = active_modal() {
                             {
                                 let tid = id.clone();
+                                let is_create = pending_create().as_ref().map(|(k, i)| k == "text" && i == &tid).unwrap_or(false);
                                 rsx! {
                                     div { class: "bracket-add-modal-backdrop",
-                                        onclick: move |_| { active_modal.set(ActiveModal::None); focus_bracket_root(); },
+                                        onclick: move |_| { /* ignore backdrop — use Cancel */ },
                                         div { class: "bracket-add-modal",
                                             onclick: move |ev: Event<MouseData>| ev.stop_propagation(),
                                             div { class: "bracket-add-modal-header",
-                                                h5 { class: "mb-0", "Edit Text" }
-                                                button { class: "btn-close", onclick: move |_| { active_modal.set(ActiveModal::None); focus_bracket_root(); } }
+                                                h5 { class: "mb-0", if is_create { "New Text" } else { "Edit Text" } }
+                                                button {
+                                                    class: "btn-close",
+                                                    onclick: {
+                                                        let tid = tid.clone();
+                                                        let u = tournament_url.clone();
+                                                        move |_| {
+                                                            let pend = pending_create();
+                                                            if pend.as_ref().map(|(k, i)| k == "text" && i == &tid).unwrap_or(false) {
+                                                                pending_create.set(None);
+                                                                cancel_pending_create(
+                                                                    pend, local_texts, local_labeled, local_images, dirty,
+                                                                    u.clone(), local_matches, saving, canvas_size,
+                                                                );
+                                                            }
+                                                            active_modal.set(ActiveModal::None);
+                                                            focus_bracket_root();
+                                                        }
+                                                    },
+                                                }
                                             }
                                             div { class: "bracket-add-modal-body px-3 py-2",
                                                 label { class: "form-label", "Text" }
@@ -2352,6 +3430,9 @@ pub fn Bracket(url: String) -> Element {
                                                     rows: "3",
                                                     value: "{text_draft}",
                                                     oninput: move |e| text_draft.set(e.value()),
+                                                    onmounted: move |ev| {
+                                                        spawn(async move { let _ = ev.data().set_focus(true).await; });
+                                                    },
                                                 }
                                                 label { class: "form-label", "Font size (px)" }
                                                 input {
@@ -2381,6 +3462,10 @@ pub fn Bracket(url: String) -> Element {
                                                             }
                                                             local_texts.set(ts);
                                                             dirty.set(true);
+                                                            // First save commits creation — cancel no longer deletes.
+                                                            if pending_create().as_ref().map(|(k, i)| k == "text" && i == &tid).unwrap_or(false) {
+                                                                pending_create.set(None);
+                                                            }
                                                             active_modal.set(ActiveModal::None);
                                                             persist_all(
                                                                     u.clone(),
@@ -2404,7 +3489,22 @@ pub fn Bracket(url: String) -> Element {
                                                 }
                                                 button {
                                                     class: "btn btn-outline-secondary btn-sm",
-                                                    onclick: move |_| { active_modal.set(ActiveModal::None); focus_bracket_root(); },
+                                                    onclick: {
+                                                        let tid = tid.clone();
+                                                        let u = tournament_url.clone();
+                                                        move |_| {
+                                                            let pend = pending_create();
+                                                            if pend.as_ref().map(|(k, i)| k == "text" && i == &tid).unwrap_or(false) {
+                                                                pending_create.set(None);
+                                                                cancel_pending_create(
+                                                                    pend, local_texts, local_labeled, local_images, dirty,
+                                                                    u.clone(), local_matches, saving, canvas_size,
+                                                                );
+                                                            }
+                                                            active_modal.set(ActiveModal::None);
+                                                            focus_bracket_root();
+                                                        }
+                                                    },
                                                     "Cancel"
                                                 }
                                             }
@@ -2417,14 +3517,33 @@ pub fn Bracket(url: String) -> Element {
                         if let ActiveModal::EditLabeledTeam { id } = active_modal() {
                             {
                                 let lid = id.clone();
+                                let is_create = pending_create().as_ref().map(|(k, i)| k == "labeled" && i == &lid).unwrap_or(false);
                                 rsx! {
                                     div { class: "bracket-add-modal-backdrop",
-                                        onclick: move |_| { active_modal.set(ActiveModal::None); focus_bracket_root(); },
+                                        onclick: move |_| { /* ignore backdrop — use Cancel */ },
                                         div { class: "bracket-add-modal",
                                             onclick: move |ev: Event<MouseData>| ev.stop_propagation(),
                                             div { class: "bracket-add-modal-header",
-                                                h5 { class: "mb-0", "Edit Team Label" }
-                                                button { class: "btn-close", onclick: move |_| { active_modal.set(ActiveModal::None); focus_bracket_root(); } }
+                                                h5 { class: "mb-0", if is_create { "New Team Label" } else { "Edit Team Label" } }
+                                                button {
+                                                    class: "btn-close",
+                                                    onclick: {
+                                                        let lid = lid.clone();
+                                                        let u = tournament_url.clone();
+                                                        move |_| {
+                                                            let pend = pending_create();
+                                                            if pend.as_ref().map(|(k, i)| k == "labeled" && i == &lid).unwrap_or(false) {
+                                                                pending_create.set(None);
+                                                                cancel_pending_create(
+                                                                    pend, local_texts, local_labeled, local_images, dirty,
+                                                                    u.clone(), local_matches, saving, canvas_size,
+                                                                );
+                                                            }
+                                                            active_modal.set(ActiveModal::None);
+                                                            focus_bracket_root();
+                                                        }
+                                                    },
+                                                }
                                             }
                                             div { class: "bracket-add-modal-body px-3 py-2",
                                                 div { class: "mb-2",
@@ -2440,6 +3559,9 @@ pub fn Bracket(url: String) -> Element {
                                                             let trimmed: String = v.chars().take(50).collect();
                                                             label_draft.set(trimmed);
                                                         },
+                                                        onmounted: move |ev| {
+                                                            spawn(async move { let _ = ev.data().set_focus(true).await; });
+                                                        },
                                                     }
                                                     div { class: "form-text", "Shown until the team is known (max 50 chars)." }
                                                 }
@@ -2453,7 +3575,7 @@ pub fn Bracket(url: String) -> Element {
                                                     multiple: false,
                                                     placeholder: "Team, Match::winner, tag::Name".to_string(),
                                                     help_text: Some("Explicit team, match winner/loser, or tag".to_string()),
-                                                    wrapper_class: Some("mb-2 bracket-setup-team-token".to_string()),
+                                                    wrapper_class: Some("mb-2 bracket-team-token".to_string()),
                                                 }
                                             }
                                             div { class: "bracket-add-modal-footer",
@@ -2476,6 +3598,9 @@ pub fn Bracket(url: String) -> Element {
                                                             }
                                                             local_labeled.set(ls);
                                                             dirty.set(true);
+                                                            if pending_create().as_ref().map(|(k, i)| k == "labeled" && i == &lid).unwrap_or(false) {
+                                                                pending_create.set(None);
+                                                            }
                                                             active_modal.set(ActiveModal::None);
                                                             persist_all(
                                                                     u.clone(),
@@ -2499,7 +3624,22 @@ pub fn Bracket(url: String) -> Element {
                                                 }
                                                 button {
                                                     class: "btn btn-outline-secondary btn-sm",
-                                                    onclick: move |_| { active_modal.set(ActiveModal::None); focus_bracket_root(); },
+                                                    onclick: {
+                                                        let lid = lid.clone();
+                                                        let u = tournament_url.clone();
+                                                        move |_| {
+                                                            let pend = pending_create();
+                                                            if pend.as_ref().map(|(k, i)| k == "labeled" && i == &lid).unwrap_or(false) {
+                                                                pending_create.set(None);
+                                                                cancel_pending_create(
+                                                                    pend, local_texts, local_labeled, local_images, dirty,
+                                                                    u.clone(), local_matches, saving, canvas_size,
+                                                                );
+                                                            }
+                                                            active_modal.set(ActiveModal::None);
+                                                            focus_bracket_root();
+                                                        }
+                                                    },
                                                     "Cancel"
                                                 }
                                             }
@@ -2553,7 +3693,7 @@ pub fn Bracket(url: String) -> Element {
                                                                                 if let Ok(resp) = api::add_bracket_image_element(
                                                                                     &u, &path, ax, ay, 240.0, 160.0,
                                                                                 ).await {
-                                                                                    apply_response(resp, local_matches, local_texts, local_labeled, local_images, dirty, canvas_size);
+                                                                                    apply_layout(resp, local_matches, local_texts, local_labeled, local_images, dirty, canvas_size);
                                                                                 }
                                                                             }
                                                                             Err(e) => {
@@ -2724,6 +3864,57 @@ pub fn Bracket(url: String) -> Element {
     }
 }
 
+/// Cancel a just-created element (first edit dialog only).
+fn cancel_pending_create(
+    pending: Option<(String, String)>,
+    mut local_texts: Signal<Vec<BracketTextData>>,
+    mut local_labeled: Signal<Vec<BracketLabeledTeamData>>,
+    mut local_images: Signal<Vec<BracketImageData>>,
+    mut dirty: Signal<bool>,
+    url: String,
+    local_matches: Signal<Vec<BracketMatchData>>,
+    saving: Signal<bool>,
+    canvas_size: Signal<(f64, f64)>,
+) {
+    let Some((kind, id)) = pending else {
+        return;
+    };
+    match kind.as_str() {
+        "text" => {
+            let mut ts = local_texts();
+            ts.retain(|t| t.id != id);
+            local_texts.set(ts);
+        }
+        "labeled" => {
+            let mut ls = local_labeled();
+            ls.retain(|t| t.id != id);
+            local_labeled.set(ls);
+        }
+        "image" => {
+            let mut im = local_images();
+            im.retain(|i| i.id != id);
+            local_images.set(im);
+        }
+        _ => return,
+    }
+    dirty.set(true);
+    persist_all(
+        url,
+        local_matches(),
+        local_texts(),
+        local_labeled(),
+        local_images(),
+        true,
+        local_matches,
+        local_texts,
+        local_labeled,
+        local_images,
+        dirty,
+        saving,
+        canvas_size,
+    );
+}
+
 fn collect_origins(
     selected: &HashSet<String>,
     matches: &[BracketMatchData],
@@ -2751,7 +3942,8 @@ fn collect_origins(
     for t in labeled {
         let k = sel_labeled(&t.id);
         if selected.contains(&k) {
-            origins.insert(k, (t.x_pos, t.y_pos));
+            // Snap origin is offset so the input port hits half-grid cells.
+            origins.insert(k, labeled_to_snap_origin(t.x_pos, t.y_pos));
         }
     }
     for i in images {

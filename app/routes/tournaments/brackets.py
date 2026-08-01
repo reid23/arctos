@@ -25,7 +25,7 @@ from app.models.bracket import (
     BracketPlacement,
     BracketText,
 )
-from app.serializers.tournament_serializer import team_name_for_match, tournament_to_dict
+from app.serializers.tournament_serializer import team_name_for_match
 from app.services.permission_service import PermissionService
 from app.services.registration_resolver import team_registration_for_tournament
 from app.utils.decorators import require_json_body
@@ -82,22 +82,25 @@ def _team_display(tournament, team_id: str | None) -> dict | None:
     }
 
 
-def _match_payload(tournament, match: Match, placement: BracketPlacement | None) -> dict:
-    """Serialize a match plus optional placement for the canvas API."""
+def _placement_payload(placement: BracketPlacement) -> dict:
+    """Serialize one canvas placement (layout only — no match body)."""
+    return {
+        "match": placement.match,
+        "x_pos": placement.x_pos,
+        "y_pos": placement.y_pos,
+        "width": placement.width if placement.width is not None else DEFAULT_BRACKET_WIDTH,
+        "height": placement.height if placement.height is not None else DEFAULT_BRACKET_HEIGHT,
+        "team1": (placement.team1.value if isinstance(placement.team1, BracketPortMode) else str(placement.team1)),
+        "team2": (placement.team2.value if isinstance(placement.team2, BracketPortMode) else str(placement.team2)),
+        "inputs_flipped": bool(getattr(placement, "inputs_flipped", False)),
+        "placed": placement.is_placed,
+    }
+
+
+def _bracket_match_payload(tournament, match: Match) -> dict:
+    """Playable match fields for the diagram (no placement — join client-side)."""
     t1 = _team_display(tournament, match.team1)
     t2 = _team_display(tournament, match.team2)
-    place = None
-    if placement is not None:
-        place = {
-            "x_pos": placement.x_pos,
-            "y_pos": placement.y_pos,
-            "width": placement.width if placement.width is not None else DEFAULT_BRACKET_WIDTH,
-            "height": placement.height if placement.height is not None else DEFAULT_BRACKET_HEIGHT,
-            "team1": (placement.team1.value if isinstance(placement.team1, BracketPortMode) else str(placement.team1)),
-            "team2": (placement.team2.value if isinstance(placement.team2, BracketPortMode) else str(placement.team2)),
-            "inputs_flipped": bool(getattr(placement, "inputs_flipped", False)),
-            "placed": placement.is_placed,
-        }
     return {
         "uuid": match.uuid,
         "name": match.name,
@@ -114,7 +117,10 @@ def _match_payload(tournament, match: Match, placement: BracketPlacement | None)
         "status": match.status.value if match.status else MatchStatus.NOT_STARTED.value,
         "match_winner": match.match_winner.value if match.match_winner else None,
         "schedule_type": match.schedule_type.value if match.schedule_type else None,
-        "placement": place,
+        "field": match.field,
+        "scheduled_start_time": match.scheduled_start_time.isoformat() if match.scheduled_start_time else None,
+        "nominal_start_time": match.nominal_start_time.isoformat() if match.nominal_start_time else None,
+        "confirmed_start_time": match.confirmed_start_time.isoformat() if match.confirmed_start_time else None,
     }
 
 
@@ -497,11 +503,17 @@ def _process_legacy_brackets(tournament) -> list:
     return processed_brackets
 
 
-def _bracket_response(tournament, is_to: bool) -> dict:
+def _bracket_layout_response(tournament, is_to: bool) -> dict:
+    """Minimal canvas document: placements + annotations only (no match bodies).
+
+    Clients load playable matches from ``GET .../bracket-matches`` and join
+    by uuid. Mutations return this shape so saves do not re-ship the match list.
+    """
     tournament_url = tournament.url
-    matches = _playable_matches(tournament_url)
-    placements = {p.match: p for p in BracketPlacement.query.filter_by(event=tournament_url).all()}
-    team_options, tags = _team_options_and_tags(tournament_url)
+    placements = [
+        _placement_payload(p)
+        for p in BracketPlacement.query.filter_by(event=tournament_url).order_by(BracketPlacement.match).all()
+    ]
     texts = [_text_payload(t) for t in BracketText.query.filter_by(event=tournament_url).order_by(BracketText.id).all()]
     labeled = [
         _labeled_team_payload(tournament, t)
@@ -511,36 +523,76 @@ def _bracket_response(tournament, is_to: bool) -> dict:
         _image_payload(i) for i in BracketImage.query.filter_by(event=tournament_url).order_by(BracketImage.id).all()
     ]
     return {
-        "tournament": tournament_to_dict(tournament),
+        "tournament": {
+            "url": tournament.url,
+            "name": tournament.name,
+            "bracket_published": bool(getattr(tournament, "bracket_published", False)),
+        },
         "is_to": is_to,
-        "team_options": team_options,
-        "tags": tags,
-        "matches": [_match_payload(tournament, m, placements.get(m.uuid)) for m in matches],
+        "bracket_published": bool(getattr(tournament, "bracket_published", False)),
+        "placements": placements,
         "texts": texts,
         "labeled_teams": labeled,
         "images": images,
         "legacy_brackets": _process_legacy_brackets(tournament),
-        "bracket_published": bool(getattr(tournament, "bracket_published", False)),
     }
+
+
+def _bracket_matches_response(tournament, is_to: bool) -> dict:
+    """Playable matches (+ TO token pickers) for joining with the layout doc."""
+    tournament_url = tournament.url
+    matches = [_bracket_match_payload(tournament, m) for m in _playable_matches(tournament_url)]
+    out = {"matches": matches}
+    if is_to:
+        team_options, tags = _team_options_and_tags(tournament_url)
+        out["team_options"] = team_options
+        out["tags"] = tags
+    else:
+        out["team_options"] = []
+        out["tags"] = []
+    return out
+
+
+# Back-compat alias used nowhere new should call this for full payloads.
+def _bracket_response(tournament, is_to: bool) -> dict:
+    return _bracket_layout_response(tournament, is_to)
+
+
+def _bracket_access(tournament_url):
+    """Shared access gate for bracket layout + matches. Returns (tournament, is_to) or error tuple."""
+    has_access, tournament = check_tournament_access(tournament_url)
+    if not has_access or not tournament:
+        return None, None, (jsonify({"error": "Not found"}), 404)
+    is_to = _check_to(tournament_url)
+    if not bool(getattr(tournament, "bracket_published", False)) and not is_to:
+        return None, None, (jsonify({"error": "Bracket is not available"}), 403)
+    return tournament, is_to, None
 
 
 @bp.route("/tournaments/<tournament_url>/bracket", methods=["GET"])
 def tournament_bracket_api(tournament_url):
-    """Canvas bracket data: playable matches + placements + token metadata.
+    """Canvas layout only: placements + texts/labels/images + legacy fallback.
 
-    Available when the bracket is published, or always for TOs.  Returns an
-    empty match list rather than 404 when nothing is configured yet so TOs
-    can open edit mode and start placing matches.
+    Does **not** include match bodies — use ``GET .../bracket-matches``.
+    Available when published, or always for TOs.
     """
-    has_access, tournament = check_tournament_access(tournament_url)
-    if not has_access or not tournament:
-        return jsonify({"error": "Not found"}), 404
+    tournament, is_to, err = _bracket_access(tournament_url)
+    if err:
+        return err
+    return jsonify(_bracket_layout_response(tournament, is_to))
 
-    is_to = _check_to(tournament_url)
-    if not bool(getattr(tournament, "bracket_published", False)) and not is_to:
-        return jsonify({"error": "Bracket is not available"}), 403
 
-    return jsonify(_bracket_response(tournament, is_to))
+@bp.route("/tournaments/<tournament_url>/bracket-matches", methods=["GET"])
+def tournament_bracket_matches_api(tournament_url):
+    """Playable matches for the bracket diagram (join with placements client-side).
+
+    Same access rule as ``GET .../bracket``. TOs also receive team_options/tags
+    for the labeled-team editor.
+    """
+    tournament, is_to, err = _bracket_access(tournament_url)
+    if err:
+        return err
+    return jsonify(_bracket_matches_response(tournament, is_to))
 
 
 @bp.route("/tournaments/<tournament_url>/bracket-published", methods=["PUT"])
@@ -565,7 +617,6 @@ def tournament_bracket_published_api(tournament_url):
         {
             "success": True,
             "bracket_published": bool(tournament.bracket_published),
-            **_bracket_response(tournament, True),
         }
     )
 
@@ -1076,50 +1127,9 @@ def tournament_bracket_convert_labeled_team_api(tournament_url, element_id):
 
 
 # ---------------------------------------------------------------------------
-# Legacy image-bracket setup (kept for backward compatibility)
+# Legacy image-brackets: view via processed payload on GET /bracket;
+# delete only (no setup editor).
 # ---------------------------------------------------------------------------
-
-
-@bp.route("/tournaments/<tournament_url>/bracket-setup-data", methods=["GET"])
-@login_required
-def tournament_bracket_setup_data_api(tournament_url):
-    """Raw bracket configuration for the SPA bracket-setup page.
-
-    This returns the underlying TOML data (already parsed) so that the
-    Dioxus frontend can render and edit bracket annotations while the
-    existing HTML form endpoint continues to handle multipart uploads.
-    """
-    if not _check_to(tournament_url):
-        return jsonify({"error": "Forbidden"}), 403
-
-    tournament = Tournament.query.filter_by(url=tournament_url).first_or_404()
-
-    brackets_data = _parse_legacy_brackets_raw(tournament)
-
-    return jsonify(
-        {
-            "tournament": tournament_to_dict(tournament),
-            "brackets": brackets_data,
-        }
-    )
-
-
-@bp.route("/tournaments/<tournament_url>/bracket-setup", methods=["POST"])
-@login_required
-@require_json_body()
-def tournament_bracket_setup_save_api(tournament_url):
-    """Save bracket configuration from the SPA."""
-    if not _check_to(tournament_url):
-        return jsonify({"error": "Forbidden"}), 403
-
-    tournament = Tournament.query.filter_by(url=tournament_url).first_or_404()
-
-    data = g.json_body
-    brackets = data.get("brackets", [])
-    tournament.bracket = _serialize_legacy_brackets(brackets)
-    db.session.commit()
-
-    return jsonify({"success": True})
 
 
 @bp.route("/tournaments/<tournament_url>/legacy-brackets/<int:index>", methods=["DELETE"])

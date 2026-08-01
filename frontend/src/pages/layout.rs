@@ -22,7 +22,6 @@ fn page_title_for_route(route: &Route) -> String {
         Route::Results { url } => format!("{url} Results"),
         Route::Bracket { url } => format!("{url} Bracket"),
         Route::LegacyBracket { url } => format!("{url} Legacy Bracket"),
-        Route::BracketSetup { url } => format!("{url} Bracket Setup"),
         Route::TournamentSettings { url } => format!("{url} Settings"),
         Route::TournamentRegister { url } => format!("{url} Register"),
         Route::Manage { url } => format!("{url} Manage"),

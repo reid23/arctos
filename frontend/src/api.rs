@@ -1446,10 +1446,32 @@ pub async fn decline_invitation(tournament_url: &str, invitation_id: u32) -> Res
     Ok(())
 }
 
-pub async fn tournament_bracket(tournament_url: &str) -> Result<BracketResponse, String> {
+pub async fn tournament_bracket(tournament_url: &str) -> Result<BracketLayoutResponse, String> {
     let c = client();
     let r = with_credentials(c.get(format!(
         "{}/_api/tournaments/{}/bracket",
+        base(),
+        tournament_url
+    )))
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    if r.status().as_u16() == 403 {
+        return Err("Bracket is not available".to_string());
+    }
+    if r.status().as_u16() == 404 {
+        return Err("Not found".to_string());
+    }
+    response_json(r).await
+}
+
+/// Playable matches (+ TO pickers) for the bracket diagram.
+pub async fn tournament_bracket_matches(
+    tournament_url: &str,
+) -> Result<BracketMatchesResponse, String> {
+    let c = client();
+    let r = with_credentials(c.get(format!(
+        "{}/_api/tournaments/{}/bracket-matches",
         base(),
         tournament_url
     )))
@@ -1469,7 +1491,7 @@ pub async fn tournament_bracket(tournament_url: &str) -> Result<BracketResponse,
 pub async fn delete_legacy_bracket(
     tournament_url: &str,
     index: usize,
-) -> Result<BracketResponse, String> {
+) -> Result<BracketLayoutResponse, String> {
     let c = client();
     let r = with_credentials(c.delete(format!(
         "{}/_api/tournaments/{}/legacy-brackets/{}",
@@ -1491,7 +1513,7 @@ pub async fn delete_legacy_bracket(
 }
 
 /// Delete all legacy image-brackets for a tournament (TO only).
-pub async fn clear_legacy_brackets(tournament_url: &str) -> Result<BracketResponse, String> {
+pub async fn clear_legacy_brackets(tournament_url: &str) -> Result<BracketLayoutResponse, String> {
     let c = client();
     let r = with_credentials(c.delete(format!(
         "{}/_api/tournaments/{}/legacy-brackets",
@@ -1512,10 +1534,16 @@ pub async fn clear_legacy_brackets(tournament_url: &str) -> Result<BracketRespon
 }
 
 /// Set whether the bracket is visible to non-TOs (TO only).
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct SetBracketPublishedResponse {
+    pub success: bool,
+    pub bracket_published: bool,
+}
+
 pub async fn set_bracket_published(
     tournament_url: &str,
     published: bool,
-) -> Result<BracketResponse, String> {
+) -> Result<SetBracketPublishedResponse, String> {
     let c = client();
     let body = serde_json::json!({ "published": published });
     let r = with_credentials(
@@ -1548,7 +1576,7 @@ pub async fn save_bracket_placements(
     labeled_teams: &[serde_json::Value],
     images: &[serde_json::Value],
     clear_missing: bool,
-) -> Result<BracketResponse, String> {
+) -> Result<BracketLayoutResponse, String> {
     let c = client();
     let body = serde_json::json!({
         "placements": placements,
@@ -1580,7 +1608,7 @@ pub async fn add_bracket_text(
     tournament_url: &str,
     x_pos: f64,
     y_pos: f64,
-) -> Result<BracketResponse, String> {
+) -> Result<BracketLayoutResponse, String> {
     let c = client();
     let body = serde_json::json!({ "text": "Text", "x_pos": x_pos, "y_pos": y_pos, "size": 18.0 });
     let r = with_credentials(c.post(format!(
@@ -1602,7 +1630,7 @@ pub async fn add_bracket_labeled_team(
     tournament_url: &str,
     x_pos: f64,
     y_pos: f64,
-) -> Result<BracketResponse, String> {
+) -> Result<BracketLayoutResponse, String> {
     let c = client();
     let body = serde_json::json!({
         "label": "Label",
@@ -1633,7 +1661,7 @@ pub async fn add_bracket_image_element(
     y_pos: f64,
     width: f64,
     height: f64,
-) -> Result<BracketResponse, String> {
+) -> Result<BracketLayoutResponse, String> {
     let c = client();
     let body = serde_json::json!({
         "image": image_path,
@@ -1661,7 +1689,7 @@ pub async fn convert_labeled_team_port(
     tournament_url: &str,
     element_id: &str,
     mode: &str,
-) -> Result<BracketResponse, String> {
+) -> Result<BracketLayoutResponse, String> {
     let c = client();
     let body = serde_json::json!({ "mode": mode });
     let r = with_credentials(c.post(format!(
@@ -1686,7 +1714,7 @@ pub async fn add_bracket_placement(
     match_uuid: &str,
     x_pos: f64,
     y_pos: f64,
-) -> Result<BracketResponse, String> {
+) -> Result<BracketLayoutResponse, String> {
     let c = client();
     let body = serde_json::json!({
         "match": match_uuid,
@@ -1718,7 +1746,7 @@ pub async fn convert_bracket_port(
     match_uuid: &str,
     side: &str,
     mode: &str,
-) -> Result<BracketResponse, String> {
+) -> Result<BracketLayoutResponse, String> {
     let c = client();
     let body = serde_json::json!({
         "match": match_uuid,
@@ -2372,18 +2400,6 @@ pub async fn server_time() -> Result<ServerTimeResponse, String> {
     response_json(r).await
 }
 
-pub async fn bracket_setup_data(url: &str) -> Result<BracketSetupResponse, String> {
-    let c = client();
-    let r = with_credentials(c.get(format!(
-        "{}/_api/tournaments/{}/bracket-setup-data",
-        base(),
-        url
-    )))
-    .send()
-    .await
-    .map_err(|e| e.to_string())?;
-    response_json(r).await
-}
 
 pub async fn scoreboard_state(
     tournament_url: &str,
@@ -2791,34 +2807,6 @@ pub async fn update_stones(
     Ok(data)
 }
 
-pub async fn save_bracket_setup(
-    tournament_url: &str,
-    brackets: &[crate::types::BracketConfig],
-) -> Result<(), String> {
-    let c = client();
-    let body = serde_json::json!({ "brackets": brackets });
-    let r = with_credentials(
-        c.post(format!(
-            "{}/_api/tournaments/{}/bracket-setup",
-            base(),
-            tournament_url
-        ))
-        .json(&body),
-    )
-    .send()
-    .await
-    .map_err(|e| e.to_string())?;
-    let v: serde_json::Value = response_json(r).await?;
-    if v.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
-        Ok(())
-    } else {
-        Err(v
-            .get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Failed to save bracket configuration")
-            .to_string())
-    }
-}
 
 /// Upload a single bracket image as raw bytes and return its relative static path.
 #[cfg(target_arch = "wasm32")]
