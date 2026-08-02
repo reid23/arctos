@@ -18,7 +18,6 @@ from models import (
     Match,
     Tournament,
     Point,
-    PlayerRegistration,
     Player,
     PenaltyType,
     db,
@@ -48,7 +47,7 @@ def scoreboard_state():
     match = Match.query.filter_by(event=tournament_url, field=field_name, status=MatchStatus.IN_PROGRESS).first()
 
     # Get team information helper
-    from models import Team, TeamRegistration
+    from models import Team, Tournament
 
     def get_team_info(m):
         if not m:
@@ -58,13 +57,16 @@ def scoreboard_state():
 
         # Get team names - prefer initial (for dynamic teams), then registration pseudonym, then team name
         # Handle empty strings and missing registration (e.g. dynamic/unregistered team)
-        reg1 = TeamRegistration.query.filter_by(event=tournament_url, team=m.team1).first() if m.team1 else None
+        from app.services.registration_resolver import team_registration_for_tournament
+
+        tournament_obj = Tournament.query.get(tournament_url)
+        reg1 = team_registration_for_tournament(tournament_obj, m.team1) if (tournament_obj and m.team1) else None
         team1_name = (
             (reg1.pseudonym if reg1 and reg1.pseudonym else (team1_obj.name if team1_obj else m.team1_initial))
             if m.team1
             else m.team1_initial
         )
-        reg2 = TeamRegistration.query.filter_by(event=tournament_url, team=m.team2).first() if m.team2 else None
+        reg2 = team_registration_for_tournament(tournament_obj, m.team2) if (tournament_obj and m.team2) else None
         team2_name = (
             (reg2.pseudonym if reg2 and reg2.pseudonym else (team2_obj.name if team2_obj else m.team2_initial))
             if m.team2
@@ -508,37 +510,26 @@ def start_match(tournament_url: str):
 
     tournament = Tournament.query.get(tournament_url)
 
-    team1_players = (
-        db.session.query(PlayerRegistration, Player)
-        .join(Player, PlayerRegistration.player == Player.id)
-        .filter(
-            PlayerRegistration.event == tournament_url,
-            PlayerRegistration.team == match.team1,
-            PlayerRegistration.status == RegistrationStatus.CONFIRMED,
-        )
-        .all()
-    )
+    from app.services.registration_resolver import player_registrations_for_tournament
 
-    team2_players = (
-        db.session.query(PlayerRegistration, Player)
-        .join(Player, PlayerRegistration.player == Player.id)
-        .filter(
-            PlayerRegistration.event == tournament_url,
-            PlayerRegistration.team == match.team2,
-            PlayerRegistration.status == RegistrationStatus.CONFIRMED,
-        )
-        .all()
-    )
+    def _regs_with_players(team_id=None):
+        if tournament is None:
+            return []
+        kwargs = {"statuses": [RegistrationStatus.CONFIRMED]}
+        if team_id is not None:
+            if not team_id:
+                return []
+            kwargs["team_id"] = team_id
+        out = []
+        for pr in player_registrations_for_tournament(tournament, **kwargs):
+            player = Player.query.get(pr.player)
+            if player:
+                out.append((pr, player))
+        return out
 
-    all_players = (
-        db.session.query(PlayerRegistration, Player)
-        .join(Player, PlayerRegistration.player == Player.id)
-        .filter(
-            PlayerRegistration.event == tournament_url,
-            PlayerRegistration.status == RegistrationStatus.CONFIRMED,
-        )
-        .all()
-    )
+    team1_players = _regs_with_players(match.team1)
+    team2_players = _regs_with_players(match.team2)
+    all_players = _regs_with_players()
 
     from models import Injury
 
@@ -744,10 +735,18 @@ def run_match(tournament_url):
     from app.domain.enums import WinnerSide
     from app.services.dual_write import get_match_player_ids
 
+    from app.services.registration_resolver import player_registration_for_tournament
+
     def _registration_with_player(pid):
-        pr = PlayerRegistration.query.filter_by(
-            event=tournament_url, player=pid, status=RegistrationStatus.CONFIRMED
-        ).first()
+        pr = (
+            player_registration_for_tournament(
+                tournament,
+                pid,
+                statuses=[RegistrationStatus.CONFIRMED],
+            )
+            if tournament is not None
+            else None
+        )
         if not pr:
             return None
         player = Player.query.get(pid)

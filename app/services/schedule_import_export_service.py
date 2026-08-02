@@ -249,8 +249,8 @@ class ScheduleImportExportService:
         Ensure every team referenced by ID (in tags or matches) is registered for the tournament.
         Returns a list of error messages; empty if all referenced teams are registered.
         """
-        from app.domain.enums import TeamRegistrationStatus
-        from models import TeamRegistration
+        from models import Tournament
+        from app.services.registration_resolver import team_registrations_for_tournament
 
         # Collect all team IDs referenced by ID (not tag:: or match::winner/loser)
         team_ids: set[str] = set()
@@ -275,11 +275,17 @@ class ScheduleImportExportService:
         if not team_ids:
             return []
 
+        tournament = Tournament.query.filter_by(url=tournament_url).first()
+        if tournament is None:
+            return [f"Tournament '{tournament_url}' not found"]
+
         registered_team_ids: set[str] = {
             reg.team
-            for reg in TeamRegistration.query.filter_by(event=tournament_url)
-            .filter(TeamRegistration.status != TeamRegistrationStatus.CANCELLED)
-            .all()
+            for reg in team_registrations_for_tournament(
+                tournament,
+                exclude_cancelled=True,
+            )
+            if reg.team
         }
 
         unregistered = team_ids - registered_team_ids

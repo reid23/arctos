@@ -87,7 +87,7 @@ def get_player_display_name(player_id: str, tournament_url: str) -> Tuple[Option
         return None, None
 
     # Local imports to avoid heavy import chains during app startup.
-    from models import Player, PlayerRegistration
+    from models import Player
 
     player = Player.query.get(player_id)
     if not player:
@@ -97,7 +97,11 @@ def get_player_display_name(player_id: str, tournament_url: str) -> Tuple[Option
     player_display: Optional[str] = None
 
     if tournament_url:
-        reg = PlayerRegistration.query.filter_by(event=tournament_url, player=player_id).first()
+        from models import Tournament
+        from app.services.registration_resolver import player_registration_for_tournament
+
+        tournament = Tournament.query.get(tournament_url)
+        reg = player_registration_for_tournament(tournament, player_id) if tournament is not None else None
         if reg:
             player_display = format_jersey_display(
                 jersey_name=getattr(reg, "jersey_name", None),
