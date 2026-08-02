@@ -15,19 +15,9 @@ use super::legacy_bracket::LegacyBracketDiagrams;
 use crate::display::short_or_truncate;
 use crate::pages::TeamSelectionField;
 use crate::types::{
-    BracketImageData,
-    BracketItem,
-    BracketLabeledTeamData,
-    BracketLayoutResponse,
-    BracketMatchData,
-    BracketMatchInfo,
-    BracketMatchesResponse,
-    BracketPlacementData,
-    BracketPlacementRow,
-    BracketTextData,
-    MatchSetupData,
-    TagSetupData,
-    TeamOption,
+    BracketImageData, BracketItem, BracketLabeledTeamData, BracketLayoutResponse, BracketMatchData,
+    BracketMatchInfo, BracketMatchesResponse, BracketPlacementData, BracketPlacementRow,
+    BracketTextData, MatchSetupData, TagSetupData, TeamOption,
 };
 use crate::{Route, api};
 
@@ -49,9 +39,9 @@ const REF_AIRWIRE_COLOR: &str = "#e6c200";
 const REF_AIRWIRE_RTL_COLOR: &str = "#e6194b";
 /// Distinguishable field colors (yellow #ffe119 + red #e6194b reserved for refs).
 const FIELD_AIRWIRE_COLORS: &[&str] = &[
-    "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#46f0f0", "#f032e6", "#bcf60c",
-    "#fabebe", "#008080", "#e6beff", "#9a6324", "#fffac8", "#800000", "#aaffc3",
-    "#808000", "#ffd8b1", "#000075", "#808080", "#ffffff", "#000000",
+    "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#46f0f0", "#f032e6", "#bcf60c", "#fabebe",
+    "#008080", "#e6beff", "#9a6324", "#fffac8", "#800000", "#aaffc3", "#808000", "#ffd8b1",
+    "#000075", "#808080", "#ffffff", "#000000",
 ];
 /// Available snap-grid densities (world px). 0 = off.
 #[allow(dead_code)]
@@ -656,7 +646,13 @@ fn apply_layout(
     for m in ms.iter_mut() {
         m.placement = place_map.get(&m.uuid).cloned();
     }
-    fit_canvas_size(&ms, &resp.texts, &resp.labeled_teams, &resp.images, canvas_size);
+    fit_canvas_size(
+        &ms,
+        &resp.texts,
+        &resp.labeled_teams,
+        &resp.images,
+        canvas_size,
+    );
     local_matches.set(ms);
     local_texts.set(resp.texts);
     local_labeled.set(resp.labeled_teams);
@@ -676,7 +672,13 @@ fn apply_bootstrap(
     canvas_size: Signal<(f64, f64)>,
 ) {
     let joined = join_matches_with_placements(matches_resp.matches, &layout.placements);
-    fit_canvas_size(&joined, &layout.texts, &layout.labeled_teams, &layout.images, canvas_size);
+    fit_canvas_size(
+        &joined,
+        &layout.texts,
+        &layout.labeled_teams,
+        &layout.images,
+        canvas_size,
+    );
     local_matches.set(joined);
     local_texts.set(layout.texts);
     local_labeled.set(layout.labeled_teams);
@@ -779,10 +781,7 @@ fn toggle_output_consumers(
 ) {
     let src_name = source.name.clone();
     let sp = placement_or_default(source);
-    let (sx, sy) = (
-        sp.x_pos.unwrap_or(40.0),
-        sp.y_pos.unwrap_or(40.0),
-    );
+    let (sx, sy) = (sp.x_pos.unwrap_or(40.0), sp.y_pos.unwrap_or(40.0));
 
     #[derive(Clone)]
     enum Action {
@@ -793,7 +792,10 @@ fn toggle_output_consumers(
             mode: String,
             place_at: Option<(f64, f64)>,
         },
-        Labeled { id: String, mode: String },
+        Labeled {
+            id: String,
+            mode: String,
+        },
     }
 
     let mut actions: Vec<Action> = Vec::new();
@@ -807,16 +809,24 @@ fn toggle_output_consumers(
             (
                 "team1",
                 m.team1_initial.as_deref(),
-                m.placement.as_ref().map(|p| is_net(&p.team1)).unwrap_or(false),
+                m.placement
+                    .as_ref()
+                    .map(|p| is_net(&p.team1))
+                    .unwrap_or(false),
             ),
             (
                 "team2",
                 m.team2_initial.as_deref(),
-                m.placement.as_ref().map(|p| is_net(&p.team2)).unwrap_or(false),
+                m.placement
+                    .as_ref()
+                    .map(|p| is_net(&p.team2))
+                    .unwrap_or(false),
             ),
         ] {
             let Some(init) = initial else { continue };
-            let Some((ref_name, q)) = parse_match_ref(init) else { continue };
+            let Some((ref_name, q)) = parse_match_ref(init) else {
+                continue;
+            };
             if !ref_name.eq_ignore_ascii_case(&src_name) || q != qual {
                 continue;
             }
@@ -842,7 +852,9 @@ fn toggle_output_consumers(
     }
 
     for lt in local_labeled().iter() {
-        let Some((ref_name, q)) = parse_match_ref(&lt.team) else { continue };
+        let Some((ref_name, q)) = parse_match_ref(&lt.team) else {
+            continue;
+        };
         if !ref_name.eq_ignore_ascii_case(&src_name) || q != qual {
             continue;
         }
@@ -1263,7 +1275,9 @@ pub fn Bracket(url: String) -> Element {
     let mut data = use_resource(move || {
         let u = url_for_data.clone();
         async move {
-            let layout = api::tournament_bracket(&u).await.map_err(|e| e.to_string())?;
+            let layout = api::tournament_bracket(&u)
+                .await
+                .map_err(|e| e.to_string())?;
             let matches = api::tournament_bracket_matches(&u)
                 .await
                 .map_err(|e| e.to_string())?;
@@ -2097,16 +2111,44 @@ pub fn Bracket(url: String) -> Element {
                                             }},
                                             {underline_label("Swap Inputs", 's')}
                                         }
+                                        button {
+                                            class: "btn btn-sm btn-outline-danger",
+                                            disabled: interaction().selected.is_empty(),
+                                            title: "Remove selected (D)",
+                                            onclick: {
+                                                let u = tournament_url.clone();
+                                                move |_| {
+                                                if delete_selected(local_matches, local_texts, local_labeled, local_images, interaction, dirty) {
+                                                    interaction.write().selected.clear();
+                                                    persist_all(
+                                                                    u.clone(),
+                                                                    local_matches(),
+                                                                    local_texts(),
+                                                                    local_labeled(),
+                                                                    local_images(),
+                                                                    true,
+                                                                    local_matches,
+                                                                    local_texts,
+                                                                    local_labeled,
+                                                                    local_images,
+                                                                    dirty,
+                                                                    saving,
+                                                                    canvas_size,
+                                                                );
+                                                }
+                                                focus_bracket_root();
+                                            }},
+                                            {underline_label("Delete", 'd')}
+                                        }
                                         label {
                                             class: "small text-muted mb-0 ms-1",
                                             r#for: "bracketSnapSize",
-                                            title: "Round positions to this pitch while moving (Alt/Meta = free)",
-                                            "Snap"
+                                            "Grid:"
                                         }
                                         select {
                                             id: "bracketSnapSize",
                                             class: "form-select form-select-sm bracket-grid-select",
-                                            title: "Round moved items to this pitch. Off = free placement (grid still shown as a guide). Alt/Meta also disables snap for one drag.",
+                                            title: "Round moved items to this pitch. Hold Alt/Meta to suppress snapping.",
                                             value: "{grid_size()}",
                                             onchange: move |e| {
                                                 if let Ok(v) = e.value().parse::<f64>() {
@@ -2190,35 +2232,6 @@ pub fn Bracket(url: String) -> Element {
                                                     }
                                                 }
                                             }
-                                        }
-                                        button {
-                                            class: "btn btn-sm btn-outline-danger",
-                                            disabled: interaction().selected.is_empty(),
-                                            title: "Remove selected (D)",
-                                            onclick: {
-                                                let u = tournament_url.clone();
-                                                move |_| {
-                                                if delete_selected(local_matches, local_texts, local_labeled, local_images, interaction, dirty) {
-                                                    interaction.write().selected.clear();
-                                                    persist_all(
-                                                                    u.clone(),
-                                                                    local_matches(),
-                                                                    local_texts(),
-                                                                    local_labeled(),
-                                                                    local_images(),
-                                                                    true,
-                                                                    local_matches,
-                                                                    local_texts,
-                                                                    local_labeled,
-                                                                    local_images,
-                                                                    dirty,
-                                                                    saving,
-                                                                    canvas_size,
-                                                                );
-                                                }
-                                                focus_bracket_root();
-                                            }},
-                                            {underline_label("Delete", 'd')}
                                         }
                                         span { class: "text-muted small ms-1",
                                             "Scroll zoom · Right-drag pan · Shift+click multi-select · Alt/Meta drag = fine adjust"
@@ -3308,7 +3321,7 @@ pub fn Bracket(url: String) -> Element {
                                         h5 { class: "mb-0", "Add Match" }
                                         button { class: "btn-close", onclick: move |_| { active_modal.set(ActiveModal::None); focus_bracket_root(); } }
                                     }
-                                    div { class: "bracket-add-modal-body",
+                                    div { class: "bracket-add-modal-body", style: "overflow: scroll",
                                         div { class: "px-3 pb-2",
                                             input {
                                                 class: "form-control form-control-sm",

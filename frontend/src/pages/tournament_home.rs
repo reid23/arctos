@@ -1,9 +1,9 @@
+use crate::Route;
 use crate::api;
 use crate::components::{
     EditRegistrationContext, EditRegistrationModal, EventHeader, LeagueRegistrationButtons,
 };
 use crate::types::{ToEntry, User, UserUploadPlanningMatch, UserUploadPlanningResponse};
-use crate::Route;
 use chrono::{DateTime, SecondsFormat, Utc};
 use dioxus::prelude::*;
 use uuid::Uuid;
@@ -676,7 +676,6 @@ fn TournamentHomeContent(url: String, initial_tab: Option<String>) -> Element {
                                             div { class: "card-body",
                                                 div { class: "d-grid gap-2",
                                                     Link { to: Route::TournamentSettings { url: url.clone() }, class: "btn btn-outline-secondary", "Settings" }
-                                                    Link { to: Route::Bracket { url: url.clone() }, class: "btn btn-outline-secondary", "Bracket Builder" }
                                                     if let Some(ref l) = d.tournament.league {
                                                         Link { to: Route::LeagueManage { league_url: l.league_url.clone() }, class: "btn btn-outline-warning", "Registration Management" }
                                                     } else {
