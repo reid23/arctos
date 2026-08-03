@@ -36,6 +36,7 @@ class Tournament(db.Model):
         location: Venue name or address.
         max_field_size: Maximum total players per side on the field.
         schedule_published: Whether the match schedule is visible to the public.
+        bracket_published: Whether the bracket page is visible to non-TOs.
         league_id: Foreign key to the parent league, or ``None`` for standalone
             tournaments.
         head_refs_allow_reffing_teams: When ``True``, reffing teams and their
@@ -60,6 +61,7 @@ class Tournament(db.Model):
     location = db.Column(db.String(LONG_NAME_LEN))
     max_field_size = db.Column(db.Integer)
     schedule_published = db.Column(db.Boolean, default=False)
+    bracket_published = db.Column(db.Boolean, default=False, nullable=False)
     league_id = db.Column(db.String(URL_SLUG_LEN), db.ForeignKey("leagues.url"), nullable=True)
     head_refs_allow_reffing_teams = db.Column(db.Boolean, default=False)  # allow reffing teams and their members
     head_refs_allow_anyone = db.Column(db.Boolean, default=False)  # allow anyone registered

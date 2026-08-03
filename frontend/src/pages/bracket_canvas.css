@@ -1,0 +1,678 @@
+/* Interactive bracket canvas */
+
+.bracket-page-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+}
+
+.bracket-canvas-wrap {
+    position: relative;
+    border: 1px solid #dee2e6;
+    border-radius: 0.5rem;
+    background: #ffffff;
+    overflow: hidden;
+    user-select: none;
+    touch-action: none;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+/* Edit mode: large viewport for pan/zoom workspace (inline style also sets this). */
+.bracket-canvas-wrap.edit-mode {
+    cursor: default;
+    min-height: 70vh;
+    height: min(85vh, calc(100vh - 160px));
+    max-height: none;
+}
+
+/* View mode: height is set inline from width-fit scale. */
+.bracket-canvas-wrap.view-mode {
+    min-height: 120px;
+    max-height: none;
+    /* Static diagram — no pan chrome; clip to fit box. */
+    overflow: hidden;
+    cursor: default;
+}
+
+.bracket-canvas {
+    position: relative;
+    min-width: 1200px;
+    min-height: 800px;
+    /* Allow items dragged past 0,0 to remain paintable while panning. */
+    overflow: visible;
+}
+
+.bracket-wires-layer {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    overflow: visible;
+    z-index: 1;
+}
+
+.bracket-wire {
+    fill: none;
+    stroke: #495057;
+    stroke-width: 2;
+    /* Visual only — clicks go to .bracket-wire-hit / the group. */
+    pointer-events: none;
+}
+
+.bracket-wire-group:hover .bracket-wire,
+.bracket-wire.selected {
+    stroke: #0d6efd;
+    stroke-width: 3;
+}
+
+.bracket-wire-hit {
+    fill: none;
+    stroke: transparent;
+    stroke-width: 12;
+    pointer-events: stroke;
+    cursor: pointer;
+}
+
+.bracket-wire-group {
+    cursor: pointer;
+}
+
+.bracket-match {
+    position: absolute;
+    z-index: 2;
+    background: #fff;
+    border: 2px solid #343a40;
+    border-radius: 6px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+    /* Absolute children pin team rows to the same Y as the input ports
+       (PORT_INSET_Y_FRAC_TOP/BOT = 30% / 70% in bracket.rs). */
+    padding: 0;
+    box-sizing: border-box;
+    min-width: 160px;
+    min-height: 70px;
+}
+
+.bracket-match.selected {
+    border-color: #0d6efd;
+    box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.35);
+}
+
+/* View-mode status outlines (hidden while editing so selection stays clear). */
+.bracket-match.status-in-progress {
+    border-color: #e6a800;
+    box-shadow: 0 0 0 1px rgba(230, 168, 0, 0.35);
+}
+
+.bracket-match.status-completed {
+    border-color: #198754;
+    box-shadow: 0 0 0 1px rgba(25, 135, 84, 0.28);
+}
+
+.bracket-team-slot .winner-badge {
+    flex-shrink: 0;
+    margin-left: 2px;
+    font-size: 0.65em;
+    padding: 0.05rem 0.3rem;
+    line-height: 1.2;
+}
+
+.bracket-match.dragging {
+    opacity: 0.92;
+    z-index: 5;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+}
+
+.bracket-match-name {
+    position: absolute;
+    left: 10px;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    text-align: center;
+    font-weight: 600;
+    font-size: 0.8rem;
+    color: #212529;
+    line-height: 1.2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 0 4px;
+    pointer-events: auto;
+}
+
+.bracket-match-row {
+    position: absolute;
+    left: 10px;
+    right: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    min-height: 1.4em;
+    font-size: 0.85rem;
+    transform: translateY(-50%);
+}
+
+/* Keep in sync with PORT_INSET_Y_FRAC_TOP / BOT in bracket.rs.
+   slot-top/bot are geometric (winner/loser output side); team content
+   is assigned to them based on inputs_flipped. */
+.bracket-match-row.slot-top {
+    top: 30%;
+}
+
+.bracket-match-row.slot-bot {
+    top: 70%;
+}
+
+.bracket-team-slot {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+}
+
+.bracket-team-slot img.avatar,
+.bracket-team-slot .avatar-fallback {
+    width: 1.25em;
+    height: 1.25em;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+}
+
+.bracket-team-slot .avatar-fallback {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: #6c757d;
+    color: #fff;
+    font-size: 0.7em;
+    font-weight: 700;
+    line-height: 1;
+    text-transform: uppercase;
+}
+
+.bracket-team-slot .label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.bracket-port-badge {
+    flex-shrink: 0;
+    width: 1.25rem;
+    height: 1.25rem;
+    border-radius: 3px;
+    background: #e9ecef;
+    color: #212529;
+    font-size: 0.7rem;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #adb5bd;
+}
+
+.bracket-port-badge.winner {
+    background: #d1e7dd;
+    border-color: #198754;
+    color: #0f5132;
+}
+
+.bracket-port-badge.loser {
+    background: #f8d7da;
+    border-color: #dc3545;
+    color: #842029;
+}
+
+.bracket-port-badge.clickable {
+    cursor: pointer;
+    user-select: none;
+}
+.bracket-canvas-wrap.edit-mode .bracket-port-badge.clickable:hover {
+    filter: brightness(0.92);
+    box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.35);
+}
+.bracket-port-badge.clickable.unused {
+    opacity: 0.55;
+}
+.bracket-canvas-wrap.edit-mode .bracket-port-badge.clickable.unused:hover {
+    opacity: 1;
+}
+
+/* External input/output port stubs */
+.bracket-port-stub {
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #343a40;
+    border: 2px solid #fff;
+    box-sizing: border-box;
+    z-index: 3;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+}
+
+.bracket-port-stub.output {
+    background: #198754;
+}
+
+.bracket-port-stub.output.loser {
+    background: #dc3545;
+}
+
+/* Net labels sitting on the input side */
+.bracket-net-label {
+    position: absolute;
+    z-index: 4;
+    transform: translate(-100%, -50%);
+    margin-left: -10px;
+    max-width: 180px;
+    background: #fff;
+    border: 1px solid #adb5bd;
+    border-radius: 999px;
+    padding: 1px 8px 1px 6px;
+    font-size: 0.75rem;
+    line-height: 1.4;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: default;
+}
+
+.bracket-net-label.editable {
+    cursor: pointer;
+}
+
+.bracket-net-label.editable:hover {
+    border-color: #0d6efd;
+    background: #e7f1ff;
+}
+
+.bracket-net-label img.token-icon {
+    width: 0.95em;
+    height: 0.95em;
+    object-fit: contain;
+    flex-shrink: 0;
+    /* Bootstrap primary blue-ish tint for SVG icons */
+    filter: invert(27%) sepia(98%) saturate(2476%) hue-rotate(226deg) brightness(99%) contrast(101%);
+}
+
+.bracket-net-label img.avatar {
+    width: 1em;
+    height: 1em;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+}
+
+.bracket-net-label .token-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.bracket-resize-handle {
+    position: absolute;
+    z-index: 6;
+    background: #0d6efd;
+    border: 2px solid #fff;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15);
+}
+
+.bracket-resize-handle.corner {
+    right: -5px;
+    bottom: -5px;
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+    cursor: nwse-resize;
+}
+
+.bracket-resize-handle.edge-e {
+    top: 20%;
+    right: -4px;
+    width: 8px;
+    height: 60%;
+    border-radius: 2px;
+    cursor: ew-resize;
+}
+
+.bracket-resize-handle.edge-s {
+    left: 20%;
+    bottom: -4px;
+    width: 60%;
+    height: 8px;
+    border-radius: 2px;
+    cursor: ns-resize;
+}
+
+.bracket-text {
+    position: absolute;
+    z-index: 3;
+    color: #212529;
+    font-weight: 500;
+    line-height: 1.2;
+    white-space: pre;
+    cursor: default;
+    padding: 2px 4px;
+    border-radius: 3px;
+}
+
+.bracket-text.selected {
+    outline: 2px solid #0d6efd;
+    background: rgba(13, 110, 253, 0.08);
+}
+
+.bracket-labeled-team {
+    position: absolute;
+    z-index: 3;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background: #fff;
+    border: 2px solid #343a40;
+    border-radius: 999px;
+    box-sizing: border-box;
+    width: fit-content;
+    max-width: none;
+    white-space: nowrap;
+    font-size: 0.85rem;
+    line-height: 1.2;
+}
+
+.bracket-labeled-team.selected {
+    border-color: #0d6efd;
+    box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.35);
+}
+
+.bracket-labeled-team .caption {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+}
+
+.bracket-labeled-team .caption-prefix {
+    color: #495057;
+    font-weight: 600;
+}
+
+.bracket-labeled-team .avatar {
+    width: 1.25em;
+    height: 1.25em;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+}
+
+.bracket-labeled-team .label {
+    white-space: nowrap;
+}
+
+.bracket-image {
+    position: absolute;
+    z-index: 1;
+    box-sizing: border-box;
+    border: 1px solid transparent;
+}
+
+.bracket-image.selected {
+    border-color: #0d6efd;
+    box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.35);
+}
+
+.bracket-marquee {
+    position: absolute;
+    border: 1px dashed #0d6efd;
+    background: rgba(13, 110, 253, 0.08);
+    z-index: 10;
+    pointer-events: none;
+}
+
+.bracket-empty-hint {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #6c757d;
+    pointer-events: none;
+    z-index: 0;
+    padding: 2rem;
+    text-align: center;
+}
+
+.bracket-add-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 1050;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 4rem 1rem 1rem;
+}
+
+.bracket-add-modal {
+    background: #fff;
+    border-radius: 0.5rem;
+    width: min(480px, 100%);
+    max-height: 70vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 0.5rem 1.5rem rgba(0, 0, 0, 0.2);
+}
+
+.bracket-add-modal-header,
+.bracket-add-modal-footer {
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid #dee2e6;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.bracket-add-modal-footer {
+    border-bottom: none;
+    border-top: 1px solid #dee2e6;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}
+
+.bracket-add-modal-search {
+    border-bottom: 1px solid #f1f3f5;
+}
+
+.bracket-add-modal-body {
+    padding: 0.5rem 0;
+}
+
+.bracket-keyboard-focus {
+    outline: none;
+    /* Fill the layout so clicks on side gutters still land on the hotkey root. */
+    min-height: calc(100vh - 120px);
+}
+
+.bracket-keyboard-focus:focus {
+    outline: none;
+}
+
+.bracket-add-match-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    border: none;
+    background: transparent;
+    padding: 0.55rem 1rem;
+    border-bottom: 1px solid #f1f3f5;
+}
+
+.bracket-add-match-item:hover,
+.bracket-add-match-item:focus {
+    background: #e7f1ff;
+}
+
+/* First filtered result — accepted by Enter in the search box */
+.bracket-add-match-item.is-top {
+    background: #e7f1ff;
+}
+
+.bracket-add-match-item .meta {
+    font-size: 0.8rem;
+    color: #6c757d;
+}
+
+.bracket-status {
+    font-size: 0.85rem;
+}
+
+
+/* Infinite snap grid — dots (screen space, pan/zoom locked, max detail via --grid-size). */
+.bracket-canvas-wrap.show-grid {
+    background-color: #ffffff;
+    background-image: radial-gradient(
+        circle at center,
+        rgba(13, 110, 253, calc(0.45 * var(--grid-alpha, 1))) 1.1px,
+        transparent 1.25px
+    );
+    background-size: var(--grid-size, 20px) var(--grid-size, 20px);
+    background-position: var(--grid-ox, 0px) var(--grid-oy, 0px);
+}
+
+.bracket-ratsnest-menu {
+    min-width: 11rem;
+    padding: 0.35rem 0;
+}
+
+.bracket-grid-select {
+    width: auto;
+    min-width: 4.5rem;
+    display: inline-block;
+    padding-top: 0.15rem;
+    padding-bottom: 0.15rem;
+}
+
+/* Already-placed rows in Add Match modal */
+.bracket-add-match-item.already-placed {
+    opacity: 0.45;
+    cursor: not-allowed;
+    background: #f1f3f5;
+    color: #6c757d;
+}
+.bracket-add-match-item.already-placed:hover {
+    background: #f1f3f5;
+}
+.bracket-add-match-item .already-tag {
+    font-style: italic;
+    color: #868e96;
+}
+
+/* Airwires (refs / field) — always on top, straight strokes */
+.bracket-airwires-layer {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    overflow: visible;
+    z-index: 50;
+}
+
+.bracket-airwire {
+    fill: none;
+    stroke-width: 1.25;
+    stroke-linecap: round;
+    pointer-events: none;
+    opacity: 0.9;
+}
+
+.bracket-airwire.ref {
+    stroke: #e6c200;
+}
+
+.bracket-airwire.field {
+    /* stroke set inline per field color */
+}
+
+/* Field hover highlight is pure CSS driven by .field-hovering on the wrap
+   + .field-hot on matching [data-field] nodes (toggled in JS, no re-render). */
+.bracket-airwire-group.field {
+    pointer-events: stroke;
+    cursor: default;
+}
+
+.bracket-airwire-hit.field {
+    fill: none;
+    stroke-width: 14;
+    stroke-linecap: round;
+    pointer-events: stroke;
+}
+
+.bracket-canvas-wrap.field-hovering .bracket-match[data-field] {
+    opacity: 0.35;
+    filter: grayscale(0.35);
+}
+
+.bracket-canvas-wrap.field-hovering .bracket-match.field-hot {
+    opacity: 1;
+    filter: none;
+    border-color: #0d6efd;
+    box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.45), 0 4px 14px rgba(13, 110, 253, 0.2);
+    z-index: 8;
+}
+
+.bracket-canvas-wrap.field-hovering .bracket-airwire.field {
+    opacity: 0.18;
+}
+
+.bracket-canvas-wrap.field-hovering .bracket-airwire-group.field-hot .bracket-airwire.field {
+    opacity: 1;
+    stroke-width: 3;
+    filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.35));
+}
+
+/* Floating field-name tip (HTML, not SVG <title>) */
+.bracket-field-tooltip {
+    position: fixed;
+    z-index: 10000;
+    pointer-events: none;
+    background: rgba(33, 37, 41, 0.92);
+    color: #fff;
+    font-size: 0.75rem;
+    line-height: 1.2;
+    padding: 0.25rem 0.45rem;
+    border-radius: 0.25rem;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    white-space: nowrap;
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.bracket-airwire-group.ref {
+    pointer-events: stroke;
+    cursor: default;
+}
+
+.bracket-airwire-hit.ref {
+    fill: none;
+    stroke-width: 14;
+    stroke-linecap: round;
+    pointer-events: stroke;
+}
+
+.bracket-airwire.ref.rtl {
+    stroke: #e6194b;
+}
