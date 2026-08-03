@@ -183,7 +183,6 @@ enum Route {
     #[route("/docs/terms.md")]
     Terms {},
 
-
     #[route("/docs/license.md")]
     License {},
 
