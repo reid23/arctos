@@ -76,9 +76,9 @@ create a bunch of fake teams on the official site. What can i do?**
 
 **How is my data used? What can and can't other people see?**
 
-   - The Arctos [privacy policy](privacy-policy.md) describes how we use
+   - The Arctos [privacy policy](/docs/privacy-policy.md) describes how we use
      all data in more legally relevant terms. The [data accessibility
-     guide](data-accessibility-guide.md) is a more approachable and
+     guide](/docs/data-accessibility-guide.md) is a more approachable and
      practical guide to when and how data you enter into Arctos gets
      publicized.
 
@@ -187,9 +187,9 @@ With the above goals in mind, Arctos has been designed to be:
 Arctos is an open-source project, hosted on
 [github](https://github.com/reid23/arctos) and licensed with
 GPLv3. Anyone can view the source code and propose their own changes
-by forking the repository, commiting changes, and opening a pull
+by forking the repository, committing changes, and opening a pull
 request. If you are interested in contributing, please see see the
-[contributing guide](https://github.com/reid23/arctos/CONTRIBUTING.md)
+[contributing guide](https://github.com/reid23/arctos/blob/main/CONTRIBUTING.md)
 for more information.
 
 If you have feature requests or bug reports, please submit [an Issue
@@ -257,7 +257,7 @@ Here's, briefly, how it works.
      just the points and displayed in the same place as the live
      stream footage.
   2. TOs set up stones, playing them from the stones player. Multiple
-     devices can be used to play syncronized stones from multiple
+     devices can be used to play synchronized stones from multiple
      speakers.
   3. Players check the schedule to see when they need to play.
      - guarantees provided by the dynamic scheduling system ensure
@@ -302,7 +302,7 @@ devices have very good clocks, so once we compute the offset between
 our clock and the server's clock, clients know exactly when stones are
 played, without needing any expensive low-latency network shenanigans.
 
-When head refs run games, we use this to syncronize the stone counter
+When head refs run games, we use this to synchronize the stone counter
 on their device with the actual stones being played on the field, so
 their device counts stones precisely just based on when they start and
 stop the point locally, regardless of the server ping time.
@@ -485,7 +485,7 @@ All matches have (among other things) the following information:
 ### Tags and References: Specifying Teams
 
 Each match as two teams playing in it as well as any number of teams
-assigned to ref. Let's take a breif aside on how to specify teams. You
+assigned to ref. Let's take a brief aside on how to specify teams. You
 have three options:
 
   1. explicit team name: just type their name (autocomplete will help
@@ -610,7 +610,7 @@ In order to implement this, dynamic (`fast` or `safe`) matches[^2] may
 have a *skip condition*, an boolean expression in lisp-like language
 called Arctos Schedule Script (ASS).
 
-You can see the full ASS docs [here](arctos-schedule-script.md).
+You can see the full ASS docs [here](/docs/arctos-schedule-script.md).
 
 ### Exporting and Importing Schedule Files
 
@@ -718,4 +718,3 @@ this may take a while, since it involves re-encoding all of the video.
 If you want to add overlays like the scoreboard, you'll still need to
 run OBS and use a virtual camera setup to pass the feed to the
 recording page.
-

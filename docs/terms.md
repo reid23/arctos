@@ -21,7 +21,7 @@ accounts on any server running any of the Services.
 
 By using the Services, you acknowledge that you have read and are
 legally bound by these Terms, which expressly incorporate by reference
-Arctos’s [Privacy Policy](privacy-policy.md). If you do not agree to these
+Arctos’s [Privacy Policy](/docs/privacy-policy.md). If you do not agree to these
 Terms, please do not use the Services. We reserve the right to modify
 or amend these Terms from time to time without prior notice. Your
 continued use of the Services following the posting of changes to
@@ -114,7 +114,7 @@ Your Content outside of our provision of the Service.
 ### 5. License Grant to Other Users
 
 Any User-Generated Content you post publicly may be viewed by
-others. By posting Your Content publically, you agree to allow others
+others. By posting Your Content publicly, you agree to allow others
 to view and make their own copies of Your Content.
 
 ### 6. Moral Rights
@@ -194,7 +194,7 @@ and use of Services.
 
 ## H. License
 
-These Terms as well as the attached [Privacy Policy](privacy-policy.md)
+These Terms as well as the attached [Privacy Policy](/docs/privacy-policy.md)
 are adapted from [GitHub's Privacy
 Statement](https://help.github.com/articles/github-privacy-statement/)
 and are licensed under the [Creative Commons Attribution
