@@ -85,8 +85,9 @@ enum Route {
     #[route("/:url/bracket")]
     Bracket { url: String },
 
-    #[route("/:url/bracket-setup")]
-    BracketSetup { url: String },
+
+    #[route("/:url/legacy-bracket")]
+    LegacyBracket { url: String },
 
     #[route("/:url/settings")]
     TournamentSettings { url: String },
