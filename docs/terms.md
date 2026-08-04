@@ -1,6 +1,6 @@
 # Terms of Service
 
-Updated: Jan 10, 2026
+Updated: Aug 3, 2026
 
 Thank you for using Arctos! We're happy to have you here. Please read
 this Terms of Service agreement carefully before accessing or using
@@ -86,13 +86,13 @@ fully comply with any third party licenses relating to Content you
 post.
 
 Because you retain ownership of and responsibility for Your Content,
-we need you to grant us — and other GitHub Users — certain legal
+we need you to grant us — and other Arctos Users — certain legal
 permissions, listed in Sections C.4 — C.6. These license grants apply
 to Your Content. If you upload Content that already comes with a
 license granting Arctos the permissions we need to run our Service, no
 additional license is required. You understand that you will not
-receive any payment for any of the rights granted in Sections C.4 —
-C.6. The licenses you grant to us will end when you remove Your
+receive any payment for any of the rights granted in Sections C.4 — 
+C.6. The licenses you grant to us will end when you remove Your 
 Content from our servers.
 
 ### 4. License Grant to Us
@@ -123,7 +123,7 @@ You retain all moral rights to Your Content that you upload, publish,
 or submit to any part of the Service, including the rights of
 integrity and attribution. However, you waive these rights and agree
 not to assert them against us, to enable us to reasonably exercise the
-rights granted in Section D.4, but not otherwise.
+rights granted in Section C.4, but not otherwise.
 
 To the extent this agreement is not enforceable by applicable law, you
 grant Arctos the rights we need to use Your Content without
@@ -139,12 +139,12 @@ artificial intelligence model, machine learning system, or similar
 technology (a "Commercial AI System"), you hereby waive any and all
 policies, terms, conditions, or contractual provisions governing
 products, services, websites or datasets you own or operate that would
-otherwise prohibit, restrict, or place conditions upon GitHub's Access
-to any publicly accessible data, information or content associated
-with your products or services, including for the purpose of
-developing or training any Commercial AI System. You further agree not
-to impose technical or other targeted measures to restrict or
-retaliate against such Access.
+otherwise prohibit, restrict, or place conditions upon our Access to
+any publicly accessible data, information or content associated with 
+your products or services, including for the purpose of developing
+or training any Commercial AI System. You further agree not to impose 
+technical or other targeted measures to restrict or retaliate against
+such Access.
 
 ## D. Copyright Infringement and DMCA Policy
 
@@ -152,7 +152,7 @@ If you believe that content on our website violates your copyright or
 are a copyright owner and you believe that content on Arctos violates
 your rights, please contact us by emailing reid[at]xz[dot]ax and
 including "DMCA Request" in the subject line. There may be legal
-consequences for sending a false or frrivolous takedown notice. Before
+consequences for sending a false or frivolous takedown notice. Before
 sending a takedown request, you must consider legal uses such as fair
 use and licensed uses.
 
