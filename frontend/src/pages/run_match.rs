@@ -2494,14 +2494,14 @@ mod quick_timer_tests {
     #[test]
     fn magnitude_snaps_to_multiples_of_five() {
         assert_eq!(drag_magnitude_to_stones(0.0, 0.0), 0);
-        // 12px per 5 stones; ~6px (half step) rounds to 5.
-        assert_eq!(drag_magnitude_to_stones(6.5, 0.0), 5);
-        // 24px -> 10, direction-independent (use y, and negatives).
-        assert_eq!(drag_magnitude_to_stones(0.0, -24.0), 10);
-        // 3-4-5 triangle: magnitude 60px -> 25 stones.
-        assert_eq!(drag_magnitude_to_stones(36.0, 48.0), 25);
+        // 30px per 5 stones; ~15px (half step) rounds to 5.
+        assert_eq!(drag_magnitude_to_stones(15.5, 0.0), 5);
+        // 60px -> 10, direction-independent (use y, and negatives).
+        assert_eq!(drag_magnitude_to_stones(0.0, -60.0), 10);
+        // 3-4-5 triangle: magnitude 150px -> 25 stones.
+        assert_eq!(drag_magnitude_to_stones(90.0, 120.0), 25);
         // Small jitter below half a step stays 0 (tap cancel).
-        assert_eq!(drag_magnitude_to_stones(3.0, 0.0), 0);
+        assert_eq!(drag_magnitude_to_stones(10.0, 0.0), 0);
     }
 
     #[test]
