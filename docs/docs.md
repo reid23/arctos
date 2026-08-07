@@ -76,9 +76,9 @@ create a bunch of fake teams on the official site. What can i do?**
 
 **How is my data used? What can and can't other people see?**
 
-   - The Arctos [privacy policy](/docs/privacy-policy.md) describes how we use
+   - The Arctos [privacy policy](privacy-policy.md) describes how we use
      all data in more legally relevant terms. The [data accessibility
-     guide](/docs/data-accessibility-guide.md) is a more approachable and
+     guide](data-accessibility-guide.md) is a more approachable and
      practical guide to when and how data you enter into Arctos gets
      publicized.
 
@@ -610,7 +610,7 @@ In order to implement this, dynamic (`fast` or `safe`) matches[^2] may
 have a *skip condition*, an boolean expression in lisp-like language
 called Arctos Schedule Script (ASS).
 
-You can see the full ASS docs [here](/docs/arctos-schedule-script.md).
+You can see the full ASS docs [here](arctos-schedule-script.md).
 
 ### Exporting and Importing Schedule Files
 

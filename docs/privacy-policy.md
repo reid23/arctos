@@ -5,9 +5,9 @@ Updated: Jan 9, 2026
 This policy describes generally speaking what we do with data we
 generically collect from you. For more information on specifically
 when and where information you enter is accessible to others, see the
-[data accessibility guide](/docs/data-accessibility-guide.md).
+[data accessibility guide](data-accessibility-guide.md).
 
-Definitions from the [Arctos Terms of Service](/docs/terms.md) are explicitly
+Definitions from the [Arctos Terms of Service](terms.md) are explicitly
 incorporated by reference into this policy.
 
 ## The short version

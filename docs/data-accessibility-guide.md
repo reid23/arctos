@@ -35,7 +35,7 @@ attached, we will never group injuries by user, etc.).
    to the day, and no information about author or target will not be
    shown besides the target type (team or player)
    
- The [user docs](/docs/docs.md#penalties) have more information on the types
+ The [user docs](docs.md#penalties) have more information on the types
  of notes, where they can be seen, and how they get written.
 
 !!! warning "Future Changes"  
