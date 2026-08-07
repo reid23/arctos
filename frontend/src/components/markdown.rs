@@ -3,10 +3,11 @@ use dioxus::prelude::*;
 
 #[component]
 pub fn Markdown(page: String) -> Element {
-    let data = use_resource(use_reactive(&page, move |page| {
-        let value = page.clone();
-        async move { api::markdown_page(&value).await.map_err(|e| e.to_string()) }
-    }));
+  let page_state = use_signal(|| page);
+  
+    let data = use_resource(move || async move {
+        api::markdown_page(&page_state()).await.map_err(|e| e.to_string())
+    });
     let val = data.value();
 
     rsx! {
