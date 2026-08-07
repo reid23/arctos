@@ -174,22 +174,22 @@ enum Route {
     #[route("/thanks")]
     Thanks {},
 
-    #[route("/docs/docs.md")]
+    #[route("/docs.md")]
     Docs {},
 
-    #[route("/docs/privacy-policy.md")]
+    #[route("/privacy-policy.md")]
     Privacy {},
 
-    #[route("/docs/terms.md")]
+    #[route("/terms.md")]
     Terms {},
 
-    #[route("/docs/license.md")]
+    #[route("/license.md")]
     License {},
 
-    #[route("/docs/arctos-schedule-script.md")]
+    #[route("/arctos-schedule-script.md")]
     ArctosScheduleScript {},
 
-    #[route("/docs/data-accessibility-guide.md")]
+    #[route("/data-accessibility-guide.md")]
     DataAccessibilityGuide {},
 }
 
