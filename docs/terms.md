@@ -114,7 +114,7 @@ Your Content outside of our provision of the Service.
 ### 5. License Grant to Other Users
 
 Any User-Generated Content you post publicly may be viewed by
-others. By posting Your Content publically, you agree to allow others
+others. By posting Your Content publicly, you agree to allow others
 to view and make their own copies of Your Content.
 
 ### 6. Moral Rights

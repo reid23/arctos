@@ -189,7 +189,7 @@ Arctos is an open-source project, hosted on
 GPLv3. Anyone can view the source code and propose their own changes
 by forking the repository, committing changes, and opening a pull
 request. If you are interested in contributing, please see see the
-[contributing guide](https://github.com/reid23/arctos/CONTRIBUTING.md)
+[contributing guide](https://github.com/reid23/arctos/blob/main/CONTRIBUTING.md)
 for more information.
 
 If you have feature requests or bug reports, please submit [an Issue
