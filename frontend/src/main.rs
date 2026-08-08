@@ -171,25 +171,25 @@ enum Route {
     #[route("/new-tournament")]
     NewTournament {},
 
-    #[route("/docs")]
-    Docs {},
-
-    #[route("/privacy-policy")]
-    Privacy {},
-
-    #[route("/terms")]
-    Terms {},
-
     #[route("/thanks")]
     Thanks {},
 
-    #[route("/license")]
+    #[route("/docs.md")]
+    Docs {},
+
+    #[route("/privacy-policy.md")]
+    Privacy {},
+
+    #[route("/terms.md")]
+    Terms {},
+
+    #[route("/license.md")]
     License {},
 
-    #[route("/arctos-schedule-script")]
+    #[route("/arctos-schedule-script.md")]
     ArctosScheduleScript {},
 
-    #[route("/data-accessibility-guide")]
+    #[route("/data-accessibility-guide.md")]
     DataAccessibilityGuide {},
 }
 
