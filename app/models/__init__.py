@@ -17,6 +17,7 @@ from app.models.league import League
 from app.models.tournament import Tournament, TO, Field, Tag
 from app.models.registration import TeamRegistration, PlayerRegistration
 from app.models.match import Match, Point, MatchNote
+from app.models.bracket import BracketImage, BracketLabeledTeam, BracketPlacement, BracketText
 from app.models.penalty_type import PenaltyType
 from app.models.records import Injury, HeadRef
 from app.models.sidecomp import SideComp, SideCompRegistration, SideCompResult
@@ -44,6 +45,10 @@ __all__ = [
     "Match",
     "Point",
     "MatchNote",
+    "BracketPlacement",
+    "BracketText",
+    "BracketLabeledTeam",
+    "BracketImage",
     "Camera",
     "PenaltyType",
     "Injury",

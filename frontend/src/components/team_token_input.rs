@@ -429,19 +429,12 @@ fn collect_autocomplete(
         }
     }
     for m in matches.iter() {
-        let name_lower = m.name.to_lowercase();
-        if name_lower.contains(&q) {
+        if format!("{} winner", m.name.to_lowercase()).contains(&q) {
             let winner_value = format!("{}::winner", m.name);
             let winner_token = Token {
                 kind: TokenKind::Winner,
                 display: format!("{} winner", m.name),
                 value: winner_value.clone(),
-            };
-            let loser_value = format!("{}::loser", m.name);
-            let loser_token = Token {
-                kind: TokenKind::Loser,
-                display: format!("{} loser", m.name),
-                value: loser_value.clone(),
             };
             out.push(AutocompleteOption {
                 kind: TokenKind::Winner,
@@ -449,6 +442,14 @@ fn collect_autocomplete(
                 value: winner_value,
                 resolved: resolve_token_to_team(&winner_token, team_options, tags, matches),
             });
+        }
+        if format!("{} loser", m.name.to_lowercase()).contains(&q) {
+            let loser_value = format!("{}::loser", m.name);
+            let loser_token = Token {
+                kind: TokenKind::Loser,
+                display: format!("{} loser", m.name),
+                value: loser_value.clone(),
+            };
             out.push(AutocompleteOption {
                 kind: TokenKind::Loser,
                 display: format!("{} loser", m.name),

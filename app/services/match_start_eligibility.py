@@ -15,7 +15,7 @@ Why modal has three sections:
       If user is player not registered -> "you are not registered for this tournament."
       If user is player registered but unattached -> "you are registered as unattached"
       If user is player registered for a team -> "you are currently registered for [team name]"
-      If allow anyone -> "anyone registered for this tournament can head ref."
+      If allow anyone -> "anyone registered for this event (or its league) can head ref."
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ def get_who_allowed_explanation(tournament_url: str, match=None) -> List[str]:
     Based on tournament settings, who should be allowed to head ref?
     - If explicitly listed refs exist: "[list] are allowed"
     - If reffing teams allowed: "players registered for assigned ref teams [list of teams] are allowed."
-    - If allow anyone: "anyone registered for this tournament can head ref."
+    - If allow anyone: "anyone registered for this event (or its league) can head ref."
     """
     from app.error_values import Err, Ok
     from app.services._common import get_tournament_or_err
@@ -66,7 +66,7 @@ def get_who_allowed_explanation(tournament_url: str, match=None) -> List[str]:
             lines.append(f"Players registered for assigned ref teams ({', '.join(names)}) are allowed.")
 
     if tournament.head_refs_allow_anyone:
-        lines.append("Anyone registered for this tournament can head ref.")
+        lines.append("Anyone registered for this event (or its league) can head ref.")
 
     if not lines:
         lines.append("No head ref policy is configured for this tournament.")
@@ -84,7 +84,6 @@ def get_current_user_explanation(tournament_url: str, user) -> List[str]:
     - If player registered for a team: "you are currently registered for [team name]"
     """
     from app.utils.user_helpers import is_player, is_team
-    from models import PlayerRegistration
 
     lines: List[str] = []
 
@@ -106,13 +105,17 @@ def get_current_user_explanation(tournament_url: str, user) -> List[str]:
         lines.append("Could not determine your user.")
         return lines
 
+    from models import Tournament
+    from app.services.registration_resolver import player_registration_for_tournament
+
+    tournament = Tournament.query.get(tournament_url) if tournament_url else None
     reg = (
-        PlayerRegistration.query.filter_by(
-            event=tournament_url,
-            player=user_id,
-            status=RegistrationStatus.CONFIRMED,
-        ).first()
-        if tournament_url
+        player_registration_for_tournament(
+            tournament,
+            user_id,
+            statuses=[RegistrationStatus.CONFIRMED],
+        )
+        if tournament is not None
         else None
     )
 

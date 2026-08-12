@@ -291,8 +291,8 @@ pub fn PlayerProfile(id: Signal<String>) -> Element {
                                                         }
                                                     }
                                                     td {
-                                                        if let Some(team) = &r.team {
-                                                            Link { to: Route::TeamProfilePage { id: team.clone() }, "{team}" }
+                                                        if let (Some(team), Some(id)) = (&r.team_pseudonym, &r.team) {
+                                                            Link { to: Route::TeamProfilePage { id: id.clone() }, "{team}" }
                                                         } else {
                                                             "Unattached"
                                                         }

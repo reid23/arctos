@@ -6,6 +6,7 @@ import uuid
 from datetime import timedelta
 
 import sqlalchemy as sa
+from sqlalchemy.orm import validates
 
 from app.domain.enums import (
     MatchStatus,
@@ -152,6 +153,10 @@ class Match(db.Model):
         post_update=True,
         backref="next_of",
     )
+
+    @validates("name")
+    def _strip_name(self, key: str, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
 
     def get_skip_condition_dependencies(self) -> dict[str, set[str]]:
         """

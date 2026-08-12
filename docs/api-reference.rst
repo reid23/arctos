@@ -7,6 +7,7 @@ corresponds to a top-level module or subpackage under ``app/``.
 .. toctree::
    :maxdepth: 1
 
+   scheduling
    api/app
    api/app.filters
    api/app.exceptions

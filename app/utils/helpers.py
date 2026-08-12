@@ -8,7 +8,7 @@ import re
 from flask_login import current_user
 from app.domain.enums import RegistrationStatus
 from app.services._common import current_user_type
-from models import Tournament, PlayerRegistration, TeamRegistration, Team
+from models import Tournament, Team
 
 
 def get_registrable_config(tournament):
@@ -108,8 +108,12 @@ def can_head_ref_match(tournament_url: str, player_id: str, match=None) -> bool:
 
     Returns:
         True if the player can head ref, False otherwise
+
+    Registration checks honour both standalone (event-scoped) and league
+    tournaments (league-scoped player registrations).
     """
     from app.services.dual_write import get_head_ref_allowlist_ids, get_match_ref_team_ids
+    from app.services.registration_resolver import player_registrations_for_tournament
 
     tournament = Tournament.query.get(tournament_url)
     if not tournament:
@@ -119,27 +123,26 @@ def can_head_ref_match(tournament_url: str, player_id: str, match=None) -> bool:
     if player_id in get_head_ref_allowlist_ids(tournament):
         return True
 
-    # If allow anyone is enabled, check if player is registered
+    # If allow anyone is enabled, check if player is registered for this
+    # tournament's registration scope (event or parent league).
     if tournament.head_refs_allow_anyone:
-        player_reg = PlayerRegistration.query.filter_by(
-            event=tournament_url,
-            player=player_id,
-            status=RegistrationStatus.CONFIRMED,
-        ).first()
-        return player_reg is not None
+        regs = player_registrations_for_tournament(
+            tournament,
+            statuses=[RegistrationStatus.CONFIRMED],
+        )
+        return any(pr.player == player_id for pr in regs)
 
     # Check reffing teams (requires match context)
     if tournament.head_refs_allow_reffing_teams and match:
         for team_id in get_match_ref_team_ids(match):
             if not team_id:
                 continue
-            player_reg = PlayerRegistration.query.filter_by(
-                event=tournament_url,
-                player=player_id,
-                team=team_id,
-                status=RegistrationStatus.CONFIRMED,
-            ).first()
-            if player_reg:
+            regs = player_registrations_for_tournament(
+                tournament,
+                team_id=team_id,
+                statuses=[RegistrationStatus.CONFIRMED],
+            )
+            if any(pr.player == player_id for pr in regs):
                 return True
 
     return False
@@ -188,7 +191,7 @@ def get_team_display_name_for_event(tournament_url: str, team_id: str) -> str:
     Priority:
 
     1. :class:`~app.models.registration.TeamRegistration` pseudonym (if
-       confirmed and non-empty).
+       confirmed and non-empty), including league-scoped registrations.
     2. :attr:`~app.models.user.Team.name`.
     3. *team_id* as a fallback.
 
@@ -201,11 +204,10 @@ def get_team_display_name_for_event(tournament_url: str, team_id: str) -> str:
     """
     if not team_id:
         return ""
-    from app.domain.enums import TeamRegistrationStatus
+    from app.services.registration_resolver import team_registration_for_tournament
 
-    reg = TeamRegistration.query.filter_by(
-        event=tournament_url, team=team_id, status=TeamRegistrationStatus.CONFIRMED
-    ).first()
+    tournament = Tournament.query.get(tournament_url)
+    reg = team_registration_for_tournament(tournament, team_id) if tournament else None
     if reg and getattr(reg, "pseudonym", None):
         return reg.pseudonym
     team = Team.query.get(team_id)

@@ -21,7 +21,7 @@ fn page_title_for_route(route: &Route) -> String {
         Route::Schedule { url } => format!("{url} Schedule"),
         Route::Results { url } => format!("{url} Results"),
         Route::Bracket { url } => format!("{url} Bracket"),
-        Route::BracketSetup { url } => format!("{url} Bracket Setup"),
+        Route::LegacyBracket { url } => format!("{url} Legacy Bracket"),
         Route::TournamentSettings { url } => format!("{url} Settings"),
         Route::TournamentRegister { url } => format!("{url} Register"),
         Route::Manage { url } => format!("{url} Manage"),
