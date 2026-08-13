@@ -1180,9 +1180,9 @@ pub fn Schedule(url: String, view: String, team: String, field: String) -> Eleme
                             on_edit_match: {
                                 let matches_for_edit = data.matches.clone();
                                 move |id: String| {
-                                    // Break-like blocks are edited as a same-name group.
+                                    // Structural blocks (breaks/joins) are edited as a same-name group.
                                     if let Some(m) = matches_for_edit.iter().find(|m| m.uuid == id) {
-                                        if is_break_like_match(m) {
+                                        if is_structural_match(m) {
                                             selected_break_group.set(m.name.clone());
                                             active_modal.set("break_group".to_string());
                                             return;
@@ -1208,7 +1208,7 @@ pub fn Schedule(url: String, view: String, team: String, field: String) -> Eleme
                                 let matches_for_edit = data.matches.clone();
                                 move |id: String| {
                                     if let Some(m) = matches_for_edit.iter().find(|m| m.uuid == id) {
-                                        if is_break_like_match(m) {
+                                        if is_structural_match(m) {
                                             selected_break_group.set(m.name.clone());
                                             active_modal.set("break_group".to_string());
                                             return;
@@ -1465,11 +1465,11 @@ fn CreateMatchModal(
     let validate_create_rc: Rc<RefCell<Box<dyn FnMut() -> bool>>> =
         Rc::new(RefCell::new(Box::new(move || {
             let st = schedule_type();
-            if st == "BREAK" || st == "STATBREAK" {
-                // Break groups: one row per selected field; no previous match
-                // needed (each row appends at its field's chain tail).
+            if st == "BREAK" || st == "STATBREAK" || st == "JOIN" {
+                // Structural groups: one row per selected field; no previous
+                // match needed (each row appends at its field's chain tail).
                 if break_fields().is_empty() {
-                    error.set(Some("Select at least one field for the break.".to_string()));
+                    error.set(Some("Select at least one field.".to_string()));
                     return false;
                 }
                 if st == "STATBREAK" && start_time().trim().is_empty() {
@@ -1480,11 +1480,11 @@ fn CreateMatchModal(
                 }
                 return true;
             }
-            if st == "JOIN" || st == "FAST" || st == "SAFE" {
+            if st == "FAST" || st == "SAFE" {
                 let prev_id = previous_match_id().trim().to_string();
                 if prev_id.is_empty() {
                     error.set(Some(
-                        "Previous match is required for Join, Fast, and Safe matches."
+                        "Previous match is required for Fast and Safe matches."
                             .to_string(),
                     ));
                     return false;
@@ -1524,16 +1524,21 @@ fn CreateMatchModal(
         spawn(async move {
             saving.set(true);
             error.set(None);
-            if schedule_type() == "BREAK" || schedule_type() == "STATBREAK" {
-                let teams_vec: Vec<String> = refs()
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
+            if matches!(schedule_type().as_str(), "BREAK" | "STATBREAK" | "JOIN") {
+                let is_join = schedule_type() == "JOIN";
+                let teams_vec: Vec<String> = if is_join {
+                    Vec::new() // Joins never carry team requirements.
+                } else {
+                    refs()
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                };
                 let req = CreateBreakGroupRequest {
                     name: name(),
                     schedule_type: schedule_type(),
-                    length: length(),
+                    length: if is_join { 0 } else { length() },
                     fields: break_fields(),
                     teams: teams_vec,
                     start_time: if schedule_type() == "STATBREAK" {
@@ -1661,16 +1666,21 @@ fn CreateMatchModal(
             spawn(async move {
                 saving.set(true);
                 error.set(None);
-                if schedule_type() == "BREAK" || schedule_type() == "STATBREAK" {
-                    let teams_vec: Vec<String> = refs()
-                        .split(',')
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty())
-                        .collect();
+                if matches!(schedule_type().as_str(), "BREAK" | "STATBREAK" | "JOIN") {
+                    let is_join = schedule_type() == "JOIN";
+                    let teams_vec: Vec<String> = if is_join {
+                        Vec::new() // Joins never carry team requirements.
+                    } else {
+                        refs()
+                            .split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect()
+                    };
                     let req = CreateBreakGroupRequest {
                         name: name(),
                         schedule_type: schedule_type(),
-                        length: length(),
+                        length: if is_join { 0 } else { length() },
                         fields: break_fields(),
                         teams: teams_vec,
                         start_time: if schedule_type() == "STATBREAK" {
@@ -1839,7 +1849,7 @@ fn CreateMatchModal(
                                         }
                                     }
                                 }
-                                if !matches!(schedule_type().as_str(), "BREAK" | "STATBREAK") {
+                                if !matches!(schedule_type().as_str(), "BREAK" | "STATBREAK" | "JOIN") {
                                     div { class: "col-md-6",
                                         div { class: "mb-3",
                                             label { class: "form-label", "Field" }
@@ -1886,7 +1896,7 @@ fn CreateMatchModal(
                                     label { class: "form-label", "Start Time" }
                                     input { class: "form-control", "type": "datetime-local", value: "{start_time}", oninput: move |e| { let mut start_time = start_time; start_time.set(e.value()); } }
                                 }
-                            } else if schedule_type() == "SAFE" || schedule_type() == "FAST" || schedule_type() == "JOIN" {
+                            } else if schedule_type() == "SAFE" || schedule_type() == "FAST" {
                                 div { class: "mb-3",
                                     label { class: "form-label", "Previous Match" }
                                     select { class: "form-select", value: "{previous_match_id}", onchange: move |e| on_previous_match_change(e.value()),
@@ -1898,11 +1908,32 @@ fn CreateMatchModal(
                                 }
                             }
 
-                            if matches!(schedule_type().as_str(), "BREAK" | "STATBREAK") {
+                            if matches!(schedule_type().as_str(), "BREAK" | "STATBREAK" | "JOIN") {
                                 div { class: "mb-3",
                                     label { class: "form-label", "Fields" }
+                                    {
+                                        let all_field_names: Vec<String> = data.fields.iter().map(|f| f.name.clone()).collect();
+                                        let all_selected = !all_field_names.is_empty()
+                                            && all_field_names.iter().all(|f| break_fields().contains(f));
+                                        rsx! {
+                                            SelectAllToggle {
+                                                all_selected: all_selected,
+                                                on_toggle: move |select: bool| {
+                                                    if select {
+                                                        break_fields.set(all_field_names.clone());
+                                                    } else {
+                                                        break_fields.set(Vec::new());
+                                                    }
+                                                },
+                                            }
+                                        }
+                                    }
                                     div { class: "form-text mb-1",
-                                        "One break is created per selected field. New breaks are appended at the end of each field's chain, and same-name breaks always start together."
+                                        if schedule_type() == "JOIN" {
+                                            "One join is created per selected field, appended at the end of each field's chain. Each field's schedule continues only once all joined fields reach it."
+                                        } else {
+                                            "One break is created per selected field. New breaks are appended at the end of each field's chain, and same-name breaks always start together."
+                                        }
                                     }
                                     div { class: "d-flex flex-wrap gap-3",
                                         for f in &data.fields {
@@ -1935,16 +1966,15 @@ fn CreateMatchModal(
                                         }
                                     }
                                 }
-                                TeamSelectionField {
-                                    label: "Teams required to attend".to_string(),
-                                    team_options: data.team_options.clone(),
-                                    tags: data.tags.clone(),
-                                    matches: data.matches.clone(),
-                                    value: refs(),
-                                    on_change: move |s| refs.set(s),
-                                    multiple: true,
-                                    placeholder: "(optional) teams that must attend this break".to_string(),
-                                    help_text: Some("These teams' matches on other fields will wait for the break.".to_string()),
+                                if schedule_type() != "JOIN" {
+                                    TeamChecklistField {
+                                        label: "Teams required to attend".to_string(),
+                                        id_prefix: "create-break".to_string(),
+                                        team_options: data.team_options.clone(),
+                                        value: refs(),
+                                        on_change: move |s| refs.set(s),
+                                        help_text: Some("These teams' matches on other fields will wait for the break.".to_string()),
+                                    }
                                 }
                             }
 
@@ -2069,10 +2099,105 @@ fn CreateMatchModal(
     }
 }
 
-/// Edit a break group: every same-name BREAK/STATBREAK row across fields at
-/// once. Members are derived from the already-loaded schedule data; edits go
-/// through the break-group endpoints (shared length / teams / start time,
-/// field add/remove, whole-group delete).
+/// Small "Select all" / "Select none" toggle for a checkbox group, shown next
+/// to the group's label.
+#[component]
+fn SelectAllToggle(all_selected: bool, on_toggle: EventHandler<bool>) -> Element {
+    rsx! {
+        button {
+            class: "btn btn-sm btn-outline-secondary py-0 ms-2",
+            "type": "button",
+            onclick: move |_| on_toggle.call(!all_selected),
+            if all_selected { "Select none" } else { "Select all" }
+        }
+    }
+}
+
+/// Checkbox list over the tournament's team options with a select-all toggle.
+/// The selection is stored as comma-separated ref tokens (team ids), exactly
+/// like the token input it replaces; non-team tokens already present in the
+/// value (tags, match refs) are preserved untouched.
+#[component]
+fn TeamChecklistField(
+    label: String,
+    id_prefix: String,
+    team_options: Vec<TeamOption>,
+    value: String,
+    on_change: EventHandler<String>,
+    #[props(optional)] help_text: Option<String>,
+) -> Element {
+    let tokens: Vec<String> = value
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let all_ids: Vec<String> = team_options.iter().map(|o| o.id.clone()).collect();
+    let all_selected = !all_ids.is_empty() && all_ids.iter().all(|id| tokens.contains(id));
+    let toggle_tokens = tokens.clone();
+    let toggle_ids = all_ids.clone();
+
+    rsx! {
+        div { class: "mb-3",
+            label { class: "form-label", "{label}" }
+            SelectAllToggle {
+                all_selected: all_selected,
+                on_toggle: move |select: bool| {
+                    // Keep non-team tokens; replace the team-id part wholesale.
+                    let mut v: Vec<String> = toggle_tokens
+                        .iter()
+                        .filter(|t| !toggle_ids.contains(t))
+                        .cloned()
+                        .collect();
+                    if select {
+                        v.extend(toggle_ids.iter().cloned());
+                    }
+                    on_change.call(v.join(", "));
+                },
+            }
+            div { class: "d-flex flex-wrap gap-3",
+                for opt in &team_options {
+                    {
+                        let id = opt.id.clone();
+                        let display = opt.pseudonym.clone().unwrap_or_else(|| opt.id.clone());
+                        let checked = tokens.contains(&id);
+                        let toks = tokens.clone();
+                        rsx! {
+                            div { class: "form-check form-check-inline", key: "{opt.id}",
+                                input {
+                                    class: "form-check-input",
+                                    "type": "checkbox",
+                                    id: "{id_prefix}-team-{opt.id}",
+                                    checked: checked,
+                                    onchange: move |e| {
+                                        let mut v = toks.clone();
+                                        if e.value() == "true" {
+                                            if !v.contains(&id) {
+                                                v.push(id.clone());
+                                            }
+                                        } else {
+                                            v.retain(|x| x != &id);
+                                        }
+                                        on_change.call(v.join(", "));
+                                    }
+                                }
+                                label { class: "form-check-label", "for": "{id_prefix}-team-{opt.id}", "{display}" }
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(help) = &help_text {
+                div { class: "form-text", "{help}" }
+            }
+        }
+    }
+}
+
+/// Edit a structural group: every same-name BREAK/STATBREAK/JOIN row across
+/// fields at once. Members are derived from the already-loaded schedule data;
+/// edits go through the break-group endpoints (shared length / teams / start
+/// time, field add/remove, whole-group delete). JOIN groups expose only field
+/// membership: no length, teams, or start time.
 #[component]
 fn BreakGroupModal(
     tournament_url: String,
@@ -2084,7 +2209,7 @@ fn BreakGroupModal(
     let members: Vec<MatchSetupData> = data
         .matches
         .iter()
-        .filter(|m| m.name == group_name && is_break_like_match(m))
+        .filter(|m| m.name == group_name && is_structural_match(m))
         .cloned()
         .collect();
 
@@ -2097,7 +2222,15 @@ fn BreakGroupModal(
         .clone()
         .unwrap_or_else(|| "BREAK".to_string());
     let is_statbreak = group_type == "STATBREAK";
-    let type_label = if is_statbreak { "Static Break" } else { "Break" };
+    let is_join = group_type == "JOIN";
+    let type_label = if is_join {
+        "Join"
+    } else if is_statbreak {
+        "Static Break"
+    } else {
+        "Break"
+    };
+    let type_noun = if is_join { "join" } else { "break" };
 
     let mut length = use_signal(|| first.nominal_length.unwrap_or(30));
     let mut teams = use_signal(|| {
@@ -2128,9 +2261,9 @@ fn BreakGroupModal(
     let name_save = group_name.clone();
     let do_save = move |_| {
         if fields_sel().is_empty() {
-            error.set(Some(
-                "A break group needs at least one field. Use Delete to remove it entirely.".to_string(),
-            ));
+            error.set(Some(format!(
+                "A {type_noun} group needs at least one field. Use Delete to remove it entirely."
+            )));
             return;
         }
         if is_statbreak && start_time().trim().is_empty() {
@@ -2148,9 +2281,10 @@ fn BreakGroupModal(
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
+            // JOIN groups only edit field membership: no length/teams/start.
             let req = UpdateBreakGroupRequest {
-                length: Some(length()),
-                teams: Some(teams_vec),
+                length: if is_join { None } else { Some(length()) },
+                teams: if is_join { None } else { Some(teams_vec) },
                 start_time: if is_statbreak {
                     local_datetime_to_utc_iso(&start_time()).or_else(|| Some(start_time()))
                 } else {
@@ -2216,30 +2350,36 @@ fn BreakGroupModal(
                             div { class: "alert alert-danger", "{err}" }
                         }
                         div { class: "form-text mb-2",
-                            "Edits apply to every field's copy of this break. Same-name breaks always start together."
-                        }
-                        div { class: "row",
-                            div { class: "col-md-6",
-                                div { class: "mb-3",
-                                    label { class: "form-label", "Length (min)" }
-                                    input {
-                                        class: "form-control",
-                                        "type": "number",
-                                        min: "0",
-                                        value: "{length}",
-                                        oninput: move |e| length.set(e.value().parse().unwrap_or(30)),
-                                    }
-                                }
+                            if is_join {
+                                "Edits apply to every field's copy of this join. Each field's schedule continues only once all joined fields reach it."
+                            } else {
+                                "Edits apply to every field's copy of this break. Same-name breaks always start together."
                             }
-                            if is_statbreak {
+                        }
+                        if !is_join {
+                            div { class: "row",
                                 div { class: "col-md-6",
                                     div { class: "mb-3",
-                                        label { class: "form-label", "Start Time" }
+                                        label { class: "form-label", "Length (min)" }
                                         input {
                                             class: "form-control",
-                                            "type": "datetime-local",
-                                            value: "{start_time}",
-                                            oninput: move |e| start_time.set(e.value()),
+                                            "type": "number",
+                                            min: "0",
+                                            value: "{length}",
+                                            oninput: move |e| length.set(e.value().parse().unwrap_or(30)),
+                                        }
+                                    }
+                                }
+                                if is_statbreak {
+                                    div { class: "col-md-6",
+                                        div { class: "mb-3",
+                                            label { class: "form-label", "Start Time" }
+                                            input {
+                                                class: "form-control",
+                                                "type": "datetime-local",
+                                                value: "{start_time}",
+                                                oninput: move |e| start_time.set(e.value()),
+                                            }
                                         }
                                     }
                                 }
@@ -2247,6 +2387,23 @@ fn BreakGroupModal(
                         }
                         div { class: "mb-3",
                             label { class: "form-label", "Fields" }
+                            {
+                                let all_field_names: Vec<String> = data.fields.iter().map(|f| f.name.clone()).collect();
+                                let all_selected = !all_field_names.is_empty()
+                                    && all_field_names.iter().all(|f| fields_sel().contains(f));
+                                rsx! {
+                                    SelectAllToggle {
+                                        all_selected: all_selected,
+                                        on_toggle: move |select: bool| {
+                                            if select {
+                                                fields_sel.set(all_field_names.clone());
+                                            } else {
+                                                fields_sel.set(Vec::new());
+                                            }
+                                        },
+                                    }
+                                }
+                            }
                             div { class: "d-flex flex-wrap gap-3",
                                 for f in &data.fields {
                                     {
@@ -2278,19 +2435,18 @@ fn BreakGroupModal(
                                 }
                             }
                             div { class: "form-text",
-                                "Checking a new field adds this break there; unchecking removes that field's copy."
+                                "Checking a new field adds this {type_noun} there; unchecking removes that field's copy."
                             }
                         }
-                        TeamSelectionField {
-                            label: "Teams required to attend".to_string(),
-                            team_options: data.team_options.clone(),
-                            tags: data.tags.clone(),
-                            matches: data.matches.clone(),
-                            value: teams(),
-                            on_change: move |s| teams.set(s),
-                            multiple: true,
-                            placeholder: "(optional) teams that must attend this break".to_string(),
-                            help_text: Some("These teams' matches on other fields will wait for the break.".to_string()),
+                        if !is_join {
+                            TeamChecklistField {
+                                label: "Teams required to attend".to_string(),
+                                id_prefix: "break-group".to_string(),
+                                team_options: data.team_options.clone(),
+                                value: teams(),
+                                on_change: move |s| teams.set(s),
+                                help_text: Some("These teams' matches on other fields will wait for the break.".to_string()),
+                            }
                         }
                         div { class: "modal-footer",
                             button { class: "btn btn-secondary", "type": "button", onclick: move |_| on_close.call(()), "Cancel (Esc)" }
@@ -3460,9 +3616,9 @@ fn TableView(
                                     td {
                                         // Editing is locked once a match has started — surface a
                                         // disabled pencil with a tooltip so the row layout doesn't shift.
-                                        // Break-like rows stay editable (group modal); their status is
-                                        // solver-derived, never user-started.
-                                        if !is_break_like_match(m) && matches!(m.status.as_str(), "IN_PROGRESS" | "COMPLETED" | "SKIPPED") {
+                                        // Structural rows (breaks/joins) stay editable (group modal);
+                                        // their status is solver-derived, never user-started.
+                                        if !is_structural_match(m) && matches!(m.status.as_str(), "IN_PROGRESS" | "COMPLETED" | "SKIPPED") {
                                             button {
                                                 class: "btn btn-sm btn-link text-muted",
                                                 disabled: true,

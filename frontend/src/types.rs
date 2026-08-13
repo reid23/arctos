@@ -1520,16 +1520,18 @@ pub struct CreateMatchResponse {
     pub uuid: String,
 }
 
-/// Create one BREAK/STATBREAK row per field, sharing name/length/teams.
+/// Create one BREAK/STATBREAK/JOIN row per field, sharing name/length/teams.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreateBreakGroupRequest {
     pub name: String,
-    /// "BREAK" or "STATBREAK".
+    /// "BREAK", "STATBREAK", or "JOIN".
     pub schedule_type: String,
+    /// Minutes; must be 0 for JOIN.
     pub length: u32,
-    /// Field names to place the break on (one row per field).
+    /// Field names to place the break/join on (one row per field).
     pub fields: Vec<String>,
     /// Team requirement tokens (stored as ref slots on every row).
+    /// Must be empty for JOIN.
     pub teams: Vec<String>,
     /// Required for STATBREAK groups; ignored for BREAK.
     #[serde(skip_serializing_if = "Option::is_none")]

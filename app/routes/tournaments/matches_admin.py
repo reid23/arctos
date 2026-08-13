@@ -14,7 +14,6 @@ from flask_login import current_user, login_required
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.domain.enums import (
-    BREAK_SCHEDULE_TYPES,
     STRUCTURAL_SCHEDULE_TYPES,
     MatchStatus,
     ScheduleType,
@@ -733,8 +732,10 @@ def delete_match_api(tournament_url, match_id):
 
 
 # ---------------------------------------------------------------------------
-# Break groups: same-name BREAK/STATBREAK rows across multiple fields, created
-# and edited as one unit (shared name / length / team requirements / start time).
+# Structural groups ("break-groups" API): same-name BREAK/STATBREAK/JOIN rows
+# across multiple fields, created and edited as one unit (shared name / length /
+# team requirements / start time; JOINs carry only a name — length is always 0
+# and they never have team requirements).
 # ---------------------------------------------------------------------------
 
 
@@ -752,10 +753,10 @@ def _parse_start_time_utc(start_time_str: str | None) -> datetime | None:
 
 
 def _break_group_rows(tournament_url: str, name: str) -> list[Match]:
-    """All BREAK/STATBREAK rows sharing *name* in this tournament."""
+    """All BREAK/STATBREAK/JOIN rows sharing *name* in this tournament."""
     return (
         Match.query.filter_by(event=tournament_url, name=name)
-        .filter(Match.schedule_type.in_(BREAK_SCHEDULE_TYPES))
+        .filter(Match.schedule_type.in_(STRUCTURAL_SCHEDULE_TYPES))
         .all()
     )
 
@@ -795,7 +796,10 @@ def _structural_name_collision(tournament_url: str, name: str, field_name: str) 
 @bp.route("/tournaments/<tournament_url>/break-groups", methods=["POST"])
 @login_required
 def create_break_group_api(tournament_url):
-    """Create one BREAK/STATBREAK row per field, sharing name/length/teams."""
+    """Create one BREAK/STATBREAK/JOIN row per field, sharing name/length/teams.
+
+    JOIN rows always have ``nominal_length`` 0 and never carry team requirements.
+    """
     if not _check_to(tournament_url):
         return jsonify({"error": "Forbidden"}), 403
 
@@ -805,7 +809,7 @@ def create_break_group_api(tournament_url):
 
     name = (data.get("name") or "").strip()
     if not name:
-        return jsonify({"error": "Break name is required"}), 400
+        return jsonify({"error": "Name is required"}), 400
     mn_err = match_name_char_error(name)
     if mn_err:
         return jsonify({"error": mn_err}), 400
@@ -814,15 +818,19 @@ def create_break_group_api(tournament_url):
         schedule_type = ScheduleType(data.get("schedule_type") or "BREAK")
     except ValueError:
         schedule_type = None
-    if schedule_type not in BREAK_SCHEDULE_TYPES:
-        return jsonify({"error": "schedule_type must be BREAK or STATBREAK."}), 400
+    if schedule_type not in STRUCTURAL_SCHEDULE_TYPES:
+        return jsonify({"error": "schedule_type must be BREAK, STATBREAK, or JOIN."}), 400
+    is_join = schedule_type == ScheduleType.JOIN
 
-    try:
-        length = int(data.get("length"))
-    except (TypeError, ValueError):
-        return jsonify({"error": "Length (minutes) is required."}), 400
-    if length < 0:
-        return jsonify({"error": "Length cannot be negative."}), 400
+    if is_join:
+        length = 0  # JOIN invariant: zero-length synchronisation point.
+    else:
+        try:
+            length = int(data.get("length"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "Length (minutes) is required."}), 400
+        if length < 0:
+            return jsonify({"error": "Length cannot be negative."}), 400
 
     raw_fields = data.get("fields")
     if not isinstance(raw_fields, list):
@@ -843,6 +851,8 @@ def create_break_group_api(tournament_url):
     teams = data.get("teams") or []
     if not isinstance(teams, list):
         return jsonify({"error": "teams must be a list of team tokens."}), 400
+    if is_join and teams:
+        return jsonify({"error": "Joins cannot have team requirements."}), 400
     refs_csv_pair = resolve_refs_slots(teams, tournament_url) if teams else None
 
     start_dt = None
@@ -876,7 +886,7 @@ def create_break_group_api(tournament_url):
         db.session.flush()
         if refs_csv_pair is not None:
             set_match_referees_from_csv(match, refs_csv_pair[0], refs_csv_pair[1])
-        if schedule_type == ScheduleType.BREAK:
+        if schedule_type in (ScheduleType.BREAK, ScheduleType.JOIN):
             prev_id = str(previous_map.get(f) or "").strip()
             if prev_id:
                 prev_match = Match.query.filter_by(uuid=prev_id, event=tournament_url).first()
@@ -907,7 +917,11 @@ def create_break_group_api(tournament_url):
 @bp.route("/tournaments/<tournament_url>/break-groups/<name>", methods=["PUT"])
 @login_required
 def update_break_group_api(tournament_url, name):
-    """Edit every same-name break row at once (length/teams/start_time/fields)."""
+    """Edit every same-name structural row at once (length/teams/start_time/fields).
+
+    JOIN groups only support field membership changes; length stays 0 and team
+    requirements are rejected.
+    """
     if not _check_to(tournament_url):
         return jsonify({"error": "Forbidden"}), 403
 
@@ -920,12 +934,27 @@ def update_break_group_api(tournament_url, name):
         return jsonify({"error": "Invalid JSON"}), 400
 
     group_type = rows[0].schedule_type
-    # No started-lock here: break statuses are solver-derived (BREAK completes
-    # when its dependencies complete, STATBREAK when its window elapses), not
-    # user-started, and the recompute below re-derives them after any edit.
+    is_join = group_type == ScheduleType.JOIN
+    # No started-lock here: structural statuses are solver-derived (BREAK/JOIN
+    # complete when their dependencies complete, STATBREAK when its window
+    # elapses), not user-started, and the recompute below re-derives them.
+
+    # The group PUT never changes the group's type. BREAK↔STATBREAK conversion
+    # goes through the single-match PUT; JOIN converts to/from nothing.
+    if data.get("schedule_type") is not None:
+        try:
+            requested_type = ScheduleType(data.get("schedule_type"))
+        except ValueError:
+            requested_type = None
+        if requested_type != group_type:
+            if is_join or requested_type == ScheduleType.JOIN:
+                return jsonify({"error": "Joins cannot be converted to or from breaks."}), 400
+            return jsonify({"error": "A group's schedule type cannot be changed here."}), 400
 
     length = data.get("length")
-    if length is not None:
+    if is_join:
+        length = None  # JOIN invariant: length stays 0.
+    elif length is not None:
         try:
             length = int(length)
         except (TypeError, ValueError):
@@ -936,6 +965,8 @@ def update_break_group_api(tournament_url, name):
     teams = data.get("teams")
     if teams is not None and not isinstance(teams, list):
         return jsonify({"error": "teams must be a list of team tokens."}), 400
+    if is_join and teams:
+        return jsonify({"error": "Joins cannot have team requirements."}), 400
 
     start_dt = None
     if data.get("start_time") is not None:
@@ -1010,14 +1041,14 @@ def update_break_group_api(tournament_url, name):
             db.session.flush()
             if refs_csv_pair is not None:
                 set_match_referees_from_csv(match, refs_csv_pair[0], refs_csv_pair[1])
-            elif teams is None:
+            elif teams is None and not is_join:
                 # Copy the group's existing team requirements onto the new row.
                 set_match_referees_from_csv(
                     match,
                     get_match_refs_csv(template),
                     get_match_refs_initial_csv(template),
                 )
-            if group_type == ScheduleType.BREAK:
+            if group_type in (ScheduleType.BREAK, ScheduleType.JOIN):
                 tail = _field_chain_tail(tournament_url, f, exclude_uuids={match.uuid})
                 if tail is not None:
                     update_match_previous_link(match, tail.uuid, tournament_url, is_new=True)
@@ -1038,7 +1069,7 @@ def update_break_group_api(tournament_url, name):
 @bp.route("/tournaments/<tournament_url>/break-groups/<name>", methods=["DELETE"])
 @login_required
 def delete_break_group_api(tournament_url, name):
-    """Delete every same-name break row in the group."""
+    """Delete every same-name structural row in the group."""
     if not _check_to(tournament_url):
         return jsonify({"error": "Forbidden"}), 403
 
