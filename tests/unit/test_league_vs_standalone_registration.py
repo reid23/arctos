@@ -305,9 +305,9 @@ def test_schedule_import_registered_teams_league_and_standalone(app, test_db):
         db.session.commit()
 
         for t in (sa, lg):
-            errors = ScheduleImportExportService._validate_teams_registered(
-                t.url,
-                tags_data=[{"team": f"ok-{t.url}"}],
+            tags_out, matches_out, warnings, auto_tag_names = ScheduleImportExportService._rewrite_unknown_team_refs(
+                t,
+                tags_data=[{"name": "T", "team": f"ok-{t.url}"}],
                 matches_data=[
                     {
                         "team1_initial": f"ok-{t.url}",
@@ -316,6 +316,11 @@ def test_schedule_import_registered_teams_league_and_standalone(app, test_db):
                     }
                 ],
             )
-            # missing-team should error; registered ok-* should not
-            assert any("missing-team" in e for e in errors)
-            assert not any(f"ok-{t.url}" in e for e in errors)
+            # missing-team should be rewritten to a tag reference with a warning;
+            # registered ok-* teams (event- or league-scoped) stay untouched.
+            assert matches_out[0]["team1_initial"] == f"ok-{t.url}"
+            assert matches_out[0]["team2_initial"] == "tag::missing-team"
+            assert auto_tag_names == {"missing-team"}
+            assert any("missing-team" in w for w in warnings)
+            assert not any(f"ok-{t.url}" in w for w in warnings)
+            assert tags_out[0]["team"] == f"ok-{t.url}"
