@@ -26,12 +26,13 @@
     background: #f8f9fa;
 }
 
-/* Only this area scrolls; nav and header stay fixed at top */
+/* Only this area scrolls vertically; no horizontal scrollbar */
 .schedule-timeline-scroll {
     flex: 1;
     min-height: 0;
-    overflow-x: auto;
+    overflow-x: hidden;
     overflow-y: auto;
+    width: 100%;
 }
 
 .schedule-timeline-nav button {
@@ -47,11 +48,29 @@
 
 .schedule-timeline {
     display: grid;
-    grid-template-columns: 80px repeat(var(--num-fields, 1), minmax(220px, 1fr));
-    min-width: fit-content;
-    /* Larger time scale; wider min column to reduce wrapping on narrow screens */
+    /* minmax(0, 1fr) so columns shrink inside the container instead of forcing horizontal scroll */
+    grid-template-columns: var(--time-col-width, 80px) repeat(var(--num-fields, 1), minmax(0, 1fr));
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    /* Larger time scale */
     --slot-height: 7rem; /* ~100px */
     --header-height: 56px;
+    background-color: #ffffff;
+    /*
+     * Half-hour bands on the grid (not per-cell). Offset by header height so
+     * stripes line up with body rows. Cells themselves stay transparent so they
+     * cannot paint over multi-slot match blocks.
+     */
+    background-image: linear-gradient(
+        to bottom,
+        #ffffff 50%,
+        #f3f4f6 50%
+    );
+    background-size: 100% calc(var(--slot-height) * 2);
+    background-position: 0 var(--header-height);
+    background-repeat: repeat-y;
 }
 
 .schedule-timeline-header {
@@ -78,7 +97,8 @@
 .schedule-timeline-time-col {
     position: sticky;
     left: 0;
-    background: white;
+    /* Solid so sticky labels stay readable over stripes + overlapping events */
+    background: #ffffff !important;
     z-index: 5;
     border-right: 2px solid #ccc;
     font-weight: 500;
@@ -87,7 +107,7 @@
 }
 
 .schedule-timeline-header .schedule-timeline-time-col {
-    background: #f8f9fa;
+    background: #f8f9fa !important;
     z-index: 31;
 }
 
@@ -104,35 +124,44 @@
     border-bottom: 1px solid #ddd;
     min-height: var(--slot-height);
     position: relative;
+    /* Transparent so striped grid background shows through; never cover events. */
+    background-color: transparent;
 }
 
 .schedule-timeline-cell {
-    padding: 4px 6px;
+    padding: 0;
     overflow: visible;
+    min-width: 0;
+    background-color: transparent !important;
+    z-index: 0;
 }
 
-/* Subtle alternating background bands to help scan rows */
-.schedule-timeline-row:nth-child(odd) .schedule-timeline-cell {
-    background-color: #ffffff;
-}
-
-.schedule-timeline-row:nth-child(even) .schedule-timeline-cell {
-    background-color: #f9fafb;
-}
-
-.schedule-timeline-event-container {
+/*
+ * Match blocks are rendered in this overlay (not inside half-hour cells), so
+ * multi-slot events can never be covered by later row backgrounds.
+ * Positioned over the field columns only (left of time col, below header).
+ */
+.schedule-timeline-events-layer {
     position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
+    pointer-events: none;
+    z-index: 12;
+}
+
+.schedule-timeline-events-layer > div {
+    /* wrapper around each event; positioning is on the event itself */
+    pointer-events: none;
+}
+
+.schedule-timeline-events-layer .schedule-timeline-event {
+    pointer-events: auto;
 }
 
 .schedule-timeline-event {
-    position: relative;
+    /* absolute + explicit top/height (inline) spans multiple slots */
+    position: absolute;
     padding: 0.4rem 0.6rem 0.45rem 0.65rem;
     padding-right: 2rem; /* leave room for corner status badge */
-    margin: 0 3px;
+    margin: 0; /* horizontal inset handled via left/width calc in inline style */
     border-radius: 6px;
     color: #111;
     font-size: clamp(13px, 2vw, 16px);
@@ -141,13 +170,17 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     min-height: 0;
+    max-width: 100%;
+    box-sizing: border-box;
     display: flex;
     flex-direction: column;
     justify-content: center;
     border: 1px solid rgba(0, 0, 0, 0.22);
     box-shadow: 0 1px 3px rgba(0,0,0,0.25);
     transition: opacity 0.2s, box-shadow 0.15s, transform 0.15s;
-    z-index: 10;
+    z-index: 5;
+    /* Opaque fill so stripes don't show through the card */
+    background-color: #ffffff;
 }
 
 /* Highlight whole block when team is playing – wide gradient tint */
@@ -318,32 +351,135 @@
     filter: invert(27%) sepia(98%) saturate(2476%) hue-rotate(226deg) brightness(99%) contrast(101%);
 }
 
-/* Mobile responsiveness */
+/* Now line (Google Calendar–style) across the multi-field schedule */
+.schedule-now-line {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 0;
+    border-top: 2px solid #dc3545;
+    z-index: 40;
+    pointer-events: none;
+}
+
+.schedule-now-line-label {
+    position: absolute;
+    left: 2px;
+    top: -0.85rem;
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #dc3545;
+    background: rgba(255, 255, 255, 0.9);
+    padding: 0 0.25rem;
+    border-radius: 2px;
+    line-height: 1;
+}
+
+/* BREAK / JOIN: stable neutral look, no lifecycle chrome */
+.schedule-timeline-event--structural {
+    border-style: dashed;
+    color: #495057;
+    box-shadow: none;
+}
+
+/* Team view: single wide column, full opponent names */
+.schedule-timeline--team-view {
+    grid-template-columns: var(--time-col-width, 80px) minmax(0, 1fr);
+}
+
+.schedule-timeline-event-team-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.5rem 0.75rem;
+    min-width: 0;
+    width: 100%;
+}
+
+.schedule-timeline-event-main {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.schedule-timeline-event-meta {
+    flex: 0 0 auto;
+    text-align: right;
+    line-height: 1.25;
+    padding-top: 0.05rem;
+    /* Leave room for corner status badge */
+    padding-right: 0.15rem;
+    max-width: 42%;
+}
+
+.schedule-timeline-event-meta .schedule-timeline-event-field {
+    font-size: 0.85em;
+    color: #555;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 10rem;
+    margin-left: auto;
+}
+
+.schedule-timeline-event-meta .schedule-timeline-event-start {
+    font-size: 0.85em;
+    font-weight: 600;
+    color: #333;
+    font-variant-numeric: tabular-nums;
+}
+
+/* "vs Opponent" on the same line as the match title — keep team styling smaller */
+.schedule-timeline-inline-vs {
+    font-size: 0.9em;
+    font-weight: 400;
+    opacity: 0.95;
+    min-width: 0;
+}
+
+.schedule-timeline-inline-vs .schedule-opponent-full {
+    font-weight: 500;
+}
+
+.schedule-timeline-event-teams--full {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: unset;
+}
+
+.schedule-opponent-full {
+    white-space: normal;
+    word-break: break-word;
+    font-weight: 500;
+}
+
+/* Compact Playing / Reffing badges (team view) */
+.schedule-role-badge {
+    display: inline-block;
+    font-size: 0.7em;
+    font-weight: 700;
+    line-height: 1.2;
+    padding: 0.12rem 0.4rem;
+    border-radius: 999px;
+    color: #fff;
+    vertical-align: middle;
+}
+
+.schedule-role-badge--playing {
+    background: #c62828;
+}
+
+.schedule-role-badge--reffing {
+    background: #5e35b1;
+}
+
+/* Mobile responsiveness — default slot height only if not overridden by zoom scale */
 @media (max-width: 768px) {
-    .schedule-timeline {
-        --slot-height: 5rem;
-        grid-template-columns: 80px repeat(var(--num-fields, 1), minmax(180px, 1fr));
-    }
-    
     .schedule-timeline-time-col {
-        min-width: 70px;
-    }
-    
-    .schedule-timeline-field-col {
-        min-width: 180px;
+        min-width: 0;
     }
 }
 
 @media (max-width: 480px) {
-    .schedule-timeline {
-        --slot-height: 4.5rem;
-        grid-template-columns: 80px repeat(var(--num-fields, 1), minmax(160px, 1fr));
-    }
-    
-    .schedule-timeline-field-col {
-        min-width: 160px;
-    }
-    
     .schedule-timeline-event {
         font-size: clamp(12px, 3.5vw, 14px);
         padding: 0.35rem 0.5rem;
