@@ -372,13 +372,59 @@ def _csv_tokens(raw: Optional[str]) -> List[str]:
     return [part.strip() for part in str(raw).split(",") if part.strip()]
 
 
-def _match_participant_team_ids(match: Match) -> Set[str]:
-    """Return concrete team IDs currently assigned to team or ref slots."""
+def referee_team_ids_by_match_uuid(matches: List[Match]) -> Dict[str, Set[str]]:
+    """Bulk-load resolved referee team IDs from ``match_referees`` for many matches.
+
+    Returns a dict keyed by match uuid; matches without referee rows are
+    simply absent. One query total, so callers in O(n²) loops (e.g. the
+    resource-conflict edge builder) don't hit the DB per pair.
+    """
+    from app.models import MatchReferee
+
+    uuids = [m.uuid for m in matches if getattr(m, "uuid", None)]
+    result: Dict[str, Set[str]] = {}
+    if not uuids:
+        return result
+    for row in MatchReferee.query.filter(MatchReferee.match_uuid.in_(uuids)).all():
+        if row.team_id and str(row.team_id).strip():
+            result.setdefault(row.match_uuid, set()).add(str(row.team_id).strip())
+    return result
+
+
+def _match_participant_team_ids(
+    match: Match,
+    ref_team_ids_by_uuid: Optional[Dict[str, Set[str]]] = None,
+) -> Set[str]:
+    """Return concrete team IDs currently assigned to team or ref slots.
+
+    Referee team IDs come from the normalised ``match_referees`` table (via
+    *ref_team_ids_by_uuid* when the caller pre-fetched it, else a per-match
+    query), falling back to the legacy ``refs`` CSV attribute only when no
+    join-table rows exist.
+    """
     participants = set()
     for team_id in (getattr(match, "team1", None), getattr(match, "team2", None)):
         if team_id and str(team_id).strip():
             participants.add(str(team_id).strip())
-    participants.update(_csv_tokens(getattr(match, "refs", None)))
+
+    ref_ids: Set[str] = set()
+    if ref_team_ids_by_uuid is not None:
+        ref_ids = ref_team_ids_by_uuid.get(getattr(match, "uuid", None), set())
+    elif getattr(match, "uuid", None):
+        from app.services.dual_write import get_match_referee_rows
+
+        try:
+            rows = get_match_referee_rows(match)
+        except Exception:
+            rows = []
+        ref_ids = {str(r.team_id).strip() for r in rows if r.team_id and str(r.team_id).strip()}
+
+    if ref_ids:
+        participants.update(ref_ids)
+    else:
+        # Legacy fallback: dual-write no longer maintains the `refs` CSV column,
+        # but old in-memory objects/tests may still carry it.
+        participants.update(_csv_tokens(getattr(match, "refs", None)))
     return participants
 
 
@@ -418,6 +464,10 @@ def build_match_graph(
     """
     if all_matches is None:
         all_matches = Match.query.filter_by(event=tournament_url).all()
+
+    # Pre-fetch resolved referee team IDs once; the resource-conflict loop below
+    # is O(n²) over matches and must not hit the DB per candidate pair.
+    ref_ids_by_uuid = referee_team_ids_by_match_uuid(all_matches) if include_resource_conflict_edges else {}
 
     graph = MatchGraph()
 
@@ -567,12 +617,15 @@ def build_match_graph(
         if include_resource_conflict_edges and match.schedule_type in (ScheduleType.SAFE, ScheduleType.FAST):
             # Cross-field same-team serialization: a SAFE/FAST match depends on the
             # latest match on *another* field that shares a team and is scheduled
-            # before it, so the two don't run simultaneously. Same-field ordering is
-            # already handled by the previous_match chain, so we skip the match's own
-            # field. The anchor is scheduled_start_time (computed in the planned pass
-            # without these edges), which is stable — so this ordering doesn't flip-flop.
+            # before it, so the two don't run simultaneously. Candidates include
+            # BREAK/STATBREAK rows with team requirements (refs), so a SAFE/FAST
+            # match whose team must attend a break elsewhere waits for that break.
+            # Same-field ordering is already handled by the previous_match chain, so
+            # we skip the match's own field. The anchor is scheduled_start_time
+            # (computed in the planned pass without these edges), which is stable —
+            # so this ordering doesn't flip-flop.
             match_start = _scheduled_anchor(match)
-            participants = _match_participant_team_ids(match)
+            participants = _match_participant_team_ids(match, ref_ids_by_uuid)
             latest_shared_matches_by_field: Dict[str, Match] = {}
             if match_start and participants:
                 for field_name, field_matches in matches_by_field.items():
@@ -584,7 +637,7 @@ def build_match_graph(
                         candidate_start = _scheduled_anchor(candidate)
                         if candidate.uuid == match.uuid or candidate_start is None or candidate_start >= match_start:
                             continue
-                        if not (participants & _match_participant_team_ids(candidate)):
+                        if not (participants & _match_participant_team_ids(candidate, ref_ids_by_uuid)):
                             continue
                         if latest_shared_match is None or (
                             candidate_start,
@@ -625,4 +678,37 @@ def build_match_graph(
             if dep_key in graph.nodes_by_key:
                 graph.add_dependency(dependent_key, dep_key, is_skip_condition=True)
 
+    _sync_same_name_breaks(graph)
+
     return graph
+
+
+def _sync_same_name_breaks(graph: MatchGraph) -> None:
+    """Give same-name BREAK nodes the union of the group's dependency edges.
+
+    Breaks with the same name in the same event (across different fields) must
+    start at the same time: each member keeps its own (name, field) node — so
+    downstream per-field dependents still resolve — but every member depends on
+    every group member's predecessors, making each one compute the same start
+    (= latest predecessor end across the group) in both solver passes. These
+    are structural edges, present in the live and planned passes alike.
+
+    STATBREAKs are excluded: they're statically scheduled, so same-name
+    STATBREAKs are trivially synced by sharing a user-supplied start time.
+    """
+    breaks_by_name: Dict[str, List[MatchGraphNode]] = defaultdict(list)
+    for node in graph.get_all_nodes():
+        if node.schedule_type == ScheduleType.BREAK:
+            breaks_by_name[node.name].append(node)
+
+    for group in breaks_by_name.values():
+        if len(group) < 2:
+            continue
+        members = set(group)
+        union_deps: Set[Dependency] = set()
+        for member in group:
+            union_deps |= {dep for dep in member.dependencies if dep.node not in members}
+        for member in group:
+            member.dependencies |= union_deps
+            for dep in union_deps:
+                dep.node.dependents.add(member)

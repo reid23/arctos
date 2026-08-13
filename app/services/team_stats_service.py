@@ -68,7 +68,7 @@ def compute_team_stats(matches: list, tournament, include_ribbon: bool = False) 
     count_matches = [
         m
         for m in matches
-        if getattr(m, "schedule_type", None) not in (ScheduleType.BREAK, ScheduleType.JOIN)
+        if getattr(m, "schedule_type", None) not in (ScheduleType.BREAK, ScheduleType.STATBREAK, ScheduleType.JOIN)
         and (include_ribbon or not getattr(m, "ribbon", False))
     ]
 

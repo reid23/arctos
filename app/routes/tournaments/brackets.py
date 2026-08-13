@@ -125,15 +125,15 @@ def _bracket_match_payload(tournament, match: Match) -> dict:
 
 
 def _playable_matches(tournament_url: str) -> list[Match]:
-    """Matches that can appear on a bracket (exclude BREAK/JOIN)."""
+    """Matches that can appear on a bracket (exclude BREAK/STATBREAK/JOIN)."""
     rows = Match.query.filter_by(event=tournament_url).order_by(Match.name).all()
     out = []
     for m in rows:
         st = m.schedule_type
-        if st in (ScheduleType.BREAK, ScheduleType.JOIN):
+        if st in (ScheduleType.BREAK, ScheduleType.STATBREAK, ScheduleType.JOIN):
             continue
         # Also skip stringy legacy values just in case
-        if isinstance(st, str) and st.upper() in ("BREAK", "JOIN"):
+        if isinstance(st, str) and st.upper() in ("BREAK", "JOIN", "STATBREAK"):
             continue
         out.append(m)
     return out
@@ -851,8 +851,8 @@ def tournament_bracket_placement_add_api(tournament_url):
     match = Match.query.filter_by(uuid=match_id, event=tournament_url).first()
     if match is None:
         return jsonify({"error": "Match not found"}), 404
-    if match.schedule_type in (ScheduleType.BREAK, ScheduleType.JOIN):
-        return jsonify({"error": "BREAK/JOIN matches cannot be placed on the bracket"}), 400
+    if match.schedule_type in (ScheduleType.BREAK, ScheduleType.STATBREAK, ScheduleType.JOIN):
+        return jsonify({"error": "BREAK/STATBREAK/JOIN matches cannot be placed on the bracket"}), 400
 
     existing_placed = {p.match: p for p in BracketPlacement.query.filter_by(event=tournament_url).all() if p.is_placed}
     # name → match for auto-wire decisions
