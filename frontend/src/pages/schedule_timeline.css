@@ -1053,10 +1053,10 @@
     box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.25);
 }
 
-/* Alt-hover dependency view: source + per-edge-kind target highlights. */
+/* Alt-hover dependency view: source + per-edge-kind target highlights.
+   The source block's rings come from an inline box-shadow stack (one ring per
+   dependency edge, colored like its line); this class only lifts it. */
 .schedule-timeline-event--dep-source {
-    outline: 2px solid #212529;
-    outline-offset: -1px;
     z-index: 20 !important;
 }
 
@@ -1118,4 +1118,103 @@
 .schedule-timeline {
     user-select: none;
     -webkit-user-select: none;
+}
+
+/* ------------------------------------------------------------------ */
+/* Editor layout: full-bleed page + docked editor card.                 */
+/* ------------------------------------------------------------------ */
+
+/* Escape the layout's centered max-width container (editor page only). */
+.schedule-editor-fullbleed {
+    width: 100vw;
+    max-width: 100vw;
+    margin-left: calc(50% - 50vw);
+    margin-right: calc(50% - 50vw);
+}
+
+/* Schedule + docked editor card. Narrow screens: card above the schedule
+   (column-reverse); wide screens: card docked to the right, schedule shrinks. */
+.schedule-editor-split {
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 1rem;
+    align-items: stretch;
+}
+
+.schedule-editor-main {
+    min-width: 0;
+}
+
+@media (min-width: 992px) {
+    .schedule-editor-split {
+        flex-direction: row;
+        align-items: flex-start;
+    }
+
+    .schedule-editor-split > .schedule-editor-main {
+        flex: 1 1 auto;
+    }
+
+    .schedule-editor-panel {
+        flex: 0 0 400px;
+        width: 400px;
+        position: sticky;
+        top: 0.75rem;
+        max-height: calc(100vh - 1.5rem);
+        overflow-y: auto;
+    }
+
+    /* The card is far narrower than the old modal: stack its form columns. */
+    .schedule-editor-panel .col-md-4,
+    .schedule-editor-panel .col-md-6 {
+        width: 100%;
+    }
+}
+
+.schedule-editor-card {
+    box-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, 0.12);
+}
+
+/* Pending-create placeholder: stays visible while the create card is open. */
+.schedule-drag-ghost--pending {
+    border-color: #198754;
+    background: rgba(25, 135, 84, 0.10);
+    color: #198754;
+}
+
+/* Winner/Loser insertion chips: shown on block hover while an editor card has
+   a team-ish input focused. */
+.schedule-result-chips {
+    position: absolute;
+    top: 2px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: none;
+    gap: 0.3rem;
+    z-index: 7;
+}
+
+.schedule-timeline-event:hover .schedule-result-chips {
+    display: inline-flex;
+}
+
+.schedule-result-chip {
+    border: none;
+    border-radius: 999px;
+    font-size: 0.7em;
+    font-weight: 700;
+    line-height: 1.2;
+    padding: 0.15rem 0.5rem;
+    color: #fff;
+    cursor: pointer;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    pointer-events: auto;
+}
+
+.schedule-result-chip--winner {
+    background: #198754;
+}
+
+.schedule-result-chip--loser {
+    background: #dc3545;
 }

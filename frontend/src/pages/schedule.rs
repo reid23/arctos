@@ -416,9 +416,10 @@ struct ScheduleNavState {
     field: String,
 }
 
-/// View modes: "team" / "field" are public; "timeline" (all fields) / "table" are TO-only.
+/// Public view modes: "team" / "field". The all-fields "timeline" and "table"
+/// views live exclusively on the edit page (`/:url/schedule/edit`).
 fn is_valid_view(view: &str) -> bool {
-    matches!(view, "team" | "field" | "timeline" | "table")
+    matches!(view, "team" | "field")
 }
 
 const VERTICAL_SCALE_KEY: &str = "schedule_vertical_scale";
@@ -476,6 +477,16 @@ pub(crate) struct DragCreatePayload {
     length_min: Option<u32>,
     /// Suggested previous match on that field (latest displayed start at-or-before the drag start).
     prev_match_id: Option<String>,
+}
+
+/// Placeholder block shown on the editor timeline while the create card is
+/// open: mirrors the card's field / start-time / length values so the user can
+/// see where the new match will land. Cleared on save or cancel.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PendingCreateGhost {
+    field_name: String,
+    start_local: chrono::NaiveDateTime,
+    length_min: i64,
 }
 
 /// Payload emitted by the edit-page timeline when a drag-to-move gesture commits.
@@ -628,10 +639,19 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
     let mut bulk_length_input = use_signal(|| 30u32);
     // Inline error affordance for drag-move / bulk failures (dismissible alert near the toolbar).
     let mut edit_error = use_signal(|| None::<String>);
-    // Prefill for the create-match modal when opened from a drag-to-create gesture.
+    // Prefill for the create-match card when opened from a drag-to-create gesture.
     let mut create_prefill = use_signal(|| None::<DragCreatePayload>);
-    // Bumped per drag-create so the modal remounts with fresh prefill state.
+    // Bumped per drag-create so the card remounts with fresh prefill state.
     let mut create_prefill_nonce = use_signal(|| 0u32);
+    // Default schedule type for newly created matches (toolbar dropdown; not persisted).
+    let mut default_match_type = use_signal(|| "STATIC".to_string());
+    // Placeholder on the timeline while the create card is open, kept in sync with
+    // the card's field/start/length values (the card writes it via this signal).
+    let mut create_ghost = use_signal(|| None::<PendingCreateGhost>);
+    // Last-focused team-ish input in the open editor card ("team1" | "team2" | "refs").
+    let mut team_field_focus = use_signal(|| None::<String>);
+    // Winner/Loser chip clicks queue a `<Match>::winner|loser` token for the open card.
+    let mut insert_team_ref = use_signal(|| None::<String>);
 
     // Pull schedule warnings in parallel so we can surface a cycle banner at the top
     // of the page. Re-runs whenever refresh_trigger bumps so the banner stays in sync
@@ -665,8 +685,8 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                 view_mode.set("timeline".to_string());
                 return;
             }
-            // "All fields" and "Table" are TO-only; coerce stray values (e.g. from URL).
-            if !data.is_to && matches!(v.as_str(), "timeline" | "table") {
+            // The public page only has "team" and "field"; coerce stray values (e.g. from URL).
+            if !editor && !matches!(v.as_str(), "team" | "field") {
                 view_mode.set("team".to_string());
                 return;
             }
@@ -831,7 +851,6 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
             let url_for_recompute = url.clone();
             let url_for_export_key = url_for_export.clone();
             let url_for_recompute_key = url_for_recompute.clone();
-            let url_for_edit_link_key = url.clone();
             let handle_keydown = move |ev: Event<KeyboardData>| {
                 let key_str = ev.key().to_string();
                 let modal_open = active_modal() != "none";
@@ -868,7 +887,7 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                         }
                         "t" | "T" => {
                             ev.prevent_default();
-                            if edit_mode && is_to {
+                            if editor {
                                 active_modal.set("tags".to_string());
                             } else if matches!(view_mode().as_str(), "team" | "field" | "timeline")
                             {
@@ -877,13 +896,13 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                         }
                         "a" | "A" => {
                             ev.prevent_default();
-                            if is_to {
+                            if editor {
                                 view_mode.set("table".to_string());
                             }
                         }
                         "l" | "L" => {
                             ev.prevent_default();
-                            if is_to {
+                            if editor {
                                 view_mode.set("timeline".to_string());
                             }
                         }
@@ -893,25 +912,8 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                                 view_mode.set("team".to_string());
                             }
                         }
-                        "e" | "E" => {
-                            ev.prevent_default();
-                            // Public page: jump a TO to the dedicated edit page.
-                            if !editor && is_to {
-                                navigator.push(Route::ScheduleEdit {
-                                    url: url_for_edit_link_key.clone(),
-                                });
-                            }
-                        }
-                        "m" | "M" => {
-                            if edit_mode && is_to {
-                                ev.prevent_default();
-                                create_prefill.set(None);
-                                create_prefill_nonce.set(create_prefill_nonce().wrapping_add(1));
-                                active_modal.set("match_create".to_string());
-                            }
-                        }
                         "f" | "F" => {
-                            if edit_mode && is_to {
+                            if editor {
                                 ev.prevent_default();
                                 active_modal.set("fields".to_string());
                             } else if !edit_mode {
@@ -920,7 +922,7 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                             }
                         }
                         "x" | "X" => {
-                            if edit_mode && is_to {
+                            if editor {
                                 ev.prevent_default();
                                 let u = url_for_export_key.clone();
                                 spawn(async move {
@@ -962,13 +964,13 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                             }
                         }
                         "i" | "I" => {
-                            if edit_mode && is_to {
+                            if editor {
                                 ev.prevent_default();
                                 active_modal.set("toml_import".to_string());
                             }
                         }
                         "r" | "R" => {
-                            if edit_mode && is_to {
+                            if editor {
                                 ev.prevent_default();
                                 let u = url_for_recompute_key.clone();
                                 let mut trigger = refresh_trigger;
@@ -987,7 +989,9 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
             rsx! {
                 style { {SCHEDULE_PAGE_CSS} }
                 div {
-                    class: "container-fluid mt-3 position-relative schedule-keyboard-focus",
+                    // The editor gets the full viewport width (escapes the layout's
+                    // centered max-width container via the full-bleed class).
+                    class: if editor { "container-fluid mt-3 position-relative schedule-keyboard-focus schedule-editor-fullbleed" } else { "container-fluid mt-3 position-relative schedule-keyboard-focus" },
                     tabindex: 0,
                     onkeydown: handle_keydown,
                     onmounted: move |ev| {
@@ -1034,14 +1038,24 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                                     span { class: "me-2", "⚠" }
                                     span { class: "flex-grow-1",
                                         strong { "Schedule failed to solve: " }
-                                        "circular dependency detected. See "
-                                        button {
-                                            r#type: "button",
-                                            class: "btn btn-link p-0 align-baseline",
-                                            onclick: move |_| active_modal.set("schedule_warnings".to_string()),
-                                            "Warnings"
+                                        "circular dependency detected."
+                                        if editor {
+                                            " See "
+                                            button {
+                                                r#type: "button",
+                                                class: "btn btn-link p-0 align-baseline",
+                                                onclick: move |_| active_modal.set("schedule_warnings".to_string()),
+                                                "Warnings"
+                                            }
+                                            " for more info."
+                                        } else if is_to {
+                                            " See the "
+                                            Link {
+                                                to: Route::ScheduleEdit { url: url.clone() },
+                                                "schedule editor"
+                                            }
+                                            " for more info."
                                         }
-                                        " for more info."
                                     }
                                 }
                             }
@@ -1138,7 +1152,7 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                                                 "By field"
                                             }
                                         }
-                                        if is_to {
+                                        if editor {
                                             button {
                                                 class: if view_mode() == "timeline" { "btn btn-primary" } else { "btn btn-outline-primary" },
                                                 onclick: move |_| view_mode.set("timeline".to_string()),
@@ -1152,16 +1166,24 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                                         }
                                     }
                                 }
-                                if data.is_to {
+                                if editor {
                                     div { class: "d-flex flex-wrap align-items-center gap-1",
-                                        if editor {
                                             button { class: "btn btn-sm btn-outline-secondary", onclick: move |_| active_modal.set("tags".to_string()), "Tags" }
                                             button { class: "btn btn-sm btn-outline-secondary", onclick: move |_| active_modal.set("fields".to_string()), "Fields" }
-                                            button { class: "btn btn-sm btn-outline-success", onclick: move |_| {
-                                                create_prefill.set(None);
-                                                create_prefill_nonce.set(create_prefill_nonce().wrapping_add(1));
-                                                active_modal.set("match_create".to_string());
-                                            }, "+ Match" }
+                                            div {
+                                                class: "d-flex align-items-center gap-1 ms-1",
+                                                title: "Schedule type new matches start with (click or drag on the schedule to create one)",
+                                                label { class: "small text-muted mb-0", r#for: "defaultMatchTypeSelect", "New match type" }
+                                                select {
+                                                    id: "defaultMatchTypeSelect",
+                                                    class: "form-select form-select-sm w-auto",
+                                                    value: "{default_match_type}",
+                                                    onchange: move |e| default_match_type.set(e.value()),
+                                                    option { value: "STATIC", "Static" }
+                                                    option { value: "SAFE", "Safe" }
+                                                    option { value: "FAST", "Fast" }
+                                                }
+                                            }
                                             button { class: "btn btn-sm btn-outline-secondary", onclick: move |_| {
                                                 let u = url_for_export.clone();
                                                 spawn(async move {
@@ -1250,20 +1272,6 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                                                     "Show times as they happened"
                                                 }
                                             }
-                                        } else {
-                                            // Public page: read-only warnings + a link to the edit page.
-                                            button {
-                                                class: "btn btn-sm btn-outline-warning",
-                                                title: "Show schedule warnings (unknown teams, cycles, missing match refs, double-bookings)",
-                                                onclick: move |_| active_modal.set("schedule_warnings".to_string()),
-                                                "⚠ Warnings"
-                                            }
-                                            Link {
-                                                to: Route::ScheduleEdit { url: url.clone() },
-                                                class: "btn btn-sm btn-primary",
-                                                "Edit schedule"
-                                            }
-                                        }
                                     }
                                 }
                             }
@@ -1354,6 +1362,10 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                         }
                     }
 
+                    // Editor: schedule + docked editor card side by side on wide screens
+                    // (card above the schedule on narrow ones). Public: plain block.
+                    div { class: if editor { "schedule-editor-split" } else { "" },
+                    div { class: if editor { "schedule-editor-main" } else { "" },
                     if view_mode() == "team" && focus_team_id().is_empty() {
                         div { class: "alert alert-info",
                             "Choose your team above to see only the matches you play or ref."
@@ -1387,6 +1399,20 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                             editor: editor && view_mode() == "timeline",
                             bulk_select_active: bulk_mode(),
                             selected_ids: bulk_selected(),
+                            // Pending-create placeholder: stays visible while the create card
+                            // is open, mirroring the card's field/start/length.
+                            pending_create: if editor && active_modal() == "match_create" {
+                                create_ghost()
+                            } else {
+                                None
+                            },
+                            // Winner/Loser chips: only while a create/edit card is open and a
+                            // team-ish input was the last-focused field (and not bulk-selecting).
+                            result_pick_active: editor
+                                && !bulk_mode()
+                                && matches!(active_modal().as_str(), "match_create" | "match_edit")
+                                && team_field_focus().is_some(),
+                            on_pick_result: move |tok: String| insert_team_ref.set(Some(tok)),
                             on_edit_match: {
                                 let matches_for_edit = data.matches.clone();
                                 move |id: String| {
@@ -1402,6 +1428,7 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                                         return;
                                     }
                                     // Structural blocks (breaks/joins) are edited as a same-name group.
+                                    team_field_focus.set(None);
                                     if let Some(m) = matches_for_edit.iter().find(|m| m.uuid == id) {
                                         if is_structural_match(m) {
                                             selected_break_group.set(m.name.clone());
@@ -1416,6 +1443,7 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                             on_drag_create: move |p: DragCreatePayload| {
                                 create_prefill.set(Some(p));
                                 create_prefill_nonce.set(create_prefill_nonce().wrapping_add(1));
+                                team_field_focus.set(None);
                                 active_modal.set("match_create".to_string());
                             },
                             on_move_match: {
@@ -1461,7 +1489,6 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                                                 let req = UpdateBreakGroupRequest {
                                                     schedule_type: None,
                                                     length: None,
-                                                    teams: None,
                                                     start_time: mc.new_start_utc.clone(),
                                                     fields: None,
                                                 };
@@ -1506,6 +1533,7 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                             on_edit_match: {
                                 let matches_for_edit = data.matches.clone();
                                 move |id: String| {
+                                    team_field_focus.set(None);
                                     if let Some(m) = matches_for_edit.iter().find(|m| m.uuid == id) {
                                         if is_structural_match(m) {
                                             selected_break_group.set(m.name.clone());
@@ -1520,23 +1548,32 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                         }
                     }
 
-                    // Modals (key forces remount so Edit modal gets fresh state from match)
-                    if active_modal() == "match_edit" {
-                        div { key: "{selected_match_id()}",
+                    } // schedule-editor-main
+
+                    // Docked editor card (editor only): create / edit / break-group forms.
+                    // The schedule stays visible and interactive next to (or below) it.
+                    if editor && active_modal() == "match_edit" {
+                        div { class: "schedule-editor-panel", key: "edit-{selected_match_id()}",
                             EditMatchModal {
                                 tournament_url: url.clone(),
                                 match_id: selected_match_id(),
                                 data: data.clone(),
-                                on_close: move |_| active_modal.set("none".to_string()),
+                                team_field_focus: team_field_focus,
+                                insert_team_ref: insert_team_ref,
+                                on_close: move |_| {
+                                    team_field_focus.set(None);
+                                    active_modal.set("none".to_string());
+                                },
                                 on_save: move |_| {
+                                    team_field_focus.set(None);
                                     active_modal.set("none".to_string());
                                     refresh();
                                 }
                             }
                         }
                     }
-                    if active_modal() == "match_create" {
-                        div { key: "create-{create_prefill_nonce()}",
+                    if editor && active_modal() == "match_create" {
+                        div { class: "schedule-editor-panel", key: "create-{create_prefill_nonce()}",
                             CreateMatchModal {
                                 tournament_url: url.clone(),
                                 data: data.clone(),
@@ -1546,20 +1583,29 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                                 prefill_length: create_prefill().and_then(|p| p.length_min),
                                 prefill_prev_match_id: create_prefill()
                                     .and_then(|p| p.prev_match_id.clone()),
+                                default_schedule_type: default_match_type(),
+                                show_as_happened: show_as_happened(),
+                                create_ghost: create_ghost,
+                                team_field_focus: team_field_focus,
+                                insert_team_ref: insert_team_ref,
                                 on_close: move |_| {
                                     create_prefill.set(None);
+                                    create_ghost.set(None);
+                                    team_field_focus.set(None);
                                     active_modal.set("none".to_string());
                                 },
                                 on_save: move |_| {
                                     create_prefill.set(None);
+                                    create_ghost.set(None);
+                                    team_field_focus.set(None);
                                     active_modal.set("none".to_string());
                                     refresh();
                                 }
                             }
                         }
                     }
-                    if active_modal() == "break_group" {
-                        div { key: "{selected_break_group()}",
+                    if editor && active_modal() == "break_group" {
+                        div { class: "schedule-editor-panel", key: "group-{selected_break_group()}",
                             BreakGroupModal {
                                 tournament_url: url.clone(),
                                 group_name: selected_break_group(),
@@ -1572,6 +1618,9 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                             }
                         }
                     }
+                    } // schedule-editor-split
+
+                    // Modals that don't need the schedule visible stay as real modals.
                     if active_modal() == "tags" {
                         TagsModal {
                             tournament_url: url.clone(),
@@ -1707,25 +1756,53 @@ fn CreateMatchModal(
     /// Drag-to-create prefill: chain-position default for dynamic types.
     #[props(default)]
     prefill_prev_match_id: Option<String>,
+    /// Toolbar "New match type" default (STATIC/SAFE/FAST).
+    #[props(default)]
+    default_schedule_type: Option<String>,
+    /// Page-level "show times as they happened" toggle (for previous-match lookup).
+    #[props(default = false)]
+    show_as_happened: bool,
+    /// Pending-create placeholder on the timeline; the card keeps it in sync
+    /// with its field/start/length values.
+    create_ghost: Signal<Option<PendingCreateGhost>>,
+    /// Last-focused team-ish input ("team1" | "team2" | "refs").
+    team_field_focus: Signal<Option<String>>,
+    /// Winner/Loser token queued by the timeline chips for insertion.
+    insert_team_ref: Signal<Option<String>>,
 ) -> Element {
     let name = use_signal(|| "".to_string());
     let mut field = use_signal({
         let f = prefill_field.clone();
         move || f.unwrap_or_default()
     });
-    let schedule_type = use_signal(|| "STATIC".to_string());
-    let mut length = use_signal(move || prefill_length.unwrap_or(60));
-    let mut start_time = use_signal({
+    let initial_type = default_schedule_type
+        .clone()
+        .filter(|t| matches!(t.as_str(), "STATIC" | "SAFE" | "FAST"))
+        .unwrap_or_else(|| "STATIC".to_string());
+    let schedule_type = use_signal({
+        let t = initial_type.clone();
+        move || t
+    });
+    let length = use_signal(move || prefill_length.unwrap_or(60));
+    let start_time = use_signal({
         let s = prefill_start_time.clone();
         move || s.unwrap_or_default()
     });
-    let mut previous_match_id = use_signal(|| "".to_string());
+    // Dynamic default types start with the drag-derived previous match preselected.
+    let mut previous_match_id = use_signal({
+        let init = if matches!(initial_type.as_str(), "SAFE" | "FAST") {
+            prefill_prev_match_id.clone().unwrap_or_default()
+        } else {
+            String::new()
+        };
+        move || init
+    });
     let mut refs = use_signal(|| "".to_string());
     let mut team1 = use_signal(|| "".to_string());
     let mut team2 = use_signal(|| "".to_string());
-    let mut set_type = use_signal(|| "SETS".to_string());
-    let mut nsets = use_signal(|| 3u32);
-    let mut stones_per_set = use_signal(|| 100u32);
+    let set_type = use_signal(|| "SETS".to_string());
+    let nsets = use_signal(|| 3u32);
+    let stones_per_set = use_signal(|| 100u32);
     let ribbon = use_signal(|| false);
     let mut skip_condition = use_signal(|| "".to_string());
     let mut skip_condition_help_open = use_signal(|| false);
@@ -1739,6 +1816,65 @@ fn CreateMatchModal(
 
     let mut error = use_signal(|| None::<String>);
     let mut saving = use_signal(|| false);
+
+    // Keep the timeline's pending-create placeholder in sync with the card's
+    // field / start-time / length. Cleared by the page on save/cancel.
+    {
+        let mut create_ghost = create_ghost;
+        use_effect(move || {
+            let st = schedule_type();
+            let field_name = if matches!(st.as_str(), "BREAK" | "STATBREAK" | "JOIN") {
+                break_fields().first().cloned().unwrap_or_default()
+            } else {
+                field()
+            };
+            let parsed = chrono::NaiveDateTime::parse_from_str(
+                start_time().trim(),
+                "%Y-%m-%dT%H:%M",
+            )
+            .ok();
+            let next = match (field_name.is_empty(), parsed) {
+                (false, Some(start_local)) => Some(PendingCreateGhost {
+                    field_name,
+                    start_local,
+                    length_min: (length() as i64).max(10),
+                }),
+                _ => None,
+            };
+            if *create_ghost.peek() != next {
+                create_ghost.set(next);
+            }
+        });
+    }
+
+    // Consume Winner/Loser tokens queued by the timeline chips into whichever
+    // team-ish input was focused last (refs appends; team1/team2 replace).
+    {
+        let mut insert_team_ref = insert_team_ref;
+        use_effect(move || {
+            if let Some(tok) = insert_team_ref() {
+                match team_field_focus.peek().as_deref() {
+                    Some("team1") => team1.set(tok.clone()),
+                    Some("team2") => team2.set(tok.clone()),
+                    Some("refs") => {
+                        let cur = refs
+                            .peek()
+                            .trim()
+                            .trim_end_matches(',')
+                            .trim()
+                            .to_string();
+                        refs.set(if cur.is_empty() {
+                            tok.clone()
+                        } else {
+                            format!("{cur}, {tok}")
+                        });
+                    }
+                    _ => {}
+                }
+                insert_team_ref.set(None);
+            }
+        });
+    }
 
     #[cfg(target_arch = "wasm32")]
     use_effect(move || {
@@ -1758,38 +1894,37 @@ fn CreateMatchModal(
 
     let matches_on_field = matches_on_field_sorted(&data.matches, &field(), None);
 
-    let data_field = data.clone();
+    // Previous match derived from the card's start time: the match on `field_name`
+    // whose displayed interval most closely precedes it (same rule as drag-create).
+    let compute_prev_from_start = {
+        let data_prev = data.clone();
+        move |field_name: &str, start_local_str: &str| -> Option<String> {
+            let start_local =
+                chrono::NaiveDateTime::parse_from_str(start_local_str.trim(), "%Y-%m-%dT%H:%M")
+                    .ok()?;
+            latest_match_before(
+                &data_prev.matches,
+                field_name,
+                start_local,
+                "",
+                show_as_happened,
+                schedule_tz_offset_minutes(),
+            )
+            .map(|(u, _, _)| u)
+        }
+    };
+
+    // Note: never auto-assign length / format from the previous match — the
+    // drag-derived (or default) length stays unless the user types a new one.
+    let compute_prev_for_field = compute_prev_from_start.clone();
     let mut on_field_change = move |new_field: String| {
         field.set(new_field.clone());
         previous_match_id.set("".to_string());
-        if !new_field.is_empty() {
-            let list = matches_on_field_sorted(&data_field.matches, &new_field, None);
-            if schedule_type() != "STATIC" {
-                if let Some(m) = list.first() {
-                    previous_match_id.set(m.uuid.clone());
-                }
-                if let Some(m) = list.first() {
-                    length.set(m.nominal_length.unwrap_or(60));
-                    set_type.set(m.set_type.clone().unwrap_or_else(|| "SETS".to_string()));
-                    nsets.set(m.nsets.unwrap_or(3));
-                    stones_per_set.set(m.stones_per_set.unwrap_or(100));
-                }
-            } else if let Some(m) = list.first().and_then(|x| x.nominal_start_time.as_ref()) {
-                if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(m) {
-                    start_time.set(dt.format("%Y-%m-%dT%H:%M").to_string());
-                }
-            }
-        }
-    };
-    let data_prev = data.clone();
-    let mut on_previous_match_change = move |new_prev_id: String| {
-        previous_match_id.set(new_prev_id.clone());
-        if !new_prev_id.is_empty() {
-            if let Some(prev) = data_prev.matches.iter().find(|m| m.uuid == new_prev_id) {
-                length.set(prev.nominal_length.unwrap_or(60));
-                set_type.set(prev.set_type.clone().unwrap_or_else(|| "SETS".to_string()));
-                nsets.set(prev.nsets.unwrap_or(3));
-                stones_per_set.set(prev.stones_per_set.unwrap_or(100));
+        // Dynamic types: recompute the previous match on the new field from the
+        // card's start time.
+        if !new_field.is_empty() && matches!(schedule_type().as_str(), "SAFE" | "FAST" | "JOIN") {
+            if let Some(prev) = compute_prev_for_field(&new_field, &start_time()) {
+                previous_match_id.set(prev);
             }
         }
     };
@@ -2130,17 +2265,22 @@ fn CreateMatchModal(
 
     rsx! {
         div {
+            // Docked editor card (not a modal): the schedule stays visible and
+            // interactive beside/below it.
             div {
-                class: "modal d-block",
+                class: "card schedule-editor-card",
                 tabindex: -1,
-                style: "background: rgba(0,0,0,0.5)",
                 onkeydown: modal_keydown,
-                div { class: "modal-dialog modal-lg",
-                    div { class: "modal-content",
-                        div { class: "modal-header",
-                            h5 { class: "modal-title", "New Match" }
-                        }
-                    div { class: "modal-body",
+                div { class: "card-header d-flex justify-content-between align-items-center",
+                    h5 { class: "mb-0", "New Match" }
+                    button {
+                        class: "btn-close",
+                        r#type: "button",
+                        "aria-label": "Close",
+                        onclick: move |_| on_close.call(()),
+                    }
+                }
+                    div { class: "card-body",
                         if let Some(err) = error() {
                             div { class: "alert alert-danger", "{err}" }
                         }
@@ -2186,18 +2326,19 @@ fn CreateMatchModal(
                                         label { class: "form-label", "Type" }
                                         select { class: "form-select", value: "{schedule_type}", onchange: {
                                             let prefill_prev = prefill_prev_match_id.clone();
+                                            let compute_prev = compute_prev_from_start.clone();
                                             move |e: Event<FormData>| {
                                                 let mut schedule_type = schedule_type;
                                                 let v = e.value();
                                                 schedule_type.set(v.clone());
-                                                // Drag-to-create: switching to a dynamic type defaults the
-                                                // previous match to the chain position of the drag start.
-                                                if matches!(v.as_str(), "SAFE" | "FAST" | "JOIN")
-                                                    && previous_match_id().is_empty()
-                                                {
-                                                    if let Some(p) = prefill_prev.clone() {
-                                                        previous_match_id.set(p);
-                                                    }
+                                                // Switching to a dynamic type: auto-select the previous
+                                                // match on the card's field from the card's start time
+                                                // (i.e. the clicked/dragged position), falling back to
+                                                // the drag-derived default.
+                                                if matches!(v.as_str(), "SAFE" | "FAST" | "JOIN") {
+                                                    let prev = compute_prev(&field(), &start_time())
+                                                        .or_else(|| prefill_prev.clone());
+                                                    previous_match_id.set(prev.unwrap_or_default());
                                                 }
                                             }
                                         },
@@ -2228,7 +2369,7 @@ fn CreateMatchModal(
                             } else if schedule_type() == "SAFE" || schedule_type() == "FAST" {
                                 div { class: "mb-3",
                                     label { class: "form-label", "Previous Match" }
-                                    select { class: "form-select", value: "{previous_match_id}", onchange: move |e| on_previous_match_change(e.value()),
+                                    select { class: "form-select", value: "{previous_match_id}", onchange: move |e| previous_match_id.set(e.value()),
                                         option { value: "", "None" }
                                         for m in &matches_on_field {
                                             option { value: "{m.uuid}", "{m.name}" }
@@ -2299,7 +2440,12 @@ fn CreateMatchModal(
 
                             if schedule_type() == "STATIC" || schedule_type() == "SAFE" || schedule_type() == "FAST" {
                                 div { class: "row",
+                                    // Focus tracking feeds the timeline's Winner/Loser hover chips.
                                     div { class: "col-md-6",
+                                        onfocusin: move |_| {
+                                            let mut t = team_field_focus;
+                                            t.set(Some("team1".to_string()));
+                                        },
                                         TeamSelectionField {
                                             label: "Team 1".to_string(),
                                             team_options: data.team_options.clone(),
@@ -2313,6 +2459,10 @@ fn CreateMatchModal(
                                         }
                                     }
                                     div { class: "col-md-6",
+                                        onfocusin: move |_| {
+                                            let mut t = team_field_focus;
+                                            t.set(Some("team2".to_string()));
+                                        },
                                         TeamSelectionField {
                                             label: "Team 2".to_string(),
                                             team_options: data.team_options.clone(),
@@ -2326,16 +2476,22 @@ fn CreateMatchModal(
                                         }
                                     }
                                 }
-                                TeamSelectionField {
-                                    label: "Referees".to_string(),
-                                    team_options: data.team_options.clone(),
-                                    tags: data.tags.clone(),
-                                    matches: data.matches.clone(),
-                                    value: refs(),
-                                    on_change: move |s| refs.set(s),
-                                    multiple: true,
-                                    placeholder: "(optional) teams, match winners/losers, or tags".to_string(),
-                                    help_text: Some("(optional) teams, match winners/losers, or tags".to_string()),
+                                div {
+                                    onfocusin: move |_| {
+                                        let mut t = team_field_focus;
+                                        t.set(Some("refs".to_string()));
+                                    },
+                                    TeamSelectionField {
+                                        label: "Referees".to_string(),
+                                        team_options: data.team_options.clone(),
+                                        tags: data.tags.clone(),
+                                        matches: data.matches.clone(),
+                                        value: refs(),
+                                        on_change: move |s| refs.set(s),
+                                        multiple: true,
+                                        placeholder: "(optional) teams, match winners/losers, or tags".to_string(),
+                                        help_text: Some("(optional) teams, match winners/losers, or tags".to_string()),
+                                    }
                                 }
                                 div { class: "row",
                                     div { class: "col-md-4",
@@ -2408,8 +2564,6 @@ fn CreateMatchModal(
                             }
                         }
                     }
-                }
-                }
             }
             if skip_condition_help_open() {
                 SkipConditionHelpModal { on_close: move |_| skip_condition_help_open.set(false) }
@@ -2568,17 +2722,22 @@ fn BreakGroupModal(
     };
 
     rsx! {
+        // Docked editor card (not a modal): the schedule stays visible and
+        // interactive beside/below it.
         div {
-            class: "modal d-block",
+            class: "card schedule-editor-card",
             tabindex: -1,
-            style: "background: rgba(0,0,0,0.5)",
             onkeydown: modal_keydown,
-            div { class: "modal-dialog modal-lg",
-                div { class: "modal-content",
-                    div { class: "modal-header",
-                        h5 { class: "modal-title", "Edit {type_label}: {group_name}" }
-                    }
-                    div { class: "modal-body",
+            div { class: "card-header d-flex justify-content-between align-items-center",
+                h5 { class: "mb-0", "Edit {type_label}: {group_name}" }
+                button {
+                    class: "btn-close",
+                    r#type: "button",
+                    "aria-label": "Close",
+                    onclick: move |_| on_close.call(()),
+                }
+            }
+                    div { class: "card-body",
                         if let Some(err) = error() {
                             div { class: "alert alert-danger", "{err}" }
                         }
@@ -2694,8 +2853,6 @@ fn BreakGroupModal(
                             }
                         }
                     }
-                }
-            }
         }
     }
 }
@@ -3749,7 +3906,8 @@ fn TableView(
                             .collect();
                         let schedule_type_display = m.schedule_type.as_deref().unwrap_or("-");
                         let structural = is_structural_match(m);
-                        let (status_color, status_label) = if structural {
+                        // Editor table: structural rows show real statuses like matches.
+                        let (status_color, status_label) = if structural && !edit_mode {
                             ("#e9ecef".to_string(), "—".to_string())
                         } else if m.status.is_empty() {
                             ("#e9ecef".to_string(), "-".to_string())
@@ -3773,7 +3931,7 @@ fn TableView(
                                 }
                                 td { "{schedule_type_display}" }
                                 td { class: "align-middle",
-                                    if !structural {
+                                    if !structural || edit_mode {
                                         span {
                                             class: "schedule-timeline-status-tag",
                                             style: "background-color: {status_color};",
@@ -3851,23 +4009,12 @@ fn TableView(
                                 }
                                 if edit_mode {
                                     td {
-                                        // Editing is locked once a match has started — surface a
-                                        // disabled pencil with a tooltip so the row layout doesn't shift.
-                                        // Structural rows (breaks/joins) stay editable (group modal);
-                                        // their status is solver-derived, never user-started.
-                                        if !is_structural_match(m) && matches!(m.status.as_str(), "IN_PROGRESS" | "COMPLETED" | "SKIPPED") {
-                                            button {
-                                                class: "btn btn-sm btn-link text-muted",
-                                                disabled: true,
-                                                title: "Match has started — editing is disabled.",
-                                                "✎"
-                                            }
-                                        } else {
-                                            button {
-                                                class: "btn btn-sm btn-link",
-                                                onclick: move |_| on_edit_match.call(match_id.clone()),
-                                                "✎"
-                                            }
+                                        // Started/completed rows stay editable too: the edit card
+                                        // surfaces the lock and the server rejects disallowed changes.
+                                        button {
+                                            class: "btn btn-sm btn-link",
+                                            onclick: move |_| on_edit_match.call(match_id.clone()),
+                                            "✎"
                                         }
                                     }
                                 }
@@ -3964,12 +4111,22 @@ fn TimelineEventCard(
     /// Alt-hover dependency highlight class (source / chain / team / ref).
     #[props(default)]
     dep_class: Option<String>,
+    /// Alt-hover: nested outline rings for the hovered source block (one ring
+    /// per dependency edge, colored like its line). Inline `box-shadow: …;`.
+    #[props(default)]
+    dep_shadow: Option<String>,
     /// Pointerdown on the block (id, client_x, client_y) → may start a move drag.
     #[props(default)]
     on_move_pointer_down: EventHandler<(String, f64, f64)>,
     /// Hover tracking for the alt-dependency view: (id, entered, alt_held).
     #[props(default)]
     on_hover: EventHandler<(String, bool, bool)>,
+    /// Show Winner/Loser overlay chips on hover (editor card open, team input focused).
+    #[props(default = false)]
+    result_pick_active: bool,
+    /// Fired with `<MatchName>::winner|loser` when a chip is clicked.
+    #[props(default)]
+    on_pick_result: EventHandler<String>,
 ) -> Element {
     let navigator = use_navigator();
     let event_id_clone = event.id.clone();
@@ -4000,7 +4157,8 @@ fn TimelineEventCard(
         } else {
             ""
         },
-        if is_structural {
+        // Editor: structural blocks drop the neutral chrome and show statuses.
+        if is_structural && !editor {
             " schedule-timeline-event--structural"
         } else {
             ""
@@ -4025,16 +4183,17 @@ fn TimelineEventCard(
             (d.clone(), p.clone(), k, l)
         })
         .collect();
-    // Break-like blocks stay clickable in edit mode even when COMPLETED: their
-    // status is solver-derived (never user-started) and the break-group modal
-    // handles what may actually change.
+    // Started/completed matches stay fully interactive on the editor (click,
+    // drag, bulk-select); the server rejects disallowed changes and the
+    // existing error alert + refetch handles it. The lock is surfaced as a
+    // hint here and as a warning in the edit card.
     let edit_locked = !is_break
         && matches!(
             event.status.as_str(),
             "IN_PROGRESS" | "COMPLETED" | "SKIPPED"
         );
     let timeline_title = if edit_mode && edit_locked {
-        format!("{event_title} — match has started, editing disabled")
+        format!("{event_title} — match has started; the server will reject most changes")
     } else {
         event_title.clone()
     };
@@ -4052,13 +4211,18 @@ fn TimelineEventCard(
     let event_id_for_drag = event.id.clone();
     let event_id_for_enter = event.id.clone();
     let event_id_for_leave = event.id.clone();
-    let can_drag = editor && !edit_locked;
+    let can_drag = editor;
+    // Hovered dependency source: append the per-edge outline rings.
+    let event_style = match dep_shadow.as_deref() {
+        Some(shadow) => format!("{event_style} {shadow}"),
+        None => event_style.clone(),
+    };
     rsx! {
         div {
             class: "{event_class}",
             style: "{event_style}",
             title: "{timeline_title}",
-            cursor: if can_drag { "grab" } else if (is_break && !edit_mode) || (edit_mode && edit_locked) { "default" } else { "pointer" },
+            cursor: if can_drag { "grab" } else if is_break && !edit_mode { "default" } else { "pointer" },
             onpointerdown: move |ev: Event<PointerData>| {
                 if !editor {
                     return;
@@ -4084,9 +4248,7 @@ fn TimelineEventCard(
             onclick: move |_| {
                 if is_break && !edit_mode {
                 } else if edit_mode {
-                    if !edit_locked {
-                        on_edit_match.call(event_id_clone.clone());
-                    }
+                    on_edit_match.call(event_id_clone.clone());
                 } else {
                     navigator.push(Route::MatchPageById {
                         url: url_clone.clone(),
@@ -4094,11 +4256,44 @@ fn TimelineEventCard(
                     });
                 }
             },
-            if !is_structural {
+            if !is_structural || editor {
                 span {
                     class: "schedule-timeline-status-tag schedule-timeline-status-tag--corner",
                     style: "background-color: {event.color};",
                     "{status_label}"
+                }
+            }
+            // Winner/Loser insertion chips: shown on hover while an editor card has a
+            // team-ish input focused. Structural blocks (breaks/joins) have no winner.
+            if editor && result_pick_active && !is_structural {
+                div {
+                    class: "schedule-result-chips",
+                    // Never start a move drag from a chip press.
+                    onpointerdown: move |ev: Event<PointerData>| ev.stop_propagation(),
+                    button {
+                        r#type: "button",
+                        class: "schedule-result-chip schedule-result-chip--winner",
+                        onclick: {
+                            let name = event.name.clone();
+                            move |ev: Event<MouseData>| {
+                                ev.stop_propagation();
+                                on_pick_result.call(format!("{name}::winner"));
+                            }
+                        },
+                        "Winner"
+                    }
+                    button {
+                        r#type: "button",
+                        class: "schedule-result-chip schedule-result-chip--loser",
+                        onclick: {
+                            let name = event.name.clone();
+                            move |ev: Event<MouseData>| {
+                                ev.stop_propagation();
+                                on_pick_result.call(format!("{name}::loser"));
+                            }
+                        },
+                        "Loser"
+                    }
                 }
             }
             if team_view && !is_break {
@@ -4362,6 +4557,16 @@ fn ScheduleTimeline(
     /// Blocks currently selected by the bulk-length tool.
     #[props(default)]
     selected_ids: Vec<String>,
+    /// Pending-create placeholder shown while the create card is open (editor only).
+    #[props(default)]
+    pending_create: Option<PendingCreateGhost>,
+    /// Show Winner/Loser chips on hovered match blocks (editor card is open with
+    /// a team-ish input focused last).
+    #[props(default = false)]
+    result_pick_active: bool,
+    /// Fired with a `<MatchName>::winner|loser` token when a chip is clicked.
+    #[props(default)]
+    on_pick_result: EventHandler<String>,
     /// Fired when a drag-to-create gesture (or plain empty-space click) completes.
     #[props(default)]
     on_drag_create: EventHandler<DragCreatePayload>,
@@ -4756,8 +4961,9 @@ fn ScheduleTimeline(
                 .collect::<Vec<_>>()
                 .join(", ");
 
-            // Status tag palette only (never overwritten for highlight; highlight is on the block)
-            let (color, _) = if is_structural_match(m) {
+            // Status tag palette only (never overwritten for highlight; highlight is on the block).
+            // Editor: structural blocks (breaks/joins) show real statuses like matches.
+            let (color, _) = if is_structural_match(m) && !editor {
                 ("#e9ecef".to_string(), "—".to_string())
             } else {
                 status_color_and_label(&m.status)
@@ -5269,6 +5475,32 @@ fn ScheduleTimeline(
             }
         }
         map
+    };
+    // Nested outline rings on the hovered block: one ring per dependency edge,
+    // colored like its line (3px ring + 1px white separator each), so the
+    // number of dependencies is countable at a glance.
+    let dep_source_shadow: Option<String> = if dep_edges.is_empty() {
+        None
+    } else {
+        let shadows: Vec<String> = dep_edges
+            .iter()
+            .enumerate()
+            .map(|(i, (_, _, kind))| {
+                let color = match kind {
+                    0 => "#0d6efd",
+                    1 | 2 => "#d63384",
+                    _ => "#fd7e14",
+                };
+                let inner = (i as u32) * 4;
+                format!(
+                    "0 0 0 {}px {}, 0 0 0 {}px rgba(255,255,255,0.9)",
+                    inner + 3,
+                    color,
+                    inner + 4
+                )
+            })
+            .collect();
+        Some(format!("box-shadow: {};", shadows.join(", ")))
     };
 
     // Ghost placement for the in-flight drag:
@@ -5847,7 +6079,8 @@ fn ScheduleTimeline(
                             let width = (lane_w / 100.0) * col_w;
                             geom_by_id.insert(e.id.clone(), (left, width, start_slots, duration_slots));
                             let is_structural = is_structural_type(e.schedule_type.as_deref());
-                            let bg = if is_structural { "#f1f3f5" } else { "#ffffff" };
+                            // Editor: structural blocks look like matches (statuses shown).
+                            let bg = if is_structural && !editor { "#f1f3f5" } else { "#ffffff" };
                             let style = format!(
                                 "background-color: {bg}; position: absolute; box-sizing: border-box; \
                                  left: calc({left}% + 1px); width: calc({width}% - 2px); \
@@ -5859,12 +6092,24 @@ fn ScheduleTimeline(
                         .collect();
                     // Dependency lines: only edges whose target is visible in the current day/filter.
                     // Endpoints in overlay percentages (x: both axes % of the layer box).
+                    // At the hovered block, parallel edges fan out with small lateral
+                    // offsets along its edge instead of stacking on the midpoint.
+                    let n_dep_edges = dep_edges.len();
                     let dep_lines: Vec<(f64, f64, f64, f64, u8)> = dep_edges
                         .iter()
-                        .filter_map(|(from, to, kind)| {
+                        .enumerate()
+                        .filter_map(|(i, (from, to, kind))| {
                             let (fl, fw, ft, fh) = *geom_by_id.get(from)?;
                             let (tl, tw, tt, th) = *geom_by_id.get(to)?;
-                            let fx = fl + fw / 2.0;
+                            // ~0.6% of the layer width (a few px) per edge, clamped so
+                            // the fan stays within the hovered block's width.
+                            let step = if n_dep_edges > 1 {
+                                (0.6_f64).min(fw * 0.8 / (n_dep_edges as f64 - 1.0))
+                            } else {
+                                0.0
+                            };
+                            let offset = (i as f64 - (n_dep_edges as f64 - 1.0) / 2.0) * step;
+                            let fx = fl + fw / 2.0 + offset;
                             let tx = tl + tw / 2.0;
                             let fcy = (ft + fh / 2.0) / slots_per_day as f64 * 100.0;
                             let tcy = (tt + th / 2.0) / slots_per_day as f64 * 100.0;
@@ -5908,6 +6153,29 @@ fn ScheduleTimeline(
                             (style, title.clone(), sub.clone(), *blocked, gap_style)
                         },
                     );
+                    // Pending-create placeholder: mirrors the open create card's
+                    // field/start/length so the drag target stays visible.
+                    let pending_block = pending_create.as_ref().and_then(|g| {
+                        if g.start_local.date() != current_visible_date {
+                            return None;
+                        }
+                        let col = field_names.iter().position(|n| n == &g.field_name)?;
+                        let col_w = 100.0 / num_fields as f64;
+                        let left = col as f64 * col_w;
+                        let start_min =
+                            (g.start_local.hour() as i64) * 60 + g.start_local.minute() as i64;
+                        let dur = g.length_min.max(10);
+                        let top_slots = start_min as f64 / SLOT_MINUTES as f64;
+                        let height_slots = dur as f64 / SLOT_MINUTES as f64;
+                        let style = format!(
+                            "left: calc({left}% + 1px); width: calc({col_w}% - 2px); \
+                             top: calc(var(--slot-height) * {top_slots}); \
+                             height: calc(var(--slot-height) * {height_slots});"
+                        );
+                        let title =
+                            format!("{} – {}", fmt_minutes(start_min), fmt_minutes(start_min + dur));
+                        Some((style, title))
+                    });
                     let base_url = base_url.clone();
                     let tournament_url = tournament_url.clone();
                     rsx! {
@@ -5935,9 +6203,26 @@ fn ScheduleTimeline(
                                         editor: editor,
                                         selected: selected_ids.contains(&ev.id),
                                         dep_class: dep_class_map.get(&ev.id).map(|c| c.to_string()),
+                                        dep_shadow: if dep_class_map.get(&ev.id).copied()
+                                            == Some("schedule-timeline-event--dep-source")
+                                        {
+                                            dep_source_shadow.clone()
+                                        } else {
+                                            None
+                                        },
                                         on_move_pointer_down: on_block_drag_start,
                                         on_hover: on_block_hover,
+                                        result_pick_active: result_pick_active,
+                                        on_pick_result: on_pick_result,
                                     }
+                                }
+                            }
+                            if let Some((pending_style, pending_title)) = pending_block {
+                                div {
+                                    class: "schedule-drag-ghost schedule-drag-ghost--pending",
+                                    style: "{pending_style}",
+                                    div { class: "schedule-drag-ghost-title", "{pending_title}" }
+                                    div { class: "schedule-drag-ghost-sub", "new match" }
                                 }
                             }
                             if let Some((ghost_style, ghost_title, ghost_sub, ghost_blocked, gap_style)) = ghost_block {
@@ -6022,6 +6307,10 @@ fn EditMatchModal(
     data: ScheduleSetupResponse,
     on_close: EventHandler<()>,
     on_save: EventHandler<()>,
+    /// Last-focused team-ish input ("team1" | "team2" | "refs").
+    team_field_focus: Signal<Option<String>>,
+    /// Winner/Loser token queued by the timeline chips for insertion.
+    insert_team_ref: Signal<Option<String>>,
 ) -> Element {
     let match_data = data.matches.iter().find(|m| m.uuid == match_id).cloned();
 
@@ -6031,13 +6320,20 @@ fn EditMatchModal(
 
     let m = match_data.unwrap();
 
+    // Started/completed/skipped: still fully editable in the UI; the server
+    // rejects disallowed changes (surfaced via the warning + error alerts).
+    let match_locked = matches!(
+        m.status.as_str(),
+        "IN_PROGRESS" | "COMPLETED" | "SKIPPED"
+    );
+
     // Original schedule type for edit: only allow transitions STATIC→SAFE/FAST, SAFE→FAST
     let original_schedule_type = m.schedule_type.as_deref().unwrap_or("STATIC");
 
     let name = use_signal(|| m.name.clone());
     let mut field = use_signal(|| m.field.clone().unwrap_or_default());
     let schedule_type = use_signal(|| m.schedule_type.clone().unwrap_or("STATIC".to_string()));
-    let mut length = use_signal(|| m.nominal_length.unwrap_or(60));
+    let length = use_signal(|| m.nominal_length.unwrap_or(60));
 
     let start_time_init = if let Some(t) = &m.nominal_start_time {
         utc_iso_to_local_datetime_input(t).unwrap_or_else(|| t.chars().take(16).collect::<String>())
@@ -6065,9 +6361,9 @@ fn EditMatchModal(
             .or(m.team2.clone())
             .unwrap_or_default()
     });
-    let mut set_type = use_signal(|| m.set_type.clone().unwrap_or("SETS".to_string()));
-    let mut nsets = use_signal(|| m.nsets.unwrap_or(3));
-    let mut stones_per_set = use_signal(|| m.stones_per_set.unwrap_or(100));
+    let set_type = use_signal(|| m.set_type.clone().unwrap_or("SETS".to_string()));
+    let nsets = use_signal(|| m.nsets.unwrap_or(3));
+    let stones_per_set = use_signal(|| m.stones_per_set.unwrap_or(100));
     let ribbon = use_signal(|| m.ribbon);
     let mut skip_condition = use_signal(|| m.skip_condition.clone().unwrap_or_default());
     let mut skip_condition_help_open = use_signal(|| false);
@@ -6093,26 +6389,42 @@ fn EditMatchModal(
 
     let matches_on_field_edit = matches_on_field_sorted(&data.matches, &field(), Some(&match_id));
 
-    // When field changes, clear previous match so user must pick one on the new field
-    let data_field_edit = data.clone();
-    let match_id_for_field = match_id.clone();
+    // When field changes, clear previous match so user must pick one on the new
+    // field. Never auto-assign length/format from another match — the current
+    // values stay unless the user types new ones.
     let mut on_field_change_edit = move |new_field: String| {
-        field.set(new_field.clone());
+        field.set(new_field);
         previous_match_id.set("".to_string());
-        if !new_field.is_empty() {
-            let list = matches_on_field_sorted(
-                &data_field_edit.matches,
-                &new_field,
-                Some(&match_id_for_field),
-            );
-            if let Some(prev) = list.first() {
-                length.set(prev.nominal_length.unwrap_or(60));
-                set_type.set(prev.set_type.clone().unwrap_or_else(|| "SETS".to_string()));
-                nsets.set(prev.nsets.unwrap_or(3));
-                stones_per_set.set(prev.stones_per_set.unwrap_or(100));
-            }
-        }
     };
+
+    // Consume Winner/Loser tokens queued by the timeline chips into whichever
+    // team-ish input was focused last (refs appends; team1/team2 replace).
+    {
+        let mut insert_team_ref = insert_team_ref;
+        use_effect(move || {
+            if let Some(tok) = insert_team_ref() {
+                match team_field_focus.peek().as_deref() {
+                    Some("team1") => team1.set(tok.clone()),
+                    Some("team2") => team2.set(tok.clone()),
+                    Some("refs") => {
+                        let cur = refs
+                            .peek()
+                            .trim()
+                            .trim_end_matches(',')
+                            .trim()
+                            .to_string();
+                        refs.set(if cur.is_empty() {
+                            tok.clone()
+                        } else {
+                            format!("{cur}, {tok}")
+                        });
+                    }
+                    _ => {}
+                }
+                insert_team_ref.set(None);
+            }
+        });
+    }
 
     let u_save = tournament_url.clone();
     let m_id_save = match_id.clone();
@@ -6260,17 +6572,29 @@ fn EditMatchModal(
 
     rsx! {
         div {
+            // Docked editor card (not a modal): the schedule stays visible and
+            // interactive beside/below it.
             div {
-                class: "modal d-block",
+                class: "card schedule-editor-card",
                 tabindex: -1,
-                style: "background: rgba(0,0,0,0.5)",
                 onkeydown: modal_keydown,
-                div { class: "modal-dialog modal-lg",
-                    div { class: "modal-content",
-                        div { class: "modal-header",
-                            h5 { class: "modal-title", "Edit Match: {name}" }
+                div { class: "card-header d-flex justify-content-between align-items-center",
+                    h5 { class: "mb-0", "Edit Match: {name}" }
+                    button {
+                        class: "btn-close",
+                        r#type: "button",
+                        "aria-label": "Close",
+                        onclick: move |_| on_close.call(()),
+                    }
+                }
+                        div { class: "card-body",
+                        // Locked matches stay editable client-side; the server decides
+                        // what (if anything) it will accept and the error shows here.
+                        if match_locked {
+                            div { class: "alert alert-warning py-2",
+                                "This match has started or finished — changes will be rejected by the server."
+                            }
                         }
-                        div { class: "modal-body",
                         if let Some(err) = error() {
                             div { class: "alert alert-danger", "{err}" }
                         }
@@ -6359,7 +6683,12 @@ fn EditMatchModal(
 
                             if schedule_type() == "STATIC" || schedule_type() == "SAFE" || schedule_type() == "FAST" {
                                 div { class: "row",
+                                    // Focus tracking feeds the timeline's Winner/Loser hover chips.
                                     div { class: "col-md-6",
+                                        onfocusin: move |_| {
+                                            let mut t = team_field_focus;
+                                            t.set(Some("team1".to_string()));
+                                        },
                                         TeamSelectionField {
                                             label: "Team 1".to_string(),
                                             team_options: data.team_options.clone(),
@@ -6373,6 +6702,10 @@ fn EditMatchModal(
                                         }
                                     }
                                     div { class: "col-md-6",
+                                        onfocusin: move |_| {
+                                            let mut t = team_field_focus;
+                                            t.set(Some("team2".to_string()));
+                                        },
                                         TeamSelectionField {
                                             label: "Team 2".to_string(),
                                             team_options: data.team_options.clone(),
@@ -6386,16 +6719,22 @@ fn EditMatchModal(
                                         }
                                     }
                                 }
-                                TeamSelectionField {
-                                    label: "Referees".to_string(),
-                                    team_options: data.team_options.clone(),
-                                    tags: data.tags.clone(),
-                                    matches: data.matches.clone(),
-                                    value: refs(),
-                                    on_change: move |s| refs.set(s),
-                                    multiple: true,
-                                    placeholder: "(optional) teams, match winners/losers, or tags".to_string(),
-                                    help_text: Some("(optional) teams, match winners/losers, or tags".to_string()),
+                                div {
+                                    onfocusin: move |_| {
+                                        let mut t = team_field_focus;
+                                        t.set(Some("refs".to_string()));
+                                    },
+                                    TeamSelectionField {
+                                        label: "Referees".to_string(),
+                                        team_options: data.team_options.clone(),
+                                        tags: data.tags.clone(),
+                                        matches: data.matches.clone(),
+                                        value: refs(),
+                                        on_change: move |s| refs.set(s),
+                                        multiple: true,
+                                        placeholder: "(optional) teams, match winners/losers, or tags".to_string(),
+                                        help_text: Some("(optional) teams, match winners/losers, or tags".to_string()),
+                                    }
                                 }
                                 div { class: "row",
                                     div { class: "col-md-4",
@@ -6482,8 +6821,6 @@ fn EditMatchModal(
                             }
                         }
                     }
-                }
-            }
             }
             if skip_condition_help_open() {
                 SkipConditionHelpModal { on_close: move |_| skip_condition_help_open.set(false) }
