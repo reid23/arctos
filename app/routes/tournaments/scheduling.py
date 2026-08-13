@@ -175,7 +175,8 @@ def import_schedule(tournament_url):
     res = ScheduleImportExportService.import_schedule(tournament_url, toml_content)
 
     def result_to_payload(import_result):
-        """Convert ImportResult to JSON payload."""
+        """Convert ImportResult to JSON payload, then re-solve plan + live timelines."""
+        recompute_scheduled_and_nominal_times(tournament_url)
         return {
             "tags_created": import_result.tags_created,
             "tags_updated": import_result.tags_updated,
@@ -1267,9 +1268,13 @@ def force_start_match_api(tournament_url, match_id):
     r_csv, i_csv = resolve_refs_slots(refs_list, tournament_url)
     set_match_referees_from_csv(match, r_csv, i_csv)
 
-    # Convert to static
+    # Convert to static. The new wall-clock "now" becomes both the plan anchor and
+    # the live estimate — otherwise the planned pass keeps a stale scheduled time
+    # while the board (plan mode) still shows the old slot.
     match.schedule_type = ScheduleType.STATIC
-    match.nominal_start_time = now_utc_naive()
+    now = now_utc_naive()
+    match.nominal_start_time = now
+    match.scheduled_start_time = now
     match.status = MatchStatus.READY_TO_START
 
     # The match is being converted to STATIC and started — fully splice it out of
@@ -1280,7 +1285,8 @@ def force_start_match_api(tournament_url, match_id):
 
     db.session.flush()
     db.session.commit()
-    recompute_all_match_times(tournament_url)
+    # Structural change to a STATIC anchor: re-solve plan then live.
+    recompute_scheduled_and_nominal_times(tournament_url)
 
     return jsonify({"success": True})
 
@@ -1330,12 +1336,25 @@ def push_back_matches_api(tournament_url):
     )
     from datetime import timedelta
 
+    # Push-back is a deliberate shift of the *plan* of the day (e.g. late first
+    # whistle). STATIC anchors must move scheduled_start_time as well as nominal;
+    # dynamic matches then re-derive both timelines from the new anchors.
+    delta = timedelta(minutes=minutes)
     for m in matches:
-        if m.schedule_type == ScheduleType.STATIC and m.nominal_start_time:
-            m.nominal_start_time += timedelta(minutes=minutes)
+        if m.schedule_type != ScheduleType.STATIC:
+            continue
+        if m.scheduled_start_time is not None:
+            m.scheduled_start_time = m.scheduled_start_time + delta
+        if m.nominal_start_time is not None:
+            m.nominal_start_time = m.nominal_start_time + delta
+        # Keep the two aligned if only one was populated.
+        if m.scheduled_start_time is None and m.nominal_start_time is not None:
+            m.scheduled_start_time = m.nominal_start_time
+        if m.nominal_start_time is None and m.scheduled_start_time is not None:
+            m.nominal_start_time = m.scheduled_start_time
 
     db.session.commit()
-    recompute_all_match_times(tournament_url)
+    recompute_scheduled_and_nominal_times(tournament_url)
     return jsonify({"success": True})
 
 

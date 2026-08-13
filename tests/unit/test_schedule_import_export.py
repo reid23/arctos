@@ -30,6 +30,7 @@ def test_export_schedule_includes_tags_fields_and_matches(test_db, tournament):
         event=tournament_url,
         field="Field 1",
         nominal_start_time=datetime(2025, 1, 1, 10, 0, tzinfo=timezone.utc),
+        scheduled_start_time=datetime(2025, 1, 1, 10, 0, tzinfo=timezone.utc),
         nominal_length=60,
         schedule_type="STATIC",
         set_type="SETS",
@@ -60,8 +61,36 @@ def test_export_schedule_includes_tags_fields_and_matches(test_db, tournament):
             assert 'field = "Field 1"' in toml_str
             assert 'team1_initial = "tag::Pool A"' in toml_str
             assert 'refs_initial = "tag::Pool A,tag::Pool B"' in toml_str
+            # Plan anchor must round-trip so re-import does not lose STATIC scheduled times.
+            assert "scheduled_start_time" in toml_str
         case Err(err):
             raise AssertionError(f"Expected Ok(TOML), got Err({err})")
+
+
+@pytest.mark.unit
+def test_import_seeds_scheduled_from_nominal_when_missing(test_db, tournament):
+    """Legacy TOML with only nominal_start_time must still populate the plan anchor."""
+    from app.serializers.match_schedule_serializer import MatchScheduleSerializer
+
+    tournament_url = tournament.url
+    # Unit-test the serializer seed path directly (avoids team-registration checks on full import).
+    res = MatchScheduleSerializer.match_from_dict(
+        {
+            "name": "LegacyStatic",
+            "field": "Field 1",
+            "schedule_type": "STATIC",
+            "nominal_length": 60,
+            "nominal_start_time": "2025-06-01T09:00:00",
+            "team1_initial": "tag::PoolA",
+            "team2_initial": "tag::PoolB",
+        },
+        tournament_url,
+    )
+    assert isinstance(res, Ok), getattr(res, "val", res)
+    d = res.val
+    assert d["nominal_start_time"] is not None
+    assert d["scheduled_start_time"] is not None
+    assert d["scheduled_start_time"] == d["nominal_start_time"]
 
 
 @pytest.mark.unit

@@ -1232,6 +1232,7 @@ def tournament_match_detail(tournament_url):
                 "team1_initial": match.team1_initial,
                 "team2_initial": match.team2_initial,
                 "status": (match.status.value if hasattr(match.status, "value") else str(match.status)),
+                "scheduled_start_time": dt_iso(match.scheduled_start_time),
                 "nominal_start_time": dt_iso(match.nominal_start_time),
                 "confirmed_start_time": dt_iso(match.confirmed_start_time),
                 "completed_time": dt_iso(match.completed_time),

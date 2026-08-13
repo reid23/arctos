@@ -143,7 +143,12 @@ class MatchScheduleSerializer:
         if match.ribbon:
             result["ribbon"] = True
 
-        # Datetime - only include if present
+        # Datetimes — export both timelines when present.
+        # scheduled_start_time is the plan anchor (STATIC user time / planned pass);
+        # nominal_start_time is the live estimate. On re-import, STATIC anchors need
+        # scheduled_start_time so the planned pass does not lose the published times.
+        if match.scheduled_start_time:
+            result["scheduled_start_time"] = match.scheduled_start_time
         if match.nominal_start_time:
             result["nominal_start_time"] = match.nominal_start_time
 
@@ -276,19 +281,41 @@ class MatchScheduleSerializer:
             "next_match": None,
         }
 
-        # Handle datetime
-        if "nominal_start_time" in data and data["nominal_start_time"]:
-            dt_value = data["nominal_start_time"]
+        # Handle datetimes (planned + live). Accept either field; seed the other when
+        # only one is present so STATIC anchors always land in scheduled_start_time.
+        def _parse_dt(field_name: str, dt_value: object) -> Result[datetime, ValidationError]:
             if isinstance(dt_value, datetime):
-                result["nominal_start_time"] = dt_value
-            elif isinstance(dt_value, str):
+                return Ok(dt_value)
+            if isinstance(dt_value, str):
                 try:
-                    # Try parsing ISO format
-                    result["nominal_start_time"] = datetime.fromisoformat(dt_value.replace("Z", "+00:00"))
+                    return Ok(datetime.fromisoformat(dt_value.replace("Z", "+00:00")))
                 except ValueError:
-                    return Err(ValidationError(f"Invalid datetime format: {dt_value}"))
-            else:
-                return Err(ValidationError(f"Invalid nominal_start_time type: {type(dt_value)}"))
+                    return Err(ValidationError(f"Invalid datetime format for {field_name}: {dt_value}"))
+            return Err(ValidationError(f"Invalid {field_name} type: {type(dt_value)}"))
+
+        scheduled_dt = None
+        nominal_dt = None
+        if data.get("scheduled_start_time"):
+            parsed = _parse_dt("scheduled_start_time", data["scheduled_start_time"])
+            if isinstance(parsed, Err):
+                return parsed
+            scheduled_dt = parsed.val
+        if data.get("nominal_start_time"):
+            parsed = _parse_dt("nominal_start_time", data["nominal_start_time"])
+            if isinstance(parsed, Err):
+                return parsed
+            nominal_dt = parsed.val
+
+        if scheduled_dt is None and nominal_dt is not None:
+            # Legacy TOML / exports that only had nominal: treat it as the plan anchor.
+            scheduled_dt = nominal_dt
+        if nominal_dt is None and scheduled_dt is not None:
+            nominal_dt = scheduled_dt
+
+        if scheduled_dt is not None:
+            result["scheduled_start_time"] = scheduled_dt
+        if nominal_dt is not None:
+            result["nominal_start_time"] = nominal_dt
 
         # Helper function to resolve match name to UUID
         def resolve_match_name(match_name: str, current_field: str | None) -> str | None:

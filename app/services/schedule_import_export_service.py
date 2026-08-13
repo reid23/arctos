@@ -69,6 +69,11 @@ def _create_match_from_dict(match_dict: dict) -> "Match":
         k: v for k, v in match_dict.items() if k not in ("previous_match", "next_match", "refs", "refs_initial")
     }
     match = Match(**create_dict)
+    # Keep plan + live anchors aligned when the TOML only carried one of them.
+    if match.scheduled_start_time is None and match.nominal_start_time is not None:
+        match.scheduled_start_time = match.nominal_start_time
+    if match.nominal_start_time is None and match.scheduled_start_time is not None:
+        match.nominal_start_time = match.scheduled_start_time
     if not match.status:
         if match.schedule_type == ScheduleType.STATIC:
             match.status = MatchStatus.READY_TO_START
@@ -567,6 +572,12 @@ class ScheduleImportExportService:
                                 "refs_initial",
                             ):
                                 setattr(match, key, value)
+
+                        # Align plan/live anchors when the file only carried one of them.
+                        if match.scheduled_start_time is None and match.nominal_start_time is not None:
+                            match.scheduled_start_time = match.nominal_start_time
+                        if match.nominal_start_time is None and match.scheduled_start_time is not None:
+                            match.nominal_start_time = match.scheduled_start_time
 
                         # If _initial fields changed, refresh the corresponding resolved values.
                         if team1_initial_changed:

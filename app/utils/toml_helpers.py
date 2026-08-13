@@ -162,14 +162,14 @@ def write_toml_schedule(
                 if field_name in match and match[field_name]:
                     lines.append(f'{field_name} = "{_escape_toml_string(str(match[field_name]))}"')
 
-            # Datetime
-            if "nominal_start_time" in match and match["nominal_start_time"]:
-                dt = match["nominal_start_time"]
-                if isinstance(dt, datetime):
-                    # Format as ISO 8601 string (TOML datetime format)
-                    lines.append(f'nominal_start_time = "{dt.isoformat()}"')
-                else:
-                    lines.append(f'nominal_start_time = "{dt}"')
+            # Datetimes: plan anchor first, then live estimate.
+            for field_name in ("scheduled_start_time", "nominal_start_time"):
+                if field_name in match and match[field_name]:
+                    dt = match[field_name]
+                    if isinstance(dt, datetime):
+                        lines.append(f'{field_name} = "{dt.isoformat()}"')
+                    else:
+                        lines.append(f'{field_name} = "{dt}"')
 
             # Integer fields
             for field_name in ["nominal_length", "nsets", "stones_per_set"]:
