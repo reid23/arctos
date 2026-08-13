@@ -537,3 +537,213 @@ class TestBreakGroupEndpoints:
         expected = datetime.fromisoformat(start.replace("Z", "+00:00")).replace(tzinfo=None)
         assert _close(brk.nominal_start_time, expected)
         assert _close(brk.scheduled_start_time, expected)
+
+
+@pytest.mark.integration
+class TestJoinGroupEndpoints:
+    """JOIN groups through the structural-group ("break-groups") endpoints."""
+
+    def _login(self, app, client, tournament, to_player):
+        with app.app_context():
+            t = db.session.merge(tournament)
+            p = db.session.merge(to_player)
+            login_as(client, p)
+        return t
+
+    def _mk_anchors(self, app, t, fields=("Field 1", "Field 2")):
+        """One STATIC anchor per field; returns {field: uuid}."""
+        with app.app_context():
+            base = datetime.now(timezone.utc).replace(tzinfo=None)
+            uuids = {}
+            for i, f in enumerate(fields):
+                a = _mk(
+                    t.url,
+                    f"Anchor {f}",
+                    f,
+                    ScheduleType.STATIC,
+                    start=base + timedelta(minutes=10 * i),
+                    scheduled=base + timedelta(minutes=10 * i),
+                    length=60,
+                )
+                uuids[f] = a.uuid
+            db.session.commit()
+        return uuids
+
+    def test_create_join_group_rows_per_field_zero_length(self, app, client, tournament, to_player):
+        t = self._login(app, client, tournament, to_player)
+        anchors = self._mk_anchors(app, t)
+
+        resp = client.post(
+            f"/_api/tournaments/{t.url}/break-groups",
+            json={"name": "Sync", "schedule_type": "JOIN", "fields": ["Field 1", "Field 2"]},
+        )
+        assert resp.status_code == 200, resp.get_json()
+
+        rows = Match.query.filter_by(event=t.url, name="Sync").all()
+        assert {m.field for m in rows} == {"Field 1", "Field 2"}
+        for m in rows:
+            assert m.schedule_type == ScheduleType.JOIN
+            assert m.nominal_length == 0
+            assert m.team1 is None and m.team2 is None
+            assert get_match_ref_team_ids(m) == []
+            # Chain-tail default: appended after each field's anchor.
+            assert m.previous_match == anchors[m.field]
+
+        # Same-name-per-field uniqueness within the structural group.
+        resp2 = client.post(
+            f"/_api/tournaments/{t.url}/break-groups",
+            json={"name": "Sync", "schedule_type": "JOIN", "fields": ["Field 1"]},
+        )
+        assert resp2.status_code == 400
+
+    def test_join_group_rejects_teams(self, app, client, tournament, to_player, seeded_teams):
+        t = self._login(app, client, tournament, to_player)
+        resp = client.post(
+            f"/_api/tournaments/{t.url}/break-groups",
+            json={
+                "name": "Sync",
+                "schedule_type": "JOIN",
+                "fields": ["Field 1"],
+                "teams": ["team1"],
+            },
+        )
+        assert resp.status_code == 400
+        assert "team requirements" in resp.get_json()["error"]
+
+        resp = client.post(
+            f"/_api/tournaments/{t.url}/break-groups",
+            json={"name": "Sync", "schedule_type": "JOIN", "fields": ["Field 1"]},
+        )
+        assert resp.status_code == 200, resp.get_json()
+
+        resp = client.put(
+            f"/_api/tournaments/{t.url}/break-groups/Sync",
+            json={"teams": ["team1"]},
+        )
+        assert resp.status_code == 400
+        assert "team requirements" in resp.get_json()["error"]
+
+    def test_update_join_group_fields_with_chain_splicing(self, app, client, tournament, to_player):
+        t = self._login(app, client, tournament, to_player)
+        anchors = self._mk_anchors(app, t)
+
+        resp = client.post(
+            f"/_api/tournaments/{t.url}/break-groups",
+            json={"name": "Sync", "schedule_type": "JOIN", "fields": ["Field 1"]},
+        )
+        assert resp.status_code == 200, resp.get_json()
+        join1 = Match.query.filter_by(event=t.url, name="Sync", field="Field 1").one()
+        assert Match.query.filter_by(uuid=anchors["Field 1"]).one().next_match == join1.uuid
+
+        # Add Field 2: new zero-length row appended at that field's chain tail.
+        resp = client.put(
+            f"/_api/tournaments/{t.url}/break-groups/Sync",
+            json={"fields": ["Field 1", "Field 2"]},
+        )
+        assert resp.status_code == 200, resp.get_json()
+        rows = Match.query.filter_by(event=t.url, name="Sync").all()
+        assert {m.field for m in rows} == {"Field 1", "Field 2"}
+        join2 = next(m for m in rows if m.field == "Field 2")
+        assert join2.nominal_length == 0
+        assert join2.previous_match == anchors["Field 2"]
+
+        # A group PUT length is ignored for JOIN: rows stay zero-length.
+        resp = client.put(
+            f"/_api/tournaments/{t.url}/break-groups/Sync",
+            json={"length": 30},
+        )
+        assert resp.status_code == 200, resp.get_json()
+        assert {m.nominal_length for m in Match.query.filter_by(event=t.url, name="Sync").all()} == {0}
+
+        # Remove Field 1: the row is deleted and its chain is spliced.
+        resp = client.put(
+            f"/_api/tournaments/{t.url}/break-groups/Sync",
+            json={"fields": ["Field 2"]},
+        )
+        assert resp.status_code == 200, resp.get_json()
+        rows = Match.query.filter_by(event=t.url, name="Sync").all()
+        assert [m.field for m in rows] == ["Field 2"]
+        assert Match.query.filter_by(uuid=anchors["Field 1"]).one().next_match is None
+
+    def test_delete_join_group(self, app, client, tournament, to_player):
+        t = self._login(app, client, tournament, to_player)
+        anchors = self._mk_anchors(app, t)
+        resp = client.post(
+            f"/_api/tournaments/{t.url}/break-groups",
+            json={"name": "Sync", "schedule_type": "JOIN", "fields": ["Field 1", "Field 2"]},
+        )
+        assert resp.status_code == 200, resp.get_json()
+
+        resp = client.delete(f"/_api/tournaments/{t.url}/break-groups/Sync")
+        assert resp.status_code == 200
+        assert Match.query.filter_by(event=t.url, name="Sync").count() == 0
+        # Chains are spliced: anchors are tails again.
+        for uuid in anchors.values():
+            assert Match.query.filter_by(uuid=uuid).one().next_match is None
+        resp = client.delete(f"/_api/tournaments/{t.url}/break-groups/Sync")
+        assert resp.status_code == 404
+
+    def test_join_break_conversion_rejected(self, app, client, tournament, to_player):
+        t = self._login(app, client, tournament, to_player)
+        self._mk_anchors(app, t)
+        resp = client.post(
+            f"/_api/tournaments/{t.url}/break-groups",
+            json={"name": "Sync", "schedule_type": "JOIN", "fields": ["Field 1"]},
+        )
+        assert resp.status_code == 200, resp.get_json()
+        resp = client.post(
+            f"/_api/tournaments/{t.url}/break-groups",
+            json={"name": "Lunch", "schedule_type": "BREAK", "length": 30, "fields": ["Field 1"]},
+        )
+        assert resp.status_code == 200, resp.get_json()
+        join_uuid = Match.query.filter_by(event=t.url, name="Sync").one().uuid
+        break_uuid = Match.query.filter_by(event=t.url, name="Lunch").one().uuid
+
+        # Single-match PUT: JOIN converts to/from nothing.
+        resp = client.put(
+            f"/_api/tournaments/{t.url}/matches/{join_uuid}",
+            json={"schedule_type": "BREAK", "length": 30},
+        )
+        assert resp.status_code == 400
+        resp = client.put(
+            f"/_api/tournaments/{t.url}/matches/{break_uuid}",
+            json={"schedule_type": "JOIN"},
+        )
+        assert resp.status_code == 400
+
+        # Group PUT: any type change involving JOIN is rejected.
+        resp = client.put(
+            f"/_api/tournaments/{t.url}/break-groups/Sync",
+            json={"schedule_type": "BREAK"},
+        )
+        assert resp.status_code == 400
+        resp = client.put(
+            f"/_api/tournaments/{t.url}/break-groups/Lunch",
+            json={"schedule_type": "JOIN"},
+        )
+        assert resp.status_code == 400
+
+        assert Match.query.filter_by(uuid=join_uuid).one().schedule_type == ScheduleType.JOIN
+        assert Match.query.filter_by(uuid=break_uuid).one().schedule_type == ScheduleType.BREAK
+
+    def test_same_name_join_rows_merge_in_solver(self, app, client, tournament, to_player):
+        """Rows created via the group endpoint still collapse into one JOIN node
+        (component_uuids fan-out) whose dependencies span both fields."""
+        from app.utils.MatchGraph import build_match_graph
+
+        t = self._login(app, client, tournament, to_player)
+        anchors = self._mk_anchors(app, t)
+        resp = client.post(
+            f"/_api/tournaments/{t.url}/break-groups",
+            json={"name": "Sync", "schedule_type": "JOIN", "fields": ["Field 1", "Field 2"]},
+        )
+        assert resp.status_code == 200, resp.get_json()
+
+        with app.app_context():
+            rows = Match.query.filter_by(event=t.url, name="Sync").all()
+            graph = build_match_graph(t.url)
+            node = graph.nodes_by_key.get(("Sync", ""))
+            assert node is not None
+            assert node.component_uuids == {m.uuid for m in rows}
+            dep_names = {dep.node.name for dep in node.dependencies}
+            assert {"Anchor Field 1", "Anchor Field 2"} <= dep_names
