@@ -3658,6 +3658,80 @@ pub async fn delete_tag(tournament_url: &str, tag_id: u32) -> Result<(), String>
     Err(err_msg)
 }
 
+pub async fn create_script_variable(
+    tournament_url: &str,
+    req: &CreateScriptVariableRequest,
+) -> Result<CreateScriptVariableResponse, String> {
+    let c = client();
+    let r = with_credentials(
+        c.post(format!(
+            "{}/_api/tournaments/{}/script-variables",
+            base(),
+            tournament_url
+        ))
+        .json(req),
+    )
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
+pub async fn update_script_variable(
+    tournament_url: &str,
+    var_id: u32,
+    req: &UpdateScriptVariableRequest,
+) -> Result<(), String> {
+    let c = client();
+    let r = with_credentials(
+        c.put(format!(
+            "{}/_api/tournaments/{}/script-variables/{}",
+            base(),
+            tournament_url,
+            var_id
+        ))
+        .json(req),
+    )
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let data: Value = response_json(r).await?;
+    if data.get("success").and_then(|v| v.as_bool()) == Some(true) {
+        Ok(())
+    } else {
+        Err(data
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unknown error")
+            .to_string())
+    }
+}
+
+pub async fn delete_script_variable(tournament_url: &str, var_id: u32) -> Result<(), String> {
+    let c = client();
+    let r = with_credentials(c.delete(format!(
+        "{}/_api/tournaments/{}/script-variables/{}",
+        base(),
+        tournament_url,
+        var_id
+    )))
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let data: Value = response_json(r).await?;
+    if data.get("success").and_then(|v| v.as_bool()) == Some(true) {
+        Ok(())
+    } else {
+        Err(data
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unknown error")
+            .to_string())
+    }
+}
+
 #[allow(dead_code)]
 pub async fn update_all_references(tournament_url: &str) -> Result<(), String> {
     let c = client();

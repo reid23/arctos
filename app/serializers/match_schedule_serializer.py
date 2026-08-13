@@ -30,7 +30,7 @@ class MatchScheduleSerializer:
             tag: The :class:`~app.models.tournament.Tag` ORM instance.
 
         Returns:
-            Dict with up to three keys: ``id``, ``name``, ``team``.
+            Dict with up to four keys: ``id``, ``name``, ``team``, ``expression``.
         """
         result = {}
         if tag.id is not None:
@@ -39,6 +39,8 @@ class MatchScheduleSerializer:
             result["name"] = tag.name
         if getattr(tag, "team", None):
             result["team"] = tag.team
+        if getattr(tag, "expression", None):
+            result["expression"] = tag.expression
         return result
 
     @staticmethod
@@ -168,6 +170,7 @@ class MatchScheduleSerializer:
             "event": tournament_url,
             "name": name,
             "team": str(data.get("team", "")).strip() or None,
+            "expression": str(data.get("expression", "")).strip() or None,
         }
 
         # Include id if present (for same-tournament updates)

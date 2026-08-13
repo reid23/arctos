@@ -559,6 +559,7 @@ class ScheduleImportExportService:
                     if tag:
                         tag.name = tag_dict["name"]
                         tag.team = tag_dict.get("team")
+                        tag.expression = tag_dict.get("expression")
                         tags_updated += 1
                     else:
                         # ID doesn't exist, create new (don't include id in creation)

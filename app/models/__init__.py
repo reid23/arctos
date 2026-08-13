@@ -14,7 +14,7 @@ from app.models import (
 from app.models.user import Player, Team
 from app.models.registrable_config import RegistrableConfig
 from app.models.league import League
-from app.models.tournament import Tournament, TO, Field, Tag
+from app.models.tournament import Tournament, TO, Field, Tag, ScriptVariable
 from app.models.registration import TeamRegistration, PlayerRegistration
 from app.models.match import Match, Point, MatchNote
 from app.models.bracket import BracketImage, BracketLabeledTeam, BracketPlacement, BracketText
@@ -40,6 +40,7 @@ __all__ = [
     "TO",
     "Field",
     "Tag",
+    "ScriptVariable",
     "TeamRegistration",
     "PlayerRegistration",
     "Match",

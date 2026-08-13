@@ -73,6 +73,7 @@ from models import (
     Player,
     PlayerRegistration,
     Point,
+    ScriptVariable,
     Tag,
     Team,
     TeamRegistration,
@@ -780,9 +781,27 @@ def tournament_schedule_setup(tournament_url):
                 camera_urls = [f.camera]
         fields_data.append({"id": f.id, "name": f.name, "camera_urls": camera_urls})
 
-    # Tags
+    # Tags. `resolved_team` is the effective resolution: manual override if
+    # set, else the tag's ASS expression evaluated to a concrete team.
+    from app.utils.helpers import resolve_tag_to_team
+
     tags_query = Tag.query.filter_by(event=tournament_url).order_by(Tag.name).all()
-    tags_data = [{"id": t.id, "name": t.name, "team": t.team} for t in tags_query]
+    tags_data = [
+        {
+            "id": t.id,
+            "name": t.name,
+            "team": t.team,
+            "expression": t.expression,
+            "resolved_team": resolve_tag_to_team(f"tag::{t.name}", tournament_url),
+        }
+        for t in tags_query
+    ]
+
+    # Tournament-scoped ASS script variables (for the Scripting modal).
+    script_variables_data = [
+        {"id": v.id, "name": v.name, "expression": v.expression}
+        for v in ScriptVariable.query.filter_by(event=tournament_url).order_by(ScriptVariable.name).all()
+    ]
 
     # Matches
     matches_query = Match.query.filter_by(event=tournament_url).order_by(Match.nominal_start_time).all()
@@ -844,6 +863,7 @@ def tournament_schedule_setup(tournament_url):
             "matches": match_list,
             "fields": fields_data,
             "tags": tags_data,
+            "script_variables": script_variables_data,
             "team_options": team_options,
             "is_to": is_to,
         }
@@ -1371,4 +1391,13 @@ def list_tags(tournament_url):
     if not _check_to(tournament_url):
         return jsonify({"error": "Forbidden"}), 403
     tags = Tag.query.filter_by(event=tournament_url).order_by(Tag.name).all()
-    return jsonify({"tags": [{"id": t.id, "name": t.name, "team": t.team} for t in tags]})
+    return jsonify({"tags": [{"id": t.id, "name": t.name, "team": t.team, "expression": t.expression} for t in tags]})
+
+
+@bp.route("/tournaments/<tournament_url>/script-variables", methods=["GET"])
+@login_required
+def list_script_variables(tournament_url):
+    if not _check_to(tournament_url):
+        return jsonify({"error": "Forbidden"}), 403
+    variables = ScriptVariable.query.filter_by(event=tournament_url).order_by(ScriptVariable.name).all()
+    return jsonify({"script_variables": [{"id": v.id, "name": v.name, "expression": v.expression} for v in variables]})
