@@ -18,7 +18,9 @@ def parse_toml_schedule(content: str) -> Result[dict[str, Any], ArctosError]:
 
     Expects a TOML document with:
 
-    * ``event`` (str, required) — tournament URL slug.
+    * ``event`` (str, optional, deprecated) — tournament URL slug. Accepted
+      for backward compatibility with older exports; the importing route
+      determines the target tournament.
     * ``tags`` (array of tables, optional).
     * ``fields`` (array of tables, optional).
     * ``matches`` (array of tables, optional).
@@ -28,8 +30,8 @@ def parse_toml_schedule(content: str) -> Result[dict[str, Any], ArctosError]:
 
     Returns:
         :class:`~app.error_values.Ok` wrapping a dict with keys
-        ``"event"``, ``"tags"``, ``"fields"``, ``"matches"``; or
-        :class:`~app.error_values.Err` wrapping a
+        ``"event"`` (str or ``None``), ``"tags"``, ``"fields"``,
+        ``"matches"``; or :class:`~app.error_values.Err` wrapping a
         :class:`~app.exceptions.ValidationError` on parse / structure error.
     """
     try:
@@ -41,10 +43,10 @@ def parse_toml_schedule(content: str) -> Result[dict[str, Any], ArctosError]:
     if not isinstance(data, dict):
         return Err(ValidationError("TOML root must be a table"))
 
-    # Extract event (required)
+    # Extract event (optional, legacy). Non-string values are ignored.
     event = data.get("event")
-    if not event or not isinstance(event, str):
-        return Err(ValidationError("Missing or invalid 'event' field in TOML"))
+    if not isinstance(event, str) or not event:
+        event = None
 
     # Extract tags (optional, defaults to empty list)
     tags = data.get("tags", [])
@@ -72,7 +74,6 @@ def parse_toml_schedule(content: str) -> Result[dict[str, Any], ArctosError]:
 
 
 def write_toml_schedule(
-    event: str,
     tags: list[dict[str, Any]],
     fields: list[dict[str, Any]],
     matches: list[dict[str, Any]],
@@ -83,10 +84,10 @@ def write_toml_schedule(
 
     Produces a human-readable TOML document suitable for download or
     re-import.  An optional metadata comment header is prepended when
-    *metadata* is provided.
+    *metadata* is provided.  The document intentionally carries no ``event``
+    key — the target tournament is determined by the importing route.
 
     Args:
-        event: Tournament URL slug written as the ``event`` key.
         tags: List of tag dicts with ``id``, ``name``, and optional
             ``team`` (team ID).
         fields: List of field dicts with ``id``, ``name``, and ``camera``.
@@ -105,10 +106,6 @@ def write_toml_schedule(
         for key, value in metadata.items():
             lines.append(f"# {key}: {value}")
         lines.append("")
-
-    # Event
-    lines.append(f'event = "{_escape_toml_string(event)}"')
-    lines.append("")
 
     # Tags
     if tags:

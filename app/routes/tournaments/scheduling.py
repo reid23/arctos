@@ -185,6 +185,7 @@ def import_schedule(tournament_url):
             "matches_created": import_result.matches_created,
             "matches_updated": import_result.matches_updated,
             "errors": import_result.errors,
+            "warnings": import_result.warnings,
         }
 
     return json_from_result(res, ok_to_payload=result_to_payload)
@@ -1427,9 +1428,9 @@ def import_schedule_api(tournament_url):
     from app.services.schedule_import_export_service import ScheduleImportExportService
     from app.utils.result_helpers import json_from_result
 
-    def _ok_payload(_):
+    def _ok_payload(import_result):
         recompute_scheduled_and_nominal_times(tournament_url)
-        return {}
+        return {"warnings": import_result.warnings}
 
     res = ScheduleImportExportService.import_schedule(tournament_url, toml_content)
     return json_from_result(res, ok_to_payload=_ok_payload)
