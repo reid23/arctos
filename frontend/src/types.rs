@@ -1402,6 +1402,8 @@ pub struct ScheduleSetupResponse {
     pub matches: Vec<MatchSetupData>,
     pub fields: Vec<FieldSetupData>,
     pub tags: Vec<TagSetupData>,
+    #[serde(default)]
+    pub script_variables: Vec<ScriptVariableData>,
     pub team_options: Vec<TeamOption>,
     pub is_to: bool,
 }
@@ -1445,8 +1447,23 @@ pub struct FieldSetupData {
 pub struct TagSetupData {
     pub id: u32,
     pub name: String,
+    /// Manually assigned team (an override for `expression`).
     #[serde(default)]
     pub team: Option<String>,
+    /// ASS expression resolving to a TEAM, used when `team` is unset.
+    #[serde(default)]
+    pub expression: Option<String>,
+    /// Effective resolution: `team` if set, else the evaluated expression.
+    #[serde(default)]
+    pub resolved_team: Option<String>,
+}
+
+/// A tournament-scoped ASS script variable (identifier + expression).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ScriptVariableData {
+    pub id: u32,
+    pub name: String,
+    pub expression: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1581,6 +1598,8 @@ pub struct CreateFieldResponse {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreateTagRequest {
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expression: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1601,7 +1620,30 @@ pub struct PushBackRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UpdateTagsRequest {
     pub tag_id: u32,
-    pub team_id: String,
+    /// Manual team override ("" clears it). Omitted → unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub team_id: Option<String>,
+    /// ASS expression ("" clears it). Omitted → unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expression: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateScriptVariableRequest {
+    pub name: String,
+    pub expression: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateScriptVariableResponse {
+    pub success: bool,
+    pub id: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UpdateScriptVariableRequest {
+    pub name: String,
+    pub expression: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
