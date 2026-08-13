@@ -3439,6 +3439,33 @@ pub async fn create_break_group(
     response_json(r).await
 }
 
+pub async fn bulk_match_length(
+    tournament_url: &str,
+    req: &BulkMatchLengthRequest,
+) -> Result<BulkMatchLengthResponse, String> {
+    let c = client();
+    let r = with_credentials(
+        c.post(format!(
+            "{}/_api/tournaments/{}/matches/bulk-length",
+            base(),
+            tournament_url
+        ))
+        .json(req),
+    )
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let data: BulkMatchLengthResponse = response_json(r).await?;
+    if data.success {
+        Ok(data)
+    } else {
+        Err(data
+            .error
+            .unwrap_or_else(|| "Failed to update match lengths".to_string()))
+    }
+}
+
 /// Edit every same-name break row at once (length / start_time / fields).
 pub async fn update_break_group(
     tournament_url: &str,

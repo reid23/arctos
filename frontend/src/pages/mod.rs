@@ -91,7 +91,7 @@ pub use register::{Register, RegisterPlayer, RegisterTeam};
 pub use results::Results;
 pub use run_match::RunMatch;
 pub use crate::components::TeamSelectionField;
-pub use schedule::Schedule;
+pub use schedule::{Schedule, ScheduleEdit};
 pub use scoreboard::Scoreboard;
 pub use sidecomp_register_as_to::SideCompRegisterAsTo;
 pub use sidecomp_detail::SideCompDetail;

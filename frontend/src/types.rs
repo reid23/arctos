@@ -1537,6 +1537,29 @@ pub struct CreateBreakGroupRequest {
 
 /// Edit every same-name break row at once. `None` fields are left unchanged.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BulkMatchLengthRequest {
+    pub match_ids: Vec<String>,
+    pub length: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BulkMatchLengthResultEntry {
+    pub match_id: String,
+    pub status: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BulkMatchLengthResponse {
+    pub success: bool,
+    #[serde(default)]
+    pub updated: u32,
+    #[serde(default)]
+    pub results: Vec<BulkMatchLengthResultEntry>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UpdateBreakGroupRequest {
     /// Whole-group conversion; only BREAK↔JOIN is accepted by the server.
     #[serde(skip_serializing_if = "Option::is_none")]
