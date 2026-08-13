@@ -1520,6 +1520,45 @@ pub struct CreateMatchResponse {
     pub uuid: String,
 }
 
+/// Create one BREAK/STATBREAK row per field, sharing name/length/teams.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateBreakGroupRequest {
+    pub name: String,
+    /// "BREAK" or "STATBREAK".
+    pub schedule_type: String,
+    pub length: u32,
+    /// Field names to place the break on (one row per field).
+    pub fields: Vec<String>,
+    /// Team requirement tokens (stored as ref slots on every row).
+    pub teams: Vec<String>,
+    /// Required for STATBREAK groups; ignored for BREAK.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_time: Option<String>,
+}
+
+/// Edit every same-name break row at once. `None` fields are left unchanged.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UpdateBreakGroupRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub length: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub teams: Option<Vec<String>>,
+    /// STATBREAK groups only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_time: Option<String>,
+    /// New field membership: rows are created/deleted to match.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fields: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateBreakGroupResponse {
+    pub success: bool,
+    pub name: String,
+    #[serde(default)]
+    pub uuids: Vec<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ScheduleWarning {
     /// One of "unknown_team", "unknown_match_ref", "cycle", "double_booked".

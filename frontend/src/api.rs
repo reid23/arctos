@@ -3418,6 +3418,84 @@ pub async fn create_match(
     response_json(r).await
 }
 
+/// Create a break group: one BREAK/STATBREAK row per selected field, sharing
+/// name / length / team requirements (and start time for STATBREAK).
+pub async fn create_break_group(
+    tournament_url: &str,
+    req: &CreateBreakGroupRequest,
+) -> Result<CreateBreakGroupResponse, String> {
+    let c = client();
+    let r = with_credentials(
+        c.post(format!(
+            "{}/_api/tournaments/{}/break-groups",
+            base(),
+            tournament_url
+        ))
+        .json(req),
+    )
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
+/// Edit every same-name break row at once (length / teams / start_time / fields).
+pub async fn update_break_group(
+    tournament_url: &str,
+    name: &str,
+    req: &UpdateBreakGroupRequest,
+) -> Result<(), String> {
+    let c = client();
+    let r = with_credentials(
+        c.put(format!(
+            "{}/_api/tournaments/{}/break-groups/{}",
+            base(),
+            tournament_url,
+            urlencoding::encode(name)
+        ))
+        .json(req),
+    )
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let data: Value = response_json(r).await?;
+    if data.get("success").and_then(|v| v.as_bool()) == Some(true) {
+        Ok(())
+    } else {
+        Err(data
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unknown error")
+            .to_string())
+    }
+}
+
+/// Delete every same-name break row in the group.
+pub async fn delete_break_group(tournament_url: &str, name: &str) -> Result<(), String> {
+    let c = client();
+    let r = with_credentials(c.delete(format!(
+        "{}/_api/tournaments/{}/break-groups/{}",
+        base(),
+        tournament_url,
+        urlencoding::encode(name)
+    )))
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let data: Value = response_json(r).await?;
+    if data.get("success").and_then(|v| v.as_bool()) == Some(true) {
+        Ok(())
+    } else {
+        Err(data
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unknown error")
+            .to_string())
+    }
+}
+
 /// Validate a DSL skip-condition expression. Uses the tournaments blueprint route.
 pub async fn validate_dsl(
     tournament_url: &str,
