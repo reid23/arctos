@@ -551,3 +551,102 @@ class TestScheduledVsNominalTimeline:
             # Planned timeline treats the skipped match as if it ran for its full 45 min.
             assert _aware_utc(skipped.scheduled_start_time) == _aware_utc(base + timedelta(minutes=60))
             assert _aware_utc(after.scheduled_start_time) == _aware_utc(base + timedelta(minutes=105))
+
+
+class TestPlanAnchorWritePaths:
+    """Write paths that intentionally shift the *plan* must touch scheduled_start_time."""
+
+    @pytest.mark.unit
+    def test_push_back_moves_scheduled_and_downstream_plan(self, app, test_db, tournament):
+        """STATIC push-back must move the plan anchor, then re-solve dynamic planned times."""
+        from app.domain.enums import ScheduleType
+
+        tournament_url = tournament.url
+        with app.app_context():
+            base = datetime.now(timezone.utc).replace(tzinfo=None)
+
+            anchor = Match(
+                name="Anchor",
+                event=tournament_url,
+                field="Field 1",
+                nominal_start_time=base,
+                scheduled_start_time=base,
+                schedule_type=ScheduleType.STATIC,
+                nominal_length=60,
+                status=MatchStatus.NOT_STARTED,
+            )
+            m2 = Match(
+                name="M2",
+                event=tournament_url,
+                field="Field 1",
+                nominal_start_time=base + timedelta(minutes=60),
+                scheduled_start_time=base + timedelta(minutes=60),
+                schedule_type=ScheduleType.SAFE,
+                nominal_length=60,
+                status=MatchStatus.NOT_STARTED,
+            )
+            db.session.add_all([anchor, m2])
+            db.session.flush()
+            _link_chain([anchor, m2])
+            db.session.commit()
+
+            # Mirror push_back_matches_api: shift STATIC plan anchors, then both passes.
+            delta = timedelta(minutes=30)
+            anchor.scheduled_start_time = anchor.scheduled_start_time + delta
+            anchor.nominal_start_time = anchor.nominal_start_time + delta
+            db.session.commit()
+            recompute_scheduled_and_nominal_times(tournament_url)
+
+            db.session.refresh(anchor)
+            db.session.refresh(m2)
+
+            assert _aware_utc(anchor.scheduled_start_time) == _aware_utc(base + delta)
+            assert _aware_utc(anchor.nominal_start_time) == _aware_utc(base + delta)
+            # Downstream plan follows the shifted STATIC anchor.
+            assert _aware_utc(m2.scheduled_start_time) == _aware_utc(base + delta + timedelta(minutes=60))
+            assert _aware_utc(m2.nominal_start_time) == _aware_utc(base + delta + timedelta(minutes=60))
+
+    @pytest.mark.unit
+    def test_live_pass_after_late_finish_does_not_move_plan(self, app, test_db, tournament):
+        """Regression: recompute_all_match_times after a late finish must leave scheduled alone."""
+        tournament_url = tournament.url
+        with app.app_context():
+            base = datetime.now(timezone.utc).replace(tzinfo=None)
+
+            anchor = Match(
+                name="Anchor",
+                event=tournament_url,
+                field="Field 1",
+                nominal_start_time=base,
+                scheduled_start_time=base,
+                schedule_type="STATIC",
+                nominal_length=60,
+                status=MatchStatus.COMPLETED,
+            )
+            # Finished 45 min late relative to plan end (plan end = base+60).
+            anchor.confirmed_start_time = base
+            anchor.completed_time = base + timedelta(minutes=105)
+            anchor.finalized_at = base + timedelta(minutes=105)
+            m2 = Match(
+                name="M2",
+                event=tournament_url,
+                field="Field 1",
+                nominal_start_time=base + timedelta(minutes=60),
+                scheduled_start_time=base + timedelta(minutes=60),
+                schedule_type="SAFE",
+                nominal_length=60,
+                status=MatchStatus.NOT_STARTED,
+            )
+            db.session.add_all([anchor, m2])
+            db.session.flush()
+            _link_chain([anchor, m2])
+            db.session.commit()
+
+            planned_m2 = m2.scheduled_start_time
+            recompute_all_match_times(tournament_url)
+            db.session.refresh(m2)
+
+            assert _aware_utc(m2.scheduled_start_time) == _aware_utc(planned_m2)
+            assert (
+                abs((_aware_utc(m2.nominal_start_time) - _aware_utc(base + timedelta(minutes=105))).total_seconds()) < 2
+            )
