@@ -14,7 +14,7 @@ Help **players and reffing teams** (especially on mobile) answer “when and whe
 |----------|-----|------|
 | P0 | Players | Next play time, field, opponent |
 | P0 | Reffing teams | Next ref assignment, field, which match |
-| P1 | Anyone browsing | Readable full schedule; optional “true times” |
+| P1 | Anyone browsing | Readable full schedule |
 | P2 | TOs / desk | Same views; edit mode unchanged in spirit |
 
 **Context:** match refs are **teams** (players ref other teams’ matches). Head refs are distinct individuals and are out of scope for “my schedule” identity.
@@ -25,9 +25,9 @@ The schedule UI intentionally splits two timelines (issue #196, option C):
 
 | Concept | Field(s) | Meaning | Default UI |
 |---------|----------|---------|------------|
-| **Plan** | `scheduled_start_time` + `nominal_length` | “If everything went as planned” — the contract of the day | **Default placement of blocks** |
-| **Live estimate** | `nominal_start_time` (+ length) | Solver’s current expected start after delays/deps | Used when “Show true times” is on for not-yet-finished matches |
-| **Reality** | `confirmed_start_time` / `completed_time` | What actually happened | True-times mode; small lateness cue on completed matches in plan mode |
+| **Plan** | `scheduled_start_time` + `nominal_length` | “If everything went as planned” — the contract of the day | Upper bound for block placement |
+| **Live estimate** | `nominal_start_time` (+ length) | Solver’s current expected start after delays/deps | Pulls blocks **earlier** when the day runs ahead; never later |
+| **Reality** | `confirmed_start_time` / `completed_time` | What actually happened | Pulls blocks/ends earlier when ahead; edit-mode “as happened” placement |
 
 ### Why this exists (failure mode we are fixing)
 
@@ -37,20 +37,22 @@ Today, when the tournament runs behind, dynamic scheduling **pushes** `nominal_s
 
 ### Display rules
 
-**Default mode (“Plan”):**
+**Viewer rule (always on, “planned or earlier”):**
 
-1. Place every match block at `scheduled_start_time` (fallback: `nominal_start_time` if scheduled is missing).
-2. Block duration = `nominal_length` (planned length), **not** actual duration.
-3. Draw a horizontal **now line** (Google Calendar–style) across the timeline when viewing today.
-4. For **completed** matches that started late relative to plan, show a small indicator (e.g. “+12m late”) without moving the block.
-5. Status badges (ready / in progress / done) still communicate lifecycle; they do not move the block in plan mode.
+A match block’s displayed interval is the element-wise **minimum** of its planned
+interval and its real/estimated interval:
 
-**True-times mode (toggle):**
+1. Planned interval: `scheduled_start_time` .. `scheduled_start_time` + `nominal_length` (fallback: `nominal_start_time` if scheduled is missing).
+2. Real/estimated interval: start = `confirmed_start_time` if started, else `nominal_start_time`; end = `completed_time` if completed, else real start + `nominal_length`.
+3. Displayed start = min(planned start, real start); displayed end = min(planned end, real end estimate). When the day runs ahead, matches pull earlier and completed matches show their real (earlier) end times; a late-running day never shifts blocks later.
+4. Draw a horizontal **now line** (Google Calendar–style) across the timeline when viewing today — lateness is visible via the now line, not by moving blocks.
+5. Status badges (ready / in progress / done) still communicate lifecycle; they never push a block later.
 
-1. Place unfinished matches at live estimate: `confirmed_start_time` if started, else `nominal_start_time`.
-2. Place completed matches at actual start/end (`confirmed_start_time` → `completed_time`).
+**Edit-mode “Show times as they happened” (TOs only):**
+
+1. Visible only when edit mode is on; persisted in `localStorage` (`schedule_edit_show_as_happened`); no effect outside edit mode.
+2. When enabled, blocks sit at exact real times (`confirmed_start_time` → `completed_time`, falling back to nominal estimates) with no min-capping.
 3. Now line still shown.
-4. Toggle label should be plain language, e.g. **“Show actual times”** (off by default).
 
 **Match detail page:**
 
@@ -86,15 +88,20 @@ Display code places default blocks on `scheduled_start_time` (fallback nominal i
 
 ## Views
 
-Keep three view modes (names can be lightly renamed for clarity):
+Four view modes; “All fields” and “Table” are TO-only (non-TOs are coerced to “By team”):
 
 | Mode | Role |
 |------|------|
-| **Schedule** (timeline) | Full multi-field day grid — default for browsing the event |
-| **Table** | Dense list / TO-oriented table |
-| **My timeline** (#195) | Personal day strip: only matches involving the selected team |
+| **By team** (#195) | Default. Personal day strip: only matches involving the selected team |
+| **By field** | Single-field day strip: everything on one field (matches, breaks, joins) |
+| **All fields** (TO) | Full multi-field day grid; edit mode lives here (and Table) |
+| **Table** (TO) | Dense list / TO-oriented table |
 
-### My timeline (#195)
+Nav state (view + team + field, not date) is reflected in the URL query string
+(`/…/schedule?view=…&team=…&field=…`) for deep-linking, and remembered per
+tournament in `localStorage` (`schedule_last_nav:<url>`) when no params are given.
+
+### By team (#195)
 
 **Goal:** more space, less noise, answer “where do I need to be?”
 
@@ -102,7 +109,7 @@ Keep three view modes (names can be lightly renamed for clarity):
 - Color-code **playing** vs **reffing**.
 - Always show field name, both sides, and refs (see #197).
 - Not required in edit mode (hide or disable when editing).
-- Uses the same Plan / Actual times toggle and now line as the main schedule.
+- Uses the same “planned or earlier” display rule and now line as the main schedule.
 
 **Identity / team selection:**
 
@@ -155,19 +162,19 @@ Purpose: there is no single slot height that fits both dense multi-field days an
 
 A player on a phone at a multi-field tournament can:
 
-1. Open **My timeline**, see only their play + ref blocks with field and opponents/refs readable.
+1. Open **By team**, see only their play + ref blocks with field and opponents/refs readable.
 2. See the **now line** and blocks at **planned** times by default.
 3. Notice the day is late (now line past unfinished planned blocks / late markers) and still know the plan.
-4. Optionally toggle **actual times** to see the live estimate.
+4. See blocks pull **earlier** automatically when the day runs ahead (planned-or-earlier rule).
 5. Pinch to enlarge blocks when names overflow.
 6. Never confuse a break’s color for “this game is done.”
 7. Always see who is supposed to ref, even before tags resolve.
 
 ## Implementation order (suggested)
 
-1. Time model in UI: plan placement, actual-times toggle, now line, match page labels, lateness chip (#196).
+1. Time model in UI: planned-or-earlier placement, edit-mode “as happened” option, now line, match page labels, lateness chip (#196).
 2. Always show refs (#197); neutralize break/join status chrome (#198).
-3. My timeline + team picker identity (#195).
+3. By team view + team picker identity (#195).
 4. Pinch / ctrl-scroll vertical zoom (#222).
 5. Regression tests for solver + any create/edit paths that touch `scheduled_start_time`.
 
