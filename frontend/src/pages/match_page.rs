@@ -1777,6 +1777,9 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                 Link {
                                     to: Route::Schedule {
                                         url: url.clone(),
+                                        view: String::new(),
+                                        team: String::new(),
+                                        field: String::new(),
                                     },
                                     "Schedule"
                                 }

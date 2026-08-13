@@ -87,7 +87,7 @@ fn plan_start_str(m: &MatchSetupData) -> Option<&str> {
         .or(m.nominal_start_time.as_deref())
 }
 
-/// Actual/live start for "show actual times" mode.
+/// Real/estimated start: confirmed if started, else the solver's live estimate.
 fn actual_start_str(m: &MatchSetupData) -> Option<&str> {
     m.confirmed_start_time
         .as_deref()
@@ -95,13 +95,77 @@ fn actual_start_str(m: &MatchSetupData) -> Option<&str> {
         .or(m.scheduled_start_time.as_deref())
 }
 
-/// Start string used for placement, depending on the Plan vs Actual toggle.
-fn display_start_str(m: &MatchSetupData, show_actual_times: bool) -> Option<&str> {
-    if show_actual_times {
-        actual_start_str(m)
-    } else {
-        plan_start_str(m)
+/// Parse an ISO-ish schedule timestamp from the API into naive UTC.
+fn parse_schedule_time_utc(s: &str) -> Option<chrono::NaiveDateTime> {
+    use chrono::NaiveDateTime;
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Some(dt.naive_utc());
     }
+    for fmt in [
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+    ] {
+        if let Ok(dt) = NaiveDateTime::parse_from_str(s, fmt) {
+            return Some(dt);
+        }
+    }
+    None
+}
+
+/// Displayed interval (naive UTC) for a match block. Single source of truth for
+/// table, timeline, and team views.
+///
+/// Viewer rule ("planned or earlier"): element-wise minimum of
+/// - the planned interval: plan start (`scheduled_start_time`, fallback nominal)
+///   .. plan start + `nominal_length`, and
+/// - the real/estimated interval: `confirmed_start_time` if started else
+///   `nominal_start_time` .. `completed_time` if completed else real start +
+///   `nominal_length`.
+///
+/// When the day runs ahead, blocks pull earlier and completed matches show their
+/// real (earlier) end; a late-running day never shifts blocks later — lateness is
+/// visible via the now line.
+///
+/// `show_as_happened` (edit-mode-only toggle) instead places blocks at the exact
+/// real/estimated times with no min-capping.
+fn display_interval_utc(
+    m: &MatchSetupData,
+    show_as_happened: bool,
+) -> Option<(chrono::NaiveDateTime, chrono::NaiveDateTime)> {
+    let len = chrono::Duration::minutes(m.nominal_length.unwrap_or(30) as i64);
+    let min_len = chrono::Duration::minutes(1);
+    let real_start = actual_start_str(m).and_then(parse_schedule_time_utc);
+    let real_end = m
+        .completed_time
+        .as_deref()
+        .and_then(parse_schedule_time_utc)
+        .or_else(|| real_start.map(|s| s + len));
+    if show_as_happened {
+        let start = real_start?;
+        let end = real_end.unwrap_or(start + len).max(start + min_len);
+        return Some((start, end));
+    }
+    let plan_start = plan_start_str(m).and_then(parse_schedule_time_utc);
+    let plan_end = plan_start.map(|s| s + len);
+    let start = match (plan_start, real_start) {
+        (Some(p), Some(r)) => p.min(r),
+        (p, r) => p.or(r)?,
+    };
+    let end = match (plan_end, real_end) {
+        (Some(p), Some(r)) => p.min(r),
+        (p, r) => p.or(r).unwrap_or(start + len),
+    }
+    .max(start + min_len);
+    Some((start, end))
+}
+
+/// Format a naive-UTC timestamp as local "HH:MM".
+fn format_naive_utc_time_local(dt: chrono::NaiveDateTime, tz_offset_minutes: i64) -> String {
+    (dt + chrono::Duration::minutes(tz_offset_minutes))
+        .format("%H:%M")
+        .to_string()
 }
 
 /// Per-slot ref tokens: prefer resolved team id, else initial expression.
@@ -327,29 +391,36 @@ fn focus_team_storage_key(tournament_url: &str) -> String {
     format!("schedule_focus_team:{tournament_url}")
 }
 
+/// Remembered nav location (view + team + field) per tournament, used when the
+/// URL carries no query params.
+fn nav_storage_key(tournament_url: &str) -> String {
+    format!("schedule_last_nav:{tournament_url}")
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, serde::Deserialize)]
+struct ScheduleNavState {
+    #[serde(default)]
+    view: String,
+    #[serde(default)]
+    team: String,
+    #[serde(default)]
+    field: String,
+}
+
+/// View modes: "team" / "field" are public; "timeline" (all fields) / "table" are TO-only.
+fn is_valid_view(view: &str) -> bool {
+    matches!(view, "team" | "field" | "timeline" | "table")
+}
+
 const VERTICAL_SCALE_KEY: &str = "schedule_vertical_scale";
-const SHOW_ACTUAL_TIMES_KEY: &str = "schedule_show_actual_times";
+/// Edit-mode-only "Show times as they happened" toggle. No effect outside edit mode.
+const EDIT_SHOW_AS_HAPPENED_KEY: &str = "schedule_edit_show_as_happened";
 /// Base slot height in rem at scale 1.0
 const BASE_SLOT_HEIGHT_REM: f64 = 7.0;
 const MIN_VERTICAL_SCALE: f64 = 0.55;
 const MAX_VERTICAL_SCALE: f64 = 2.5;
 
-/// Format ISO timestamp in user's local time, without seconds (e.g. "14:30" or "2025-02-16 14:30").
-fn format_time_local(iso: &str, tz_offset_minutes: i64) -> String {
-    let utc_dt = if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(iso) {
-        dt.naive_utc()
-    } else if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(iso, "%Y-%m-%dT%H:%M:%S%.f") {
-        dt
-    } else if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(iso, "%Y-%m-%dT%H:%M") {
-        dt
-    } else {
-        return iso.to_string();
-    };
-    let local = utc_dt + chrono::Duration::minutes(tz_offset_minutes);
-    local.format("%H:%M").to_string()
-}
-
-/// Like `format_time_local` but includes the date so debug-mode tables show the full timestamp.
+/// Full-timestamp local formatter so debug-mode tables show the full timestamp.
 fn format_datetime_local(iso: &str, tz_offset_minutes: i64) -> String {
     let utc_dt = if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(iso) {
         dt.naive_utc()
@@ -385,21 +456,54 @@ fn read_debug_mode() -> bool {
 }
 
 #[component]
-pub fn Schedule(url: String) -> Element {
+pub fn Schedule(url: String, view: String, team: String, field: String) -> Element {
     let url_data = url.clone();
     let mut setup_data = use_resource(move || {
         let u = url_data.clone();
         async move { api::schedule_setup(&u).await }
     });
 
-    // Default to team view (personal single-column timeline).
-    let mut view_mode = use_signal(|| "mine".to_string());
+    // Initial nav state: URL query params win; otherwise fall back to the
+    // remembered location. Computed once so navigator().replace below (which
+    // changes props) can't feed back into state.
+    let initial_nav = use_hook(|| {
+        let from_url = ScheduleNavState {
+            view: view.clone(),
+            team: team.clone(),
+            field: field.clone(),
+        };
+        let mut nav = if !view.is_empty() || !team.is_empty() || !field.is_empty() {
+            from_url
+        } else {
+            ls_get(&nav_storage_key(&url))
+                .and_then(|s| serde_json::from_str::<ScheduleNavState>(&s).ok())
+                .unwrap_or_default()
+        };
+        if !is_valid_view(&nav.view) {
+            // Default view is the personal single-column timeline.
+            nav.view = "team".to_string();
+        }
+        if nav.field.is_empty() {
+            nav.field = "all".to_string();
+        }
+        nav
+    });
+
+    let mut view_mode = use_signal({
+        let v = initial_nav.view.clone();
+        move || v
+    });
     let mut edit_mode = use_signal(|| false);
-    let mut selected_field = use_signal(|| "all".to_string());
+    let mut selected_field = use_signal({
+        let f = initial_nav.field.clone();
+        move || f
+    });
     let mut highlight_team = use_signal(|| "".to_string());
-    /// Plan (default) vs actual/live times toggle (#196).
-    let mut show_actual_times = use_signal(|| {
-        ls_get(SHOW_ACTUAL_TIMES_KEY)
+    /// Edit-mode-only "Show times as they happened" toggle: place blocks at exact
+    /// real times (confirmed/completed, falling back to nominal estimates) with no
+    /// min-capping. Viewers always get the "planned or earlier" rule.
+    let mut show_as_happened = use_signal(|| {
+        ls_get(EDIT_SHOW_AS_HAPPENED_KEY)
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false)
     });
@@ -410,13 +514,19 @@ pub fn Schedule(url: String) -> Element {
             .map(|s| s.clamp(MIN_VERTICAL_SCALE, MAX_VERTICAL_SCALE))
             .unwrap_or(1.0)
     });
-    /// Focus team id for Team view (#195). Prefer localStorage so the dropdown
-    /// shows a selection immediately, then upgrade from registration if needed.
-    let mut focus_team_id = use_signal(|| {
-        // tournament url not available as const here — filled in effect below.
-        String::new()
+    /// Focus team id for Team view (#195). URL/remembered nav wins; otherwise
+    /// prefer localStorage so the dropdown shows a selection immediately, then
+    /// upgrade from registration if needed (effect below).
+    let mut focus_team_id = use_signal({
+        let t = initial_nav.team.clone();
+        move || t
     });
-    let mut focus_team_ready = use_signal(|| false);
+    // When a team was specified via URL or remembered nav, skip the
+    // localStorage/registration resolution entirely.
+    let mut focus_team_ready = use_signal({
+        let specified = !initial_nav.team.is_empty();
+        move || specified
+    });
 
     let mut is_to = use_signal(|| false);
 
@@ -443,8 +553,59 @@ pub fn Schedule(url: String) -> Element {
     use_effect(move || {
         if let Some(Ok(data)) = setup_data.value().read().as_ref() {
             is_to.set(data.is_to);
+            let v = view_mode();
+            // "All fields" and "Table" are TO-only; coerce stray values (e.g. from URL).
+            if !data.is_to && matches!(v.as_str(), "timeline" | "table") {
+                view_mode.set("team".to_string());
+                return;
+            }
+            // "By field" needs a concrete field: keep a remembered valid one, else
+            // default to the first field alphabetically.
+            if v == "field" {
+                let sf = selected_field.peek().clone();
+                let valid = data.fields.iter().any(|f| f.id.to_string() == sf);
+                if !valid {
+                    let mut fields: Vec<&FieldSetupData> = data.fields.iter().collect();
+                    fields.sort_by(|a, b| a.name.cmp(&b.name));
+                    if let Some(f) = fields.first() {
+                        selected_field.set(f.id.to_string());
+                    }
+                }
+            }
         }
     });
+
+    // Keep localStorage and the URL in sync with the nav state (view/team/field)
+    // so copying the address bar deep-links correctly. `replace` (not `push`) to
+    // avoid history spam; the guard prevents loops with the route props.
+    {
+        let url_for_nav = url.clone();
+        let nav_handle = use_navigator();
+        let mut last_nav_synced = use_signal(|| None::<ScheduleNavState>);
+        use_effect(move || {
+            let state = ScheduleNavState {
+                view: view_mode(),
+                team: focus_team_id(),
+                field: {
+                    let f = selected_field();
+                    if f == "all" { String::new() } else { f }
+                },
+            };
+            if last_nav_synced.peek().as_ref() == Some(&state) {
+                return;
+            }
+            if let Ok(encoded) = serde_json::to_string(&state) {
+                ls_set(&nav_storage_key(&url_for_nav), &encoded);
+            }
+            nav_handle.replace(Route::Schedule {
+                url: url_for_nav.clone(),
+                view: state.view.clone(),
+                team: state.team.clone(),
+                field: state.field.clone(),
+            });
+            last_nav_synced.set(Some(state));
+        });
+    }
 
     // Resolve default focus team for Team view: localStorage first (instant select),
     // then registered team / player's team (overrides empty only, or confirms).
@@ -573,13 +734,13 @@ pub fn Schedule(url: String) -> Element {
                     match key_str.as_str() {
                         "n" | "N" => {
                             ev.prevent_default();
-                            if view_mode() == "timeline" || view_mode() == "mine" {
+                            if matches!(view_mode().as_str(), "team" | "field" | "timeline") {
                                 key_nav.set(Some("next".to_string()));
                             }
                         }
                         "p" | "P" => {
                             ev.prevent_default();
-                            if view_mode() == "timeline" || view_mode() == "mine" {
+                            if matches!(view_mode().as_str(), "team" | "field" | "timeline") {
                                 key_nav.set(Some("prev".to_string()));
                             }
                         }
@@ -587,28 +748,38 @@ pub fn Schedule(url: String) -> Element {
                             ev.prevent_default();
                             if edit_mode() && is_to {
                                 active_modal.set("tags".to_string());
-                            } else if view_mode() == "timeline" || view_mode() == "mine" {
+                            } else if matches!(view_mode().as_str(), "team" | "field" | "timeline")
+                            {
                                 key_nav.set(Some("today".to_string()));
                             }
                         }
                         "a" | "A" => {
                             ev.prevent_default();
-                            view_mode.set("table".to_string());
+                            if is_to {
+                                view_mode.set("table".to_string());
+                            }
                         }
                         "l" | "L" => {
                             ev.prevent_default();
-                            view_mode.set("timeline".to_string());
+                            if is_to {
+                                view_mode.set("timeline".to_string());
+                            }
                         }
                         "y" | "Y" => {
                             ev.prevent_default();
                             if !edit_mode() {
-                                view_mode.set("mine".to_string());
+                                view_mode.set("team".to_string());
                             }
                         }
                         "e" | "E" => {
                             ev.prevent_default();
                             if is_to {
-                                edit_mode.set(!edit_mode());
+                                let on = !edit_mode();
+                                edit_mode.set(on);
+                                // Team/field views are viewer-only; bounce to the grid.
+                                if on && matches!(view_mode().as_str(), "team" | "field") {
+                                    view_mode.set("timeline".to_string());
+                                }
                             }
                         }
                         "m" | "M" => {
@@ -621,6 +792,9 @@ pub fn Schedule(url: String) -> Element {
                             if edit_mode() && is_to {
                                 ev.prevent_default();
                                 active_modal.set("fields".to_string());
+                            } else if !edit_mode() {
+                                ev.prevent_default();
+                                view_mode.set("field".to_string());
                             }
                         }
                         "x" | "X" => {
@@ -751,14 +925,21 @@ pub fn Schedule(url: String) -> Element {
                         div { class: "card-body p-2",
                             div { class: "d-flex flex-wrap justify-content-between align-items-center gap-2",
                                 div { class: "d-flex flex-wrap align-items-center gap-2",
-                                    if view_mode() != "mine" {
+                                    if view_mode() != "team" {
                                         select {
                                             class: "form-select form-select-sm d-inline-block w-auto",
                                             value: "{selected_field}",
                                             onchange: move |e| selected_field.set(e.value()),
-                                            option { value: "all", "All Fields" }
+                                            // "By field" requires a concrete field; the grid/table allow "all".
+                                            if view_mode() != "field" {
+                                                option { value: "all", "All Fields" }
+                                            }
                                             for f in &data.fields {
-                                                option { value: "{f.id}", "{f.name}" }
+                                                option {
+                                                    value: "{f.id}",
+                                                    selected: f.id.to_string() == selected_field(),
+                                                    "{f.name}"
+                                                }
                                             }
                                         }
                                         input {
@@ -818,41 +999,27 @@ pub fn Schedule(url: String) -> Element {
                                     div { class: "btn-group btn-group-sm",
                                         if !edit_mode() {
                                             button {
-                                                class: if view_mode() == "mine" { "btn btn-primary" } else { "btn btn-outline-primary" },
-                                                onclick: move |_| view_mode.set("mine".to_string()),
-                                                "Team view"
+                                                class: if view_mode() == "team" { "btn btn-primary" } else { "btn btn-outline-primary" },
+                                                onclick: move |_| view_mode.set("team".to_string()),
+                                                "By team"
+                                            }
+                                            button {
+                                                class: if view_mode() == "field" { "btn btn-primary" } else { "btn btn-outline-primary" },
+                                                onclick: move |_| view_mode.set("field".to_string()),
+                                                "By field"
                                             }
                                         }
-                                        button {
-                                            class: if view_mode() == "timeline" { "btn btn-primary" } else { "btn btn-outline-primary" },
-                                            onclick: move |_| view_mode.set("timeline".to_string()),
-                                            "All teams"
-                                        }
-                                        button {
-                                            class: if view_mode() == "table" { "btn btn-primary" } else { "btn btn-outline-primary" },
-                                            onclick: move |_| view_mode.set("table".to_string()),
-                                            "Table"
-                                        }
-                                    }
-                                    div {
-                                        class: "form-check form-switch mb-0",
-                                        title: "Off = planned times (default). On = live/actual start times and durations.",
-                                        input {
-                                            class: "form-check-input",
-                                            r#type: "checkbox",
-                                            role: "switch",
-                                            id: "showActualTimesSwitch",
-                                            checked: "{show_actual_times}",
-                                            onchange: move |e| {
-                                                let on = e.value() == "true";
-                                                show_actual_times.set(on);
-                                                ls_set(SHOW_ACTUAL_TIMES_KEY, if on { "1" } else { "0" });
+                                        if is_to {
+                                            button {
+                                                class: if view_mode() == "timeline" { "btn btn-primary" } else { "btn btn-outline-primary" },
+                                                onclick: move |_| view_mode.set("timeline".to_string()),
+                                                "All fields"
                                             }
-                                        }
-                                        label {
-                                            class: "form-check-label small",
-                                            r#for: "showActualTimesSwitch",
-                                            "Actual times"
+                                            button {
+                                                class: if view_mode() == "table" { "btn btn-primary" } else { "btn btn-outline-primary" },
+                                                onclick: move |_| view_mode.set("table".to_string()),
+                                                "Table"
+                                            }
                                         }
                                     }
                                 }
@@ -917,6 +1084,27 @@ pub fn Schedule(url: String) -> Element {
                                                 onclick: move |_| active_modal.set("schedule_warnings".to_string()),
                                                 "⚠ Warnings"
                                             }
+                                            div {
+                                                class: "form-check form-switch mb-0 ms-1",
+                                                title: "Place blocks at exact real times (confirmed/completed, falling back to estimates) instead of the planned-or-earlier rule.",
+                                                input {
+                                                    class: "form-check-input",
+                                                    r#type: "checkbox",
+                                                    role: "switch",
+                                                    id: "showAsHappenedSwitch",
+                                                    checked: "{show_as_happened}",
+                                                    onchange: move |e| {
+                                                        let on = e.value() == "true";
+                                                        show_as_happened.set(on);
+                                                        ls_set(EDIT_SHOW_AS_HAPPENED_KEY, if on { "1" } else { "0" });
+                                                    }
+                                                }
+                                                label {
+                                                    class: "form-check-label small",
+                                                    r#for: "showAsHappenedSwitch",
+                                                    "Show times as they happened"
+                                                }
+                                            }
                                         }
                                         div { class: "form-check form-switch mb-0 ms-1",
                                             input {
@@ -928,8 +1116,8 @@ pub fn Schedule(url: String) -> Element {
                                                 onchange: move |e| {
                                                     let on = e.value() == "true";
                                                     edit_mode.set(on);
-                                                    // My timeline is viewer-only; leave it when entering edit.
-                                                    if on && view_mode() == "mine" {
+                                                    // Team/field views are viewer-only; leave them when entering edit.
+                                                    if on && matches!(view_mode().as_str(), "team" | "field") {
                                                         view_mode.set("timeline".to_string());
                                                     }
                                                 }
@@ -942,28 +1130,31 @@ pub fn Schedule(url: String) -> Element {
                         }
                     }
 
-                    if view_mode() == "mine" && focus_team_id().is_empty() {
+                    if view_mode() == "team" && focus_team_id().is_empty() {
                         div { class: "alert alert-info",
                             "Choose your team above to see only the matches you play or ref."
                         }
-                    } else if view_mode() == "timeline" || view_mode() == "mine" {
+                    } else if view_mode() != "table" {
                         ScheduleTimeline {
                             data: data.clone(),
-                            selected_field: if view_mode() == "mine" {
+                            // Team view spans all fields; "By field" reuses the grid
+                            // with a single concrete field (breaks/joins included).
+                            selected_field: if view_mode() == "team" {
                                 "all".to_string()
                             } else {
                                 selected_field()
                             },
-                            highlight_team: if view_mode() == "mine" {
+                            highlight_team: if view_mode() == "team" {
                                 String::new()
                             } else {
                                 highlight_team()
                             },
-                            edit_mode: edit_mode() && view_mode() != "mine",
-                            show_actual_times: show_actual_times(),
+                            edit_mode: edit_mode() && view_mode() == "timeline",
+                            // "As happened" placement is an edit-mode-only concept.
+                            show_as_happened: edit_mode() && show_as_happened(),
                             vertical_scale: vertical_scale,
-                            // Empty = all-teams multi-field; non-empty = single-column team view.
-                            focus_team_id: if view_mode() == "mine" {
+                            // Empty = multi-field grid; non-empty = single-column team view.
+                            focus_team_id: if view_mode() == "team" {
                                 focus_team_id()
                             } else {
                                 String::new()
@@ -983,7 +1174,7 @@ pub fn Schedule(url: String) -> Element {
                             highlight_team: highlight_team(),
                             edit_mode: edit_mode(),
                             debug_mode: debug_mode(),
-                            show_actual_times: show_actual_times(),
+                            show_as_happened: edit_mode() && show_as_happened(),
                             tournament_url: url.clone(),
                             on_edit_match: move |id: String| {
                                 selected_match_id.set(id);
@@ -2581,7 +2772,7 @@ fn TableView(
     highlight_team: String,
     edit_mode: bool,
     #[props(default = false)] debug_mode: bool,
-    #[props(default = false)] show_actual_times: bool,
+    #[props(default = false)] show_as_happened: bool,
     tournament_url: String,
     on_edit_match: EventHandler<String>,
 ) -> Element {
@@ -2763,8 +2954,8 @@ fn TableView(
                                 }
                                 td { "{m.field.as_deref().unwrap_or(\"\")}" }
                                 td {
-                                    if let Some(t) = display_start_str(m, show_actual_times) {
-                                        span { "{format_time_local(t, tz_offset)}" }
+                                    if let Some((start_utc, _)) = display_interval_utc(m, show_as_happened) {
+                                        span { "{format_naive_utc_time_local(start_utc, tz_offset)}" }
                                     } else { "-" }
                                 }
                                 td { "{schedule_type_display}" }
@@ -3183,7 +3374,9 @@ fn ScheduleTimeline(
     selected_field: String,
     highlight_team: String,
     edit_mode: bool,
-    show_actual_times: bool,
+    /// Edit-mode-only: place blocks at exact real times instead of the
+    /// "planned or earlier" viewer rule (see `display_interval_utc`).
+    show_as_happened: bool,
     vertical_scale: Signal<f64>,
     /// When non-empty, single-column team view filtered to this team.
     #[props(default)]
@@ -3292,7 +3485,7 @@ fn ScheduleTimeline(
             .matches
             .iter()
             .filter(|m| m.status != "SKIPPED")
-            .filter_map(|m| plan_start_str(m).or_else(|| display_start_str(m, show_actual_times)))
+            .filter_map(|m| plan_start_str(m).or_else(|| actual_start_str(m)))
             .filter_map(|s| parse_schedule_time_to_local(s, tz_offset_minutes))
             .map(|dt| dt.date())
             .collect();
@@ -3397,8 +3590,8 @@ fn ScheduleTimeline(
     let current_visible_date = visible_date_signal();
 
     // Build timeline events (non-join matches).
-    // Plan mode (default): place at scheduled_start + nominal_length.
-    // Actual mode: confirmed/nominal start; completed uses real end when available.
+    // Placement uses `display_interval_utc`: the "planned or earlier" viewer rule,
+    // or exact real times when the edit-mode "as happened" toggle is on.
     let mut timeline_events: Vec<TimelineEvent> = data
         .matches
         .iter()
@@ -3413,27 +3606,10 @@ fn ScheduleTimeline(
                 && match_involves_team(m, &focus_team_id, &data.team_options)
         })
         .filter_map(|m| {
-            let start_str = display_start_str(m, show_actual_times)?;
-            let start_dt = parse_schedule_time_to_local(start_str, tz_offset_minutes)?;
-            let length_min_plan = m.nominal_length.unwrap_or(30) as i64;
-            let (end_dt, length_min) = if show_actual_times {
-                if let Some(end_str) = m.completed_time.as_ref() {
-                    let end_dt = parse_schedule_time_to_local(end_str, tz_offset_minutes)?;
-                    let len = (end_dt - start_dt).num_minutes().max(1);
-                    (end_dt, len)
-                } else {
-                    (
-                        start_dt + chrono::Duration::minutes(length_min_plan),
-                        length_min_plan,
-                    )
-                }
-            } else {
-                // Plan mode: always nominal length so blocks stay at the published shape.
-                (
-                    start_dt + chrono::Duration::minutes(length_min_plan),
-                    length_min_plan,
-                )
-            };
+            let (start_utc, end_utc) = display_interval_utc(m, show_as_happened)?;
+            let start_dt = start_utc + chrono::Duration::minutes(tz_offset_minutes);
+            let end_dt = end_utc + chrono::Duration::minutes(tz_offset_minutes);
+            let length_min = (end_dt - start_dt).num_minutes().max(1);
 
             let (field_id, field_name) = if team_view {
                 (
@@ -3714,9 +3890,9 @@ fn ScheduleTimeline(
                     return None;
                 }
 
-                // Get time from first match (plan or actual per toggle)
-                let time_str = display_start_str(matches[0], show_actual_times)?;
-                let time_dt = parse_schedule_time_to_local(time_str, tz_offset_minutes)?;
+                // Get time from first match (same display rule as match blocks)
+                let (start_utc, _) = display_interval_utc(matches[0], show_as_happened)?;
+                let time_dt = start_utc + chrono::Duration::minutes(tz_offset_minutes);
 
                 // Build per-field join matches (field_id -> match_uuid)
                 let field_matches: Vec<(u32, String)> = matches
