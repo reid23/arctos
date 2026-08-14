@@ -97,9 +97,10 @@
 .schedule-timeline-time-col {
     position: sticky;
     left: 0;
-    /* Solid so sticky labels stay readable over stripes + overlapping events */
+    /* Solid so sticky labels stay readable over stripes + overlapping events.
+     * Above joins (25) so they slide under the gutter on horizontal scroll. */
     background: #ffffff !important;
-    z-index: 5;
+    z-index: 26;
     border-right: 2px solid #ccc;
     font-weight: 500;
     font-size: clamp(13px, 2vw, 15px);
@@ -133,7 +134,8 @@
     overflow: visible;
     min-width: 0;
     background-color: transparent !important;
-    z-index: 0;
+    /* No z-index: a stacking context here would trap in-cell joins (z 25)
+     * below the events overlay (z 12), hiding join labels under blocks. */
 }
 
 /*
