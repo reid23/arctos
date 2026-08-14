@@ -316,6 +316,7 @@ def deregister_any_team(tournament_url: str):
 
     if team_registration:
         team_registration.status = RegistrationStatus.CANCELLED
+        pseudonym = getattr(team_registration, "pseudonym", None)
 
         affected_player_ids = [
             r.player for r in PlayerRegistration.query.filter_by(event=tournament_url, team=team_id).all()
@@ -328,6 +329,14 @@ def deregister_any_team(tournament_url: str):
         from app.services.sidecomp_service import SideCompService
 
         SideCompService.cancel_players_in_event(tournament_url, affected_player_ids)
+
+        from app.services.bracket_cleanup_service import scrub_deleted_teams
+
+        scrub_deleted_teams(
+            tournament_url,
+            [team_id],
+            pseudonyms=[pseudonym] if pseudonym else None,
+        )
 
         db.session.commit()
         return (
@@ -993,8 +1002,16 @@ def league_deregister_any_team(league_url):
 
     if team_registration:
         team_registration.status = RegistrationStatus.CANCELLED
+        pseudonym = getattr(team_registration, "pseudonym", None)
         PlayerRegistration.query.filter_by(league_id=league_url, team=team_id).update(
             {"status": RegistrationStatus.CANCELLED}
+        )
+        from app.services.bracket_cleanup_service import scrub_deleted_teams_for_league
+
+        scrub_deleted_teams_for_league(
+            league_url,
+            [team_id],
+            pseudonyms=[pseudonym] if pseudonym else None,
         )
         db.session.commit()
         return (

@@ -165,3 +165,18 @@ class WinnerSide(StrEnum):
 
     TEAM1 = "TEAM1"
     TEAM2 = "TEAM2"
+
+
+class BracketPortMode(StrEnum):
+    """How a bracket match-block input is rendered on the canvas.
+
+    Attributes:
+        LABEL: Show the slot's ``_initial`` value as a net-style label
+            (explicit team, tag, or match winner/loser token).
+        NET: Draw a wire from another match's winner/loser output into
+            this input. Only valid when the slot references a match
+            winner or loser.
+    """
+
+    LABEL = "LABEL"
+    NET = "NET"

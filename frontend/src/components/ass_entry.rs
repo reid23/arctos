@@ -19,32 +19,39 @@ use wasm_bindgen::JsCast as _;
 
 /// (name, signature, short description)
 const DSL_FUNCTIONS: &[(&str, &str, &str)] = &[
-    ("wins", "(wins TEAM) -> INT", "Wins for a team this event"),
+    (
+        "wins",
+        "(wins TEAM) / (wins TEAM MATCHLIST) -> INT",
+        "Wins for a team (event-wide or over MATCHLIST)",
+    ),
     (
         "losses",
-        "(losses TEAM) -> INT",
-        "Losses for a team this event",
+        "(losses TEAM) / (losses TEAM MATCHLIST) -> INT",
+        "Losses for a team (event-wide or over MATCHLIST)",
     ),
     ("winner", "(winner MATCH) -> TEAM", "Winner of a match"),
     ("loser", "(loser MATCH) -> TEAM", "Loser of a match"),
     (
         "points-won",
-        "(points-won TEAM MATCH?) -> INT",
-        "Points won (optionally in MATCH)",
+        "(points-won TEAM) / (points-won TEAM MATCH|MATCHLIST) -> INT",
+        "Points won (event, one match, or sum over MATCHLIST)",
     ),
     (
         "points-lost",
-        "(points-lost TEAM MATCH?) -> INT",
-        "Points lost (optionally in MATCH)",
+        "(points-lost TEAM) / (points-lost TEAM MATCH|MATCHLIST) -> INT",
+        "Points lost (event, one match, or sum over MATCHLIST)",
     ),
+    ("won?", "(won? TEAM MATCH) -> BOOL", "True if TEAM won MATCH"),
     (
         "is-skipped",
         "(is-skipped MATCH) -> BOOL",
         "True if match was skipped",
     ),
     ("if", "(if COND IF_TRUE IF_FALSE)", "Conditional"),
-    ("and", "(and BOOL BOOL) -> BOOL", "Logical and"),
-    ("or", "(or BOOL BOOL) -> BOOL", "Logical or"),
+    ("let", "(let ((name expr) ...) BODY)", "Sequential local bindings"),
+    ("cond", "(cond (PRED EXPR) ...)", "Multi-branch conditional; else nil"),
+    ("and", "(and *BOOL) -> BOOL", "Logical and (variadic)"),
+    ("or", "(or *BOOL) -> BOOL", "Logical or (variadic)"),
     ("not", "(not BOOL) -> BOOL", "Logical not"),
     ("==", "(== ANY ANY) -> BOOL", "Equality"),
     (">", "(> INT INT) -> BOOL", "Greater than"),
@@ -56,10 +63,15 @@ const DSL_FUNCTIONS: &[(&str, &str, &str)] = &[
     ("*", "(* INT INT) -> INT", "Multiplication"),
     ("/", "(/ INT INT) -> INT", "Integer division"),
     ("quote", "(quote EXPR) / 'EXPR", "Literal expression, unevaluated"),
+    ("list", "(list *ARGS) -> LIST", "Build a list from arguments"),
+    ("cons", "(cons X LIST) -> LIST", "Prepend X onto LIST"),
+    ("append", "(append LIST LIST) -> LIST", "Concatenate two lists"),
     ("car", "(car LIST)", "First element"),
     ("cdr", "(cdr LIST)", "All but the first element"),
     ("get", "(get INDEX LIST)", "Element at INDEX, or NIL"),
     ("len", "(len LIST) -> INT", "Length of a list"),
+    ("empty?", "(empty? LIST) -> BOOL", "True if list is empty"),
+    ("member?", "(member? X LIST) -> BOOL", "True if X is in LIST"),
     (
         "or-default",
         "(or-default VAL DEFAULT)",
@@ -70,7 +82,27 @@ const DSL_FUNCTIONS: &[(&str, &str, &str)] = &[
         "(map LIST FUNC) -> LIST",
         "Apply FUNC to each element",
     ),
-    ("reduce", "(reduce LIST FUNC)", "Combine elements with FUNC"),
+    (
+        "map-indexed",
+        "(map-indexed LIST FUNC) -> LIST",
+        "Apply FUNC(i, x) to each element with index",
+    ),
+    (
+        "filter",
+        "(filter LIST PREDFN) -> LIST",
+        "Keep elements where PREDFN is true",
+    ),
+    (
+        "reduce",
+        "(reduce LIST FUNC) / (reduce LIST INIT FUNC)",
+        "Fold list with FUNC; optional INIT",
+    ),
+    (
+        "sort-by",
+        "(sort-by LIST *KEYFNS) -> LIST",
+        "Sort descending by key function(s), stable",
+    ),
+    ("range", "(range N) -> LIST", "List 0 .. N-1"),
     ("max", "(max LIST)", "Maximum of a list"),
     ("min", "(min LIST)", "Minimum of a list"),
     (
@@ -197,6 +229,109 @@ fn find_matching_close(
         }
     }
     None
+}
+
+/// Find matching open bracket for a close at `close_byte_pos`. Returns byte index of open char.
+fn find_matching_open(
+    s: &str,
+    close_byte_pos: usize,
+    open_c: char,
+    close_c: char,
+) -> Option<usize> {
+    let before = s.get(..close_byte_pos)?;
+    let mut depth = 1u32;
+    for (i, c) in before.char_indices().rev() {
+        if c == close_c {
+            depth += 1;
+        } else if c == open_c {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                return Some(i);
+            }
+        }
+    }
+    None
+}
+
+/// Highlight state for the bracket under (or immediately left of) the cursor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BracketPairHighlight {
+    /// Byte indices of the open and close bracket characters (open ≤ close).
+    Matched { open: usize, close: usize },
+    /// Byte index of a bracket with no matching partner.
+    Unmatched { pos: usize },
+}
+
+/// If the cursor is on a bracket (char at caret, else char just before caret), return
+/// the pair highlight for that bracket. Matches VS Code-style adjacency.
+pub fn bracket_highlight_at_cursor(s: &str, cursor_char: usize) -> Option<BracketPairHighlight> {
+    let chars: Vec<(usize, char)> = s.char_indices().collect();
+    let is_bracket = |c: char| matching_close(c).is_some() || matching_open(c).is_some();
+
+    let at = chars.get(cursor_char).copied().filter(|(_, c)| is_bracket(*c));
+    let before = cursor_char
+        .checked_sub(1)
+        .and_then(|i| chars.get(i).copied())
+        .filter(|(_, c)| is_bracket(*c));
+
+    // Prefer the bracket the caret is sitting on (to the right); fall back to the one just left.
+    let (pos, c) = at.or(before)?;
+
+    if let Some(close_c) = matching_close(c) {
+        match find_matching_close(s, pos, c, close_c) {
+            Some(close) => Some(BracketPairHighlight::Matched { open: pos, close }),
+            None => Some(BracketPairHighlight::Unmatched { pos }),
+        }
+    } else if let Some(open_c) = matching_open(c) {
+        match find_matching_open(s, pos, open_c, c) {
+            Some(open) => Some(BracketPairHighlight::Matched { open, close: pos }),
+            None => Some(BracketPairHighlight::Unmatched { pos }),
+        }
+    } else {
+        None
+    }
+}
+
+/// Split `s` into (text, optional CSS class) segments for the bracket-highlight backdrop.
+/// Non-highlighted text uses class `None` (rendered transparent so only backgrounds show).
+fn bracket_highlight_segments(
+    s: &str,
+    hl: Option<BracketPairHighlight>,
+) -> Vec<(String, Option<&'static str>)> {
+    let mut marks: Vec<(usize, &'static str)> = Vec::new();
+    match hl {
+        Some(BracketPairHighlight::Matched { open, close }) => {
+            marks.push((open, "ass-entry-bracket-match"));
+            marks.push((close, "ass-entry-bracket-match"));
+        }
+        Some(BracketPairHighlight::Unmatched { pos }) => {
+            marks.push((pos, "ass-entry-bracket-unmatched"));
+        }
+        None => {}
+    }
+    marks.sort_by_key(|(p, _)| *p);
+
+    let mut out: Vec<(String, Option<&'static str>)> = Vec::new();
+    let mut cursor = 0usize;
+    for (pos, cls) in marks {
+        if pos < cursor || pos >= s.len() {
+            continue;
+        }
+        if pos > cursor {
+            out.push((s[cursor..pos].to_string(), None));
+        }
+        // Single char at pos (brackets are always ASCII in ASS).
+        let end = pos + s[pos..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+        out.push((s[pos..end].to_string(), Some(cls)));
+        cursor = end;
+    }
+    if cursor < s.len() {
+        out.push((s[cursor..].to_string(), None));
+    } else if s.is_empty() {
+        // Keep an empty segment so the backdrop still participates in layout.
+        out.push((String::new(), None));
+    }
+    out
 }
 
 /// Convert a cursor position in characters to byte offset.
@@ -1072,6 +1207,8 @@ pub fn AssEntry(
         use_effect(move || {
             if let Some(p) = pending_cursor() {
                 pending_cursor.set(None);
+                // Keep autocomplete + bracket-highlight in sync with the forced caret.
+                cursor_pos.set(Some(p));
                 let id = id_eff.clone();
                 spawn(async move {
                     gloo_timers::future::TimeoutFuture::new(0).await;
@@ -1082,6 +1219,13 @@ pub fn AssEntry(
                                     let _ = input.set_selection_range(p as u32, p as u32);
                                     let _ = input.focus();
                                     autosize_textarea(&input);
+                                    // Mirror scroll after resize (highlight backdrop is absolute-filled).
+                                    if let Ok(Some(hl_el)) =
+                                        doc.query_selector(&format!("#{}-bracket-hl", id))
+                                    {
+                                        hl_el.set_scroll_top(input.scroll_top());
+                                        hl_el.set_scroll_left(input.scroll_left());
+                                    }
                                 }
                             }
                         }
@@ -1097,12 +1241,44 @@ pub fn AssEntry(
     let inn = cur.and_then(|c| innermost_around_cursor(&v, c));
     let cursor_b = cur.map(|c| cursor_byte(&v, c)).unwrap_or(0);
 
+    // Text the user is actively filtering on (empty ⇒ browsing / not filtering).
+    // Used both to build the option list and to decide whether ↑/↓ navigate the
+    // menu or move the caret (empty filter ⇒ never steal arrows).
+    let ac_filter: String = match &inn {
+        Some(InnermostBracket::Paren(cs, ce)) => {
+            let end = (*ce).min(cursor_b).max(*cs);
+            let content = &v[*cs..end];
+            // Function-name slot only: once there's whitespace, the cursor is in
+            // the args and function AC must not stay open (it was stealing arrows
+            // while editing arguments because prefix stayed as the first word).
+            if content.chars().any(|c| c.is_whitespace()) {
+                String::new()
+            } else {
+                content.to_string()
+            }
+        }
+        Some(InnermostBracket::Square(cs, ce)) | Some(InnermostBracket::Curly(cs, ce)) => {
+            let end = (*ce).min(cursor_b).max(*cs);
+            v[*cs..end].trim().to_string()
+        }
+        None => String::new(),
+    };
+    // True when the user has typed something to filter — safe to bind ↑/↓ to the menu.
+    let ac_arrows_capture = !ac_filter.is_empty();
+
     let ac_options: Vec<AcOption> = if ac_open() {
         match &inn {
             Some(InnermostBracket::Paren(cs, ce)) => {
                 let end = (*ce).min(cursor_b).max(*cs);
-                let prefix = v[*cs..end].split_whitespace().next().unwrap_or("");
-                collect_function_options(prefix)
+                let content = &v[*cs..end];
+                if content.chars().any(|c| c.is_whitespace()) {
+                    // In argument position — no function completions.
+                    vec![]
+                } else {
+                    // Empty prefix still lists functions (discoverability); arrows
+                    // won't capture until the user types a letter (see keydown).
+                    collect_function_options(content)
+                }
             }
             Some(InnermostBracket::Square(cs, ce)) => {
                 let end = (*ce).min(cursor_b).max(*cs);
@@ -1270,19 +1446,35 @@ pub fn AssEntry(
     let value_rc_kd = value_rc.clone();
     let on_change_kd = on_change.clone();
     let ac_options_kd = ac_options.clone();
+    let ac_arrows_capture_kd = ac_arrows_capture;
     let onkeydown_handler = move |ev: Event<KeyboardData>| {
         let key = ev.key().to_string();
         let n = ac_options_kd.len();
         if ac_open() && n > 0 {
-            if key == "ArrowDown" {
-                ev.prevent_default();
-                ac_index.set((ac_idx + 1) % n);
-                return;
+            // ↑/↓ navigate the menu only while the user is actively filtering
+            // (non-empty prefix/query). Otherwise they move the caret — previously
+            // any open menu with options (e.g. full function list after `(`) ate
+            // arrows and made multi-line / wrapped editing impossible.
+            if key == "ArrowDown" || key == "ArrowUp" {
+                if ac_arrows_capture_kd {
+                    ev.prevent_default();
+                    if key == "ArrowDown" {
+                        ac_index.set((ac_idx + 1) % n);
+                    } else {
+                        ac_index.set((ac_idx + n - 1) % n);
+                    }
+                    return;
+                }
+                // Not filtering — let the caret move and dismiss so the menu
+                // doesn't stick around while navigating a multi-line expression.
+                ac_open.set(false);
+                // fall through (no preventDefault)
             }
-            if key == "ArrowUp" {
-                ev.prevent_default();
-                ac_index.set((ac_idx + n - 1) % n);
-                return;
+            // Left/right: dismiss the menu so subsequent keys behave normally.
+            // (Don't preventDefault — the caret should still move.)
+            if key == "ArrowLeft" || key == "ArrowRight" {
+                ac_open.set(false);
+                // fall through
             }
             if key == "Tab" || (key == "Enter" && !ev.modifiers().contains(Modifiers::SHIFT)) {
                 if let Some(opt) = ac_options_kd.get(ac_idx) {
@@ -1406,53 +1598,71 @@ pub fn AssEntry(
         let _ = id_for_keydown.clone();
     };
 
-    let id_for_keyup = input_id.clone();
-    let onkeyup_handler = move |_| {
-        let id = id_for_keyup.clone();
-        spawn(async move {
-            #[cfg(target_arch = "wasm32")]
-            {
-                gloo_timers::future::TimeoutFuture::new(0).await;
-                if let Some(window) = web_sys::window() {
-                    if let Some(doc) = window.document() {
-                        if let Ok(Some(el)) = doc.query_selector(&format!("#{}", id)) {
-                            if let Ok(input) = el.dyn_into::<web_sys::HtmlTextAreaElement>() {
-                                if let Ok(Some(sel)) = input.selection_start() {
-                                    cursor_pos.set(Some(sel as usize));
-                                }
-                            }
-                        }
+    /// Read selection from the textarea after the browser applies the key/click, then
+    /// update `cursor_pos` (drives autocomplete + opposing-bracket highlight).
+    let schedule_cursor_sync = {
+        let id_base = input_id.clone();
+        move || {
+            let id = id_base.clone();
+            spawn(async move {
+                #[cfg(target_arch = "wasm32")]
+                {
+                    gloo_timers::future::TimeoutFuture::new(0).await;
+                    if let Some((_, start, _)) = read_textarea_state(&id) {
+                        cursor_pos.set(Some(start));
                     }
                 }
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            let _ = id;
-        });
+                #[cfg(not(target_arch = "wasm32"))]
+                let _ = id;
+            });
+        }
+    };
+    // Rc so keyup/click/select/focus handlers can all share one scheduler.
+    let schedule_cursor_sync = Rc::new(RefCell::new(schedule_cursor_sync));
+
+    let schedule_keyup = schedule_cursor_sync.clone();
+    let onkeyup_handler = move |_| {
+        (schedule_keyup.borrow_mut())();
     };
 
-    let id_for_focus = input_id.clone();
-    let onfocus_handler = move |_| {
-        ac_open.set(true);
-        let id = id_for_focus.clone();
-        spawn(async move {
-            #[cfg(target_arch = "wasm32")]
-            {
-                gloo_timers::future::TimeoutFuture::new(0).await;
-                if let Some(window) = web_sys::window() {
-                    if let Some(doc) = window.document() {
-                        if let Ok(Some(el)) = doc.query_selector(&format!("#{}", id)) {
-                            if let Ok(input) = el.dyn_into::<web_sys::HtmlTextAreaElement>() {
-                                if let Ok(Some(sel)) = input.selection_start() {
-                                    cursor_pos.set(Some(sel as usize));
-                                }
+    // Click / selection changes without a keyup path (e.g. mouse).
+    let schedule_select = schedule_cursor_sync.clone();
+    let onselect_handler = move |_| {
+        (schedule_select.borrow_mut())();
+    };
+    let schedule_click = schedule_cursor_sync.clone();
+    let onclick_handler = move |_| {
+        (schedule_click.borrow_mut())();
+    };
+
+    // Keep the bracket-highlight backdrop scrolled in lockstep with the textarea.
+    let id_for_scroll = input_id.clone();
+    let onscroll_handler = move |_| {
+        #[cfg(target_arch = "wasm32")]
+        {
+            if let Some(window) = web_sys::window() {
+                if let Some(doc) = window.document() {
+                    if let Ok(Some(ta_el)) = doc.query_selector(&format!("#{}", id_for_scroll)) {
+                        if let Ok(ta) = ta_el.dyn_into::<web_sys::HtmlTextAreaElement>() {
+                            if let Ok(Some(hl_el)) =
+                                doc.query_selector(&format!("#{}-bracket-hl", id_for_scroll))
+                            {
+                                hl_el.set_scroll_top(ta.scroll_top());
+                                hl_el.set_scroll_left(ta.scroll_left());
                             }
                         }
                     }
                 }
             }
-            #[cfg(not(target_arch = "wasm32"))]
-            let _ = id;
-        });
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = &id_for_scroll;
+    };
+
+    let schedule_focus = schedule_cursor_sync.clone();
+    let onfocus_handler = move |_| {
+        ac_open.set(true);
+        (schedule_focus.borrow_mut())();
     };
 
     let url_for_blur = tournament_url.clone();
@@ -1720,19 +1930,44 @@ pub fn AssEntry(
     });
     let _ = preview_tokens;
 
+    // Opposing-bracket highlight: backdrop layer paints matched/unmatched marks
+    // under a transparent-background textarea (text still comes from the textarea).
+    let bracket_hl = cur.and_then(|c| bracket_highlight_at_cursor(&v, c));
+    let hl_segments = bracket_highlight_segments(&v, bracket_hl);
+    let hl_id = format!("{input_id}-bracket-hl");
+
     rsx! {
         div { class: "ass-entry position-relative",
-            textarea {
-                id: "{input_id}",
-                class: "form-control font-monospace ass-entry-input",
-                rows: "1",
-                placeholder: "{placeholder}",
-                value: "{value}",
-                oninput: oninput_handler,
-                onkeydown: onkeydown_handler,
-                onkeyup: onkeyup_handler,
-                onfocus: onfocus_handler,
-                onblur: onblur_handler,
+            div { class: "ass-entry-editor",
+                // Backdrop: same glyphs as the textarea; only highlighted brackets are visible
+                // (via background). Must stay pixel-aligned (font/padding/border/line-height).
+                pre {
+                    id: "{hl_id}",
+                    class: "ass-entry-bracket-hl",
+                    aria_hidden: "true",
+                    for (i, (seg, cls)) in hl_segments.iter().enumerate() {
+                        if let Some(c) = cls {
+                            span { key: "{i}", class: "{c}", "{seg}" }
+                        } else {
+                            span { key: "{i}", "{seg}" }
+                        }
+                    }
+                }
+                textarea {
+                    id: "{input_id}",
+                    class: "form-control font-monospace ass-entry-input",
+                    rows: "1",
+                    placeholder: "{placeholder}",
+                    value: "{value}",
+                    oninput: oninput_handler,
+                    onkeydown: onkeydown_handler,
+                    onkeyup: onkeyup_handler,
+                    onselect: onselect_handler,
+                    onclick: onclick_handler,
+                    onscroll: onscroll_handler,
+                    onfocus: onfocus_handler,
+                    onblur: onblur_handler,
+                }
             }
             if ac_open() && !ac_options.is_empty() {
                 ul { class: "ass-entry-ac dropdown-menu show",
@@ -1764,5 +1999,123 @@ pub fn AssEntry(
                 div { class: "form-text text-success", "✓" }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod bracket_highlight_tests {
+    use super::*;
+
+    #[test]
+    fn matched_open_paren() {
+        let s = "(+ 1 2)";
+        // cursor on '('
+        assert_eq!(
+            bracket_highlight_at_cursor(s, 0),
+            Some(BracketPairHighlight::Matched { open: 0, close: 6 })
+        );
+        // cursor just after '('
+        assert_eq!(
+            bracket_highlight_at_cursor(s, 1),
+            Some(BracketPairHighlight::Matched { open: 0, close: 6 })
+        );
+        // cursor on ')'
+        assert_eq!(
+            bracket_highlight_at_cursor(s, 6),
+            Some(BracketPairHighlight::Matched { open: 0, close: 6 })
+        );
+    }
+
+    #[test]
+    fn nested_parens_pick_adjacent_pair() {
+        let s = "(outer (inner))";
+        // cursor on inner open — second '('
+        let inner_open = s.find("(inner)").unwrap();
+        let inner_close = inner_open + "(inner".len(); // position of ')' after "inner"
+        assert_eq!(&s[inner_close..inner_close + 1], ")");
+        let cur = s[..inner_open].chars().count();
+        assert_eq!(
+            bracket_highlight_at_cursor(s, cur),
+            Some(BracketPairHighlight::Matched {
+                open: inner_open,
+                close: inner_close
+            })
+        );
+        // cursor on outer close — last ')'
+        let outer_close = s.len() - 1;
+        let cur_outer = s.chars().count() - 1;
+        assert_eq!(
+            bracket_highlight_at_cursor(s, cur_outer),
+            Some(BracketPairHighlight::Matched {
+                open: 0,
+                close: outer_close
+            })
+        );
+    }
+
+    #[test]
+    fn unmatched_open_is_red() {
+        let s = "(+ 1 2";
+        assert_eq!(
+            bracket_highlight_at_cursor(s, 0),
+            Some(BracketPairHighlight::Unmatched { pos: 0 })
+        );
+    }
+
+    #[test]
+    fn unmatched_close_is_red() {
+        let s = "+ 1 2)";
+        let close_pos = s.find(')').unwrap();
+        let cur = s.chars().count() - 1;
+        assert_eq!(
+            bracket_highlight_at_cursor(s, cur),
+            Some(BracketPairHighlight::Unmatched { pos: close_pos })
+        );
+    }
+
+    #[test]
+    fn square_and_curly() {
+        let s = "[team]{m}";
+        assert_eq!(
+            bracket_highlight_at_cursor(s, 0),
+            Some(BracketPairHighlight::Matched { open: 0, close: 5 })
+        );
+        let curly_open = s.find('{').unwrap();
+        let curly_cur = s[..curly_open].chars().count();
+        assert_eq!(
+            bracket_highlight_at_cursor(s, curly_cur),
+            Some(BracketPairHighlight::Matched {
+                open: curly_open,
+                close: s.len() - 1
+            })
+        );
+    }
+
+    #[test]
+    fn no_highlight_away_from_brackets() {
+        let s = "(+ 1 2)";
+        // cursor on '1'
+        let cur = s.find('1').unwrap(); // byte == char for ascii
+        assert_eq!(bracket_highlight_at_cursor(s, cur), None);
+    }
+
+    #[test]
+    fn segments_mark_both_ends() {
+        let s = "(+ 1)";
+        let hl = bracket_highlight_at_cursor(s, 0);
+        let segs = bracket_highlight_segments(s, hl);
+        let joined: String = segs.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(joined, s);
+        let marked: Vec<_> = segs
+            .iter()
+            .filter_map(|(t, c)| c.map(|cls| (t.as_str(), cls)))
+            .collect();
+        assert_eq!(
+            marked,
+            vec![
+                ("(", "ass-entry-bracket-match"),
+                (")", "ass-entry-bracket-match")
+            ]
+        );
     }
 }
