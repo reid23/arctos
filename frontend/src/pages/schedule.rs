@@ -480,13 +480,16 @@ pub(crate) struct DragCreatePayload {
 }
 
 /// Placeholder block shown on the editor timeline while the create card is
-/// open: mirrors the card's field / start-time / length values so the user can
-/// see where the new match will land. Cleared on save or cancel.
+/// open: mirrors the card's field(s) / start-time / length values so the user
+/// can see where the new match will land. Break/join group forms list every
+/// checked field (one placeholder per field). Cleared on save or cancel.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct PendingCreateGhost {
-    field_name: String,
+    field_names: Vec<String>,
     start_local: chrono::NaiveDateTime,
     length_min: i64,
+    /// JOIN groups render as a thin line-like placeholder, not a block.
+    is_join: bool,
 }
 
 /// Payload emitted by the edit-page timeline when a drag-to-move gesture commits.
@@ -1173,7 +1176,7 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                                             div {
                                                 class: "d-flex align-items-center gap-1 ms-1",
                                                 title: "Schedule type new matches start with (click or drag on the schedule to create one)",
-                                                label { class: "small text-muted mb-0", r#for: "defaultMatchTypeSelect", "New match type" }
+                                                label { class: "small text-muted mb-0", r#for: "defaultMatchTypeSelect", "Default new match type" }
                                                 select {
                                                     id: "defaultMatchTypeSelect",
                                                     class: "form-select form-select-sm w-auto",
@@ -1182,6 +1185,9 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                                                     option { value: "STATIC", "Static" }
                                                     option { value: "SAFE", "Safe" }
                                                     option { value: "FAST", "Fast" }
+                                                    option { value: "BREAK", "Break" }
+                                                    option { value: "STATBREAK", "Static Break" }
+                                                    option { value: "JOIN", "Join" }
                                                 }
                                             }
                                             button { class: "btn btn-sm btn-outline-secondary", onclick: move |_| {
@@ -1249,7 +1255,7 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                                                         bulk_selected.set(Vec::new());
                                                     }
                                                 },
-                                                "Bulk length"
+                                                "Bulk change length"
                                             }
                                             div {
                                                 class: "form-check form-switch mb-0 ms-1",
@@ -1756,7 +1762,8 @@ fn CreateMatchModal(
     /// Drag-to-create prefill: chain-position default for dynamic types.
     #[props(default)]
     prefill_prev_match_id: Option<String>,
-    /// Toolbar "New match type" default (STATIC/SAFE/FAST).
+    /// Toolbar "Default new match type" (any schedule type; structural types
+    /// open the card in the corresponding group form).
     #[props(default)]
     default_schedule_type: Option<String>,
     /// Page-level "show times as they happened" toggle (for previous-match lookup).
@@ -1777,7 +1784,12 @@ fn CreateMatchModal(
     });
     let initial_type = default_schedule_type
         .clone()
-        .filter(|t| matches!(t.as_str(), "STATIC" | "SAFE" | "FAST"))
+        .filter(|t| {
+            matches!(
+                t.as_str(),
+                "STATIC" | "SAFE" | "FAST" | "BREAK" | "STATBREAK" | "JOIN"
+            )
+        })
         .unwrap_or_else(|| "STATIC".to_string());
     let schedule_type = use_signal({
         let t = initial_type.clone();
@@ -1818,26 +1830,30 @@ fn CreateMatchModal(
     let mut saving = use_signal(|| false);
 
     // Keep the timeline's pending-create placeholder in sync with the card's
-    // field / start-time / length. Cleared by the page on save/cancel.
+    // field(s) / start-time / length. Group forms (break/join) place one
+    // placeholder on every checked field. Cleared by the page on save/cancel.
     {
         let mut create_ghost = create_ghost;
         use_effect(move || {
             let st = schedule_type();
-            let field_name = if matches!(st.as_str(), "BREAK" | "STATBREAK" | "JOIN") {
-                break_fields().first().cloned().unwrap_or_default()
+            let is_group = matches!(st.as_str(), "BREAK" | "STATBREAK" | "JOIN");
+            let field_names: Vec<String> = if is_group {
+                break_fields()
             } else {
-                field()
+                let f = field();
+                if f.is_empty() { Vec::new() } else { vec![f] }
             };
             let parsed = chrono::NaiveDateTime::parse_from_str(
                 start_time().trim(),
                 "%Y-%m-%dT%H:%M",
             )
             .ok();
-            let next = match (field_name.is_empty(), parsed) {
+            let next = match (field_names.is_empty(), parsed) {
                 (false, Some(start_local)) => Some(PendingCreateGhost {
-                    field_name,
+                    field_names,
                     start_local,
                     length_min: (length() as i64).max(10),
+                    is_join: st == "JOIN",
                 }),
                 _ => None,
             };
@@ -4111,8 +4127,9 @@ fn TimelineEventCard(
     /// Alt-hover dependency highlight class (source / chain / team / ref).
     #[props(default)]
     dep_class: Option<String>,
-    /// Alt-hover: nested outline rings for the hovered source block (one ring
-    /// per dependency edge, colored like its line). Inline `box-shadow: …;`.
+    /// Alt-hover: nested outline rings (one per edge touching this block —
+    /// outgoing for the hovered source, incoming for dependency targets),
+    /// colored like the lines. Inline `box-shadow: …;`.
     #[props(default)]
     dep_shadow: Option<String>,
     /// Pointerdown on the block (id, client_x, client_y) → may start a move drag.
@@ -4533,6 +4550,168 @@ fn ref_token_match_name(token: &str) -> Option<&str> {
         .map(str::trim)
 }
 
+/// Line color for a dependency edge kind
+/// (0 = chain / previous match, 1 = team1 result, 2 = team2 result, _ = ref result).
+fn dep_edge_color(kind: u8) -> &'static str {
+    match kind {
+        0 => "#0d6efd",
+        1 | 2 => "#d63384",
+        _ => "#fd7e14",
+    }
+}
+
+/// Stacked outline rings for a block in the alt-dependency view: one 3px ring
+/// per edge (in order), colored like its line, with 1px translucent-white
+/// separators so adjacent same-color rings stay countable. Returns an inline
+/// `box-shadow: …;` declaration.
+fn dep_ring_shadow(kinds: &[u8]) -> String {
+    let shadows: Vec<String> = kinds
+        .iter()
+        .enumerate()
+        .map(|(i, kind)| {
+            let inner = (i as u32) * 4;
+            format!(
+                "0 0 0 {}px {}, 0 0 0 {}px rgba(255,255,255,0.9)",
+                inner + 3,
+                dep_edge_color(*kind),
+                inner + 4
+            )
+        })
+        .collect();
+    format!("box-shadow: {};", shadows.join(", "))
+}
+
+/// Block geometry in the events-layer coordinate space, as produced by the
+/// overlay layout: `left`/`width` are lane-adjusted percentages of the layer
+/// width; `top`/`height` are in slot units (percent-of-height = slots /
+/// slots_per_day * 100). Both the block styles and the dependency lines are
+/// derived from the same values, so endpoints land exactly on block edges.
+/// (The blocks' cosmetic ±1px horizontal inset cancels out at the midpoint:
+/// (left+1px) + (width−2px)/2 == left + width/2.)
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct DepBlockGeom {
+    /// Lane-adjusted left edge, % of layer width.
+    left: f64,
+    /// Lane-adjusted width, % of layer width.
+    width: f64,
+    /// Top edge in slot units.
+    top_slots: f64,
+    /// Height in slot units.
+    height_slots: f64,
+}
+
+/// Endpoints for the `index`-th of `n_lines` visible dependency lines leaving
+/// the hovered block `from` toward `to`, in events-layer percentages
+/// (x: % of width, y: % of height).
+///
+/// - The line leaves the vertical edge of `from` facing `to` (top edge if the
+///   target's center is above, else bottom edge) and arrives at the opposing
+///   edge of `to`, both at the blocks' horizontal midpoints.
+/// - When several lines leave the hovered block, their origins fan out around
+///   its midpoint in ~0.6%-of-layer steps, clamped so the whole fan stays
+///   within the middle 80% of the block's width. `index`/`n_lines` must count
+///   only *visible* lines, otherwise a lone line gets a spurious offset.
+fn dep_line_endpoints(
+    index: usize,
+    n_lines: usize,
+    from: DepBlockGeom,
+    to: DepBlockGeom,
+    slots_per_day: usize,
+) -> (f64, f64, f64, f64) {
+    let step = if n_lines > 1 {
+        (0.6_f64).min(from.width * 0.8 / (n_lines as f64 - 1.0))
+    } else {
+        0.0
+    };
+    let offset = (index as f64 - (n_lines as f64 - 1.0) / 2.0) * step;
+    let fx = from.left + from.width / 2.0 + offset;
+    let tx = to.left + to.width / 2.0;
+    let slot_pct = |slots: f64| slots / slots_per_day as f64 * 100.0;
+    let fcy = slot_pct(from.top_slots + from.height_slots / 2.0);
+    let tcy = slot_pct(to.top_slots + to.height_slots / 2.0);
+    let (fy, ty) = if tcy < fcy {
+        // Target above: leave from the top edge, arrive at the target's bottom.
+        (
+            slot_pct(from.top_slots),
+            slot_pct(to.top_slots + to.height_slots),
+        )
+    } else {
+        (
+            slot_pct(from.top_slots + from.height_slots),
+            slot_pct(to.top_slots),
+        )
+    };
+    (fx, fy, tx, ty)
+}
+
+#[cfg(test)]
+mod dep_geometry_tests {
+    use super::*;
+
+    const SLOTS: usize = 48; // 24h of 30-min slots
+
+    fn geom(left: f64, width: f64, top_slots: f64, height_slots: f64) -> DepBlockGeom {
+        DepBlockGeom {
+            left,
+            width,
+            top_slots,
+            height_slots,
+        }
+    }
+
+    #[test]
+    fn single_line_starts_at_block_edge_midpoint() {
+        // Hovered block: second of four field columns (25% wide), 10:00–11:00.
+        let from = geom(25.0, 25.0, 20.0, 2.0);
+        // Target above it, first column, 08:00–09:00.
+        let to = geom(0.0, 25.0, 16.0, 2.0);
+        let (fx, fy, tx, ty) = dep_line_endpoints(0, 1, from, to, SLOTS);
+        assert_eq!(fx, 25.0 + 12.5); // exact horizontal midpoint, no fan offset
+        assert_eq!(fy, 20.0 / 48.0 * 100.0); // top edge (target is above)
+        assert_eq!(tx, 12.5);
+        assert_eq!(ty, (16.0 + 2.0) / 48.0 * 100.0); // target bottom edge
+    }
+
+    #[test]
+    fn single_line_respects_lane_inset() {
+        // Hovered block in the right lane of a two-lane column: lane-adjusted
+        // left/width, so the midpoint is the lane's center, not the column's.
+        let from = geom(37.5, 12.5, 20.0, 2.0);
+        let to = geom(0.0, 25.0, 30.0, 2.0);
+        let (fx, fy, _, ty) = dep_line_endpoints(0, 1, from, to, SLOTS);
+        assert_eq!(fx, 37.5 + 6.25);
+        assert_eq!(fy, (20.0 + 2.0) / 48.0 * 100.0); // bottom edge (target below)
+        assert_eq!(ty, 30.0 / 48.0 * 100.0);
+    }
+
+    #[test]
+    fn fan_is_centered_and_stays_inside_block() {
+        let from = geom(0.0, 25.0, 20.0, 2.0);
+        let to = geom(50.0, 25.0, 16.0, 2.0);
+        let n = 3;
+        let xs: Vec<f64> = (0..n)
+            .map(|i| dep_line_endpoints(i, n, from, to, SLOTS).0)
+            .collect();
+        // Centered on the midpoint, symmetric, evenly spaced.
+        assert_eq!(xs[1], 12.5);
+        assert!((xs[1] - xs[0] - (xs[2] - xs[1])).abs() < 1e-9);
+        // Whole fan within the block's width.
+        assert!(xs[0] > 0.0 && xs[2] < 25.0);
+    }
+
+    #[test]
+    fn ring_shadow_one_ring_per_edge_in_order() {
+        let css = dep_ring_shadow(&[0, 1, 3]);
+        assert!(css.starts_with("box-shadow: "));
+        assert_eq!(css.matches("rgba(255,255,255,0.9)").count(), 3);
+        // Ring order (inner→outer) follows edge order; colors match the lines.
+        let chain = css.find("#0d6efd").unwrap();
+        let team = css.find("#d63384").unwrap();
+        let refc = css.find("#fd7e14").unwrap();
+        assert!(chain < team && team < refc);
+    }
+}
+
 #[component]
 fn ScheduleTimeline(
     data: ScheduleSetupResponse,
@@ -4712,14 +4891,33 @@ fn ScheduleTimeline(
                         alt_sig_up.set(false);
                     }
                 }) as Box<dyn FnMut(_)>);
+                // Window blur (e.g. Alt+Tab away): the Alt keyup never arrives, so
+                // reset the whole alt-hover state or the rings/lines stay stuck.
+                let mut alt_sig_blur = alt_down;
+                let mut hovered_blur = hovered_block;
+                let alive_blur = alive.clone();
+                let on_blur = Closure::wrap(Box::new(move |_e: web_sys::FocusEvent| {
+                    if !alive_blur.get() {
+                        return;
+                    }
+                    if *alt_sig_blur.peek() {
+                        alt_sig_blur.set(false);
+                    }
+                    if hovered_blur.peek().is_some() {
+                        hovered_blur.set(None);
+                    }
+                }) as Box<dyn FnMut(_)>);
                 let _ = window.add_event_listener_with_callback(
                     "keydown",
                     on_down.as_ref().unchecked_ref(),
                 );
                 let _ = window
                     .add_event_listener_with_callback("keyup", on_up.as_ref().unchecked_ref());
+                let _ = window
+                    .add_event_listener_with_callback("blur", on_blur.as_ref().unchecked_ref());
                 on_down.forget();
                 on_up.forget();
+                on_blur.forget();
             }
         });
     }
@@ -5476,31 +5674,20 @@ fn ScheduleTimeline(
         }
         map
     };
-    // Nested outline rings on the hovered block: one ring per dependency edge,
-    // colored like its line (3px ring + 1px white separator each), so the
-    // number of dependencies is countable at a glance.
-    let dep_source_shadow: Option<String> = if dep_edges.is_empty() {
-        None
-    } else {
-        let shadows: Vec<String> = dep_edges
-            .iter()
-            .enumerate()
-            .map(|(i, (_, _, kind))| {
-                let color = match kind {
-                    0 => "#0d6efd",
-                    1 | 2 => "#d63384",
-                    _ => "#fd7e14",
-                };
-                let inner = (i as u32) * 4;
-                format!(
-                    "0 0 0 {}px {}, 0 0 0 {}px rgba(255,255,255,0.9)",
-                    inner + 3,
-                    color,
-                    inner + 4
-                )
-            })
-            .collect();
-        Some(format!("box-shadow: {};", shadows.join(", ")))
+    // Nested outline rings, one ring per edge, colored like its line: the
+    // hovered source gets a ring per OUTGOING edge, and every dependency
+    // target gets a ring per INCOMING edge from the hovered match (e.g. a
+    // match used as `A::winner` team and `A::loser` ref shows two rings on A).
+    let dep_shadow_by_id: HashMap<String, String> = {
+        let mut kinds_by_id: HashMap<String, Vec<u8>> = HashMap::new();
+        for (from, to, kind) in &dep_edges {
+            kinds_by_id.entry(from.clone()).or_default().push(*kind);
+            kinds_by_id.entry(to.clone()).or_default().push(*kind);
+        }
+        kinds_by_id
+            .into_iter()
+            .map(|(id, kinds)| (id, dep_ring_shadow(&kinds)))
+            .collect()
     };
 
     // Ghost placement for the in-flight drag:
@@ -6090,43 +6277,46 @@ fn ScheduleTimeline(
                             Some((e.clone(), style))
                         })
                         .collect();
-                    // Dependency lines: only edges whose target is visible in the current day/filter.
-                    // Endpoints in overlay percentages (x: both axes % of the layer box).
-                    // At the hovered block, parallel edges fan out with small lateral
-                    // offsets along its edge instead of stacking on the midpoint.
-                    let n_dep_edges = dep_edges.len();
-                    let dep_lines: Vec<(f64, f64, f64, f64, u8)> = dep_edges
+                    // Dependency lines: only edges whose BOTH endpoints are visible in
+                    // the current day/filter. Filter first, then assign fan offsets by
+                    // the index among visible lines — indexing over all edges gave a
+                    // lone visible line a spurious offset whenever a sibling edge's
+                    // target was hidden (other day / other field filter).
+                    let visible_dep_edges: Vec<(DepBlockGeom, DepBlockGeom, u8)> = dep_edges
                         .iter()
-                        .enumerate()
-                        .filter_map(|(i, (from, to, kind))| {
+                        .filter_map(|(from, to, kind)| {
                             let (fl, fw, ft, fh) = *geom_by_id.get(from)?;
                             let (tl, tw, tt, th) = *geom_by_id.get(to)?;
-                            // ~0.6% of the layer width (a few px) per edge, clamped so
-                            // the fan stays within the hovered block's width.
-                            let step = if n_dep_edges > 1 {
-                                (0.6_f64).min(fw * 0.8 / (n_dep_edges as f64 - 1.0))
-                            } else {
-                                0.0
-                            };
-                            let offset = (i as f64 - (n_dep_edges as f64 - 1.0) / 2.0) * step;
-                            let fx = fl + fw / 2.0 + offset;
-                            let tx = tl + tw / 2.0;
-                            let fcy = (ft + fh / 2.0) / slots_per_day as f64 * 100.0;
-                            let tcy = (tt + th / 2.0) / slots_per_day as f64 * 100.0;
-                            // Connect edge midpoints: top edge of the lower block to the
-                            // bottom edge of the upper block.
-                            let (fy, ty) = if tcy < fcy {
-                                (
-                                    ft / slots_per_day as f64 * 100.0,
-                                    (tt + th) / slots_per_day as f64 * 100.0,
-                                )
-                            } else {
-                                (
-                                    (ft + fh) / slots_per_day as f64 * 100.0,
-                                    tt / slots_per_day as f64 * 100.0,
-                                )
-                            };
-                            Some((fx, fy, tx, ty, *kind))
+                            Some((
+                                DepBlockGeom {
+                                    left: fl,
+                                    width: fw,
+                                    top_slots: ft,
+                                    height_slots: fh,
+                                },
+                                DepBlockGeom {
+                                    left: tl,
+                                    width: tw,
+                                    top_slots: tt,
+                                    height_slots: th,
+                                },
+                                *kind,
+                            ))
+                        })
+                        .collect();
+                    let n_dep_lines = visible_dep_edges.len();
+                    let dep_lines: Vec<(f64, f64, f64, f64, u8)> = visible_dep_edges
+                        .iter()
+                        .enumerate()
+                        .map(|(i, (from_geom, to_geom, kind))| {
+                            let (fx, fy, tx, ty) = dep_line_endpoints(
+                                i,
+                                n_dep_lines,
+                                *from_geom,
+                                *to_geom,
+                                slots_per_day,
+                            );
+                            (fx, fy, tx, ty, *kind)
                         })
                         .collect();
                     let dep_lines_active = !dep_lines.is_empty();
@@ -6153,29 +6343,60 @@ fn ScheduleTimeline(
                             (style, title.clone(), sub.clone(), *blocked, gap_style)
                         },
                     );
-                    // Pending-create placeholder: mirrors the open create card's
-                    // field/start/length so the drag target stays visible.
-                    let pending_block = pending_create.as_ref().and_then(|g| {
-                        if g.start_local.date() != current_visible_date {
-                            return None;
-                        }
-                        let col = field_names.iter().position(|n| n == &g.field_name)?;
-                        let col_w = 100.0 / num_fields as f64;
-                        let left = col as f64 * col_w;
-                        let start_min =
-                            (g.start_local.hour() as i64) * 60 + g.start_local.minute() as i64;
-                        let dur = g.length_min.max(10);
-                        let top_slots = start_min as f64 / SLOT_MINUTES as f64;
-                        let height_slots = dur as f64 / SLOT_MINUTES as f64;
-                        let style = format!(
-                            "left: calc({left}% + 1px); width: calc({col_w}% - 2px); \
-                             top: calc(var(--slot-height) * {top_slots}); \
-                             height: calc(var(--slot-height) * {height_slots});"
-                        );
-                        let title =
-                            format!("{} – {}", fmt_minutes(start_min), fmt_minutes(start_min + dur));
-                        Some((style, title))
-                    });
+                    // Pending-create placeholders: mirror the open create card's
+                    // field(s)/start/length so the drag target stays visible. Group
+                    // forms render one placeholder per checked field; joins render
+                    // as a thin line-like strip.
+                    let pending_blocks: Vec<(String, String, String, bool)> = pending_create
+                        .as_ref()
+                        .map(|g| {
+                            if g.start_local.date() != current_visible_date {
+                                return Vec::new();
+                            }
+                            let start_min = (g.start_local.hour() as i64) * 60
+                                + g.start_local.minute() as i64;
+                            let dur = g.length_min.max(10);
+                            let top_slots = start_min as f64 / SLOT_MINUTES as f64;
+                            let col_w = 100.0 / num_fields as f64;
+                            let (title, sub) = if g.is_join {
+                                (fmt_minutes(start_min), "new join".to_string())
+                            } else {
+                                (
+                                    format!(
+                                        "{} – {}",
+                                        fmt_minutes(start_min),
+                                        fmt_minutes(start_min + dur)
+                                    ),
+                                    "new match".to_string(),
+                                )
+                            };
+                            g.field_names
+                                .iter()
+                                .filter_map(|fname| {
+                                    let col = field_names.iter().position(|n| n == fname)?;
+                                    let left = col as f64 * col_w;
+                                    let height = if g.is_join {
+                                        // Thin strip standing in for the join line.
+                                        "height: 6px; padding: 0;".to_string()
+                                    } else {
+                                        let height_slots = dur as f64 / SLOT_MINUTES as f64;
+                                        format!(
+                                            "height: calc(var(--slot-height) * {height_slots});"
+                                        )
+                                    };
+                                    Some((
+                                        format!(
+                                            "left: calc({left}% + 1px); width: calc({col_w}% - 2px); \
+                                             top: calc(var(--slot-height) * {top_slots}); {height}"
+                                        ),
+                                        title.clone(),
+                                        sub.clone(),
+                                        g.is_join,
+                                    ))
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
                     let base_url = base_url.clone();
                     let tournament_url = tournament_url.clone();
                     rsx! {
@@ -6203,13 +6424,8 @@ fn ScheduleTimeline(
                                         editor: editor,
                                         selected: selected_ids.contains(&ev.id),
                                         dep_class: dep_class_map.get(&ev.id).map(|c| c.to_string()),
-                                        dep_shadow: if dep_class_map.get(&ev.id).copied()
-                                            == Some("schedule-timeline-event--dep-source")
-                                        {
-                                            dep_source_shadow.clone()
-                                        } else {
-                                            None
-                                        },
+                                        // Rings for the hovered source AND every dependency target.
+                                        dep_shadow: dep_shadow_by_id.get(&ev.id).cloned(),
                                         on_move_pointer_down: on_block_drag_start,
                                         on_hover: on_block_hover,
                                         result_pick_active: result_pick_active,
@@ -6217,12 +6433,16 @@ fn ScheduleTimeline(
                                     }
                                 }
                             }
-                            if let Some((pending_style, pending_title)) = pending_block {
+                            for (pi, (pending_style, pending_title, pending_sub, pending_thin)) in pending_blocks.into_iter().enumerate() {
                                 div {
+                                    key: "pending-{pi}",
                                     class: "schedule-drag-ghost schedule-drag-ghost--pending",
                                     style: "{pending_style}",
-                                    div { class: "schedule-drag-ghost-title", "{pending_title}" }
-                                    div { class: "schedule-drag-ghost-sub", "new match" }
+                                    // Join strips are too thin for inner labels.
+                                    if !pending_thin {
+                                        div { class: "schedule-drag-ghost-title", "{pending_title}" }
+                                        div { class: "schedule-drag-ghost-sub", "{pending_sub}" }
+                                    }
                                 }
                             }
                             if let Some((ghost_style, ghost_title, ghost_sub, ghost_blocked, gap_style)) = ghost_block {

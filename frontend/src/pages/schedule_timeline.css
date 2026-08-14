@@ -1053,30 +1053,25 @@
     box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.25);
 }
 
-/* Alt-hover dependency view: source + per-edge-kind target highlights.
-   The source block's rings come from an inline box-shadow stack (one ring per
-   dependency edge, colored like its line); this class only lifts it. */
+/* Alt-hover dependency view. Both the hovered source and every dependency
+   target get their outline rings from an inline box-shadow stack (one ring per
+   edge, colored like its line); these classes only lift the blocks and tint
+   targets by their primary (first) incoming edge kind. */
 .schedule-timeline-event--dep-source {
     z-index: 20 !important;
 }
 
 .schedule-timeline-event--dep-chain {
-    outline: 2px solid #0d6efd;
-    outline-offset: -1px;
     background-color: rgba(13, 110, 253, 0.12) !important;
     z-index: 19 !important;
 }
 
 .schedule-timeline-event--dep-team {
-    outline: 2px solid #d63384;
-    outline-offset: -1px;
     background-color: rgba(214, 51, 132, 0.12) !important;
     z-index: 19 !important;
 }
 
 .schedule-timeline-event--dep-ref {
-    outline: 2px solid #fd7e14;
-    outline-offset: -1px;
     background-color: rgba(253, 126, 20, 0.12) !important;
     z-index: 19 !important;
 }
