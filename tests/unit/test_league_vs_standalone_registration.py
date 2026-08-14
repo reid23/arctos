@@ -305,7 +305,7 @@ def test_schedule_import_registered_teams_league_and_standalone(app, test_db):
         db.session.commit()
 
         for t in (sa, lg):
-            tags_out, matches_out, warnings, auto_tag_names = ScheduleImportExportService._rewrite_unknown_team_refs(
+            tags_out, matches_out, _, warnings, auto_tag_names = ScheduleImportExportService._rewrite_unknown_team_refs(
                 t,
                 tags_data=[{"name": "T", "team": f"ok-{t.url}"}],
                 matches_data=[

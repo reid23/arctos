@@ -21,6 +21,8 @@ def parse_toml_schedule(content: str) -> Result[dict[str, Any], ArctosError]:
     * ``event`` (str, optional, deprecated) — tournament URL slug. Accepted
       for backward compatibility with older exports; the importing route
       determines the target tournament.
+    * ``variables`` (array of tables, optional) — tournament script
+      variables (``name`` + ``expression``).
     * ``tags`` (array of tables, optional).
     * ``fields`` (array of tables, optional).
     * ``matches`` (array of tables, optional).
@@ -30,9 +32,10 @@ def parse_toml_schedule(content: str) -> Result[dict[str, Any], ArctosError]:
 
     Returns:
         :class:`~app.error_values.Ok` wrapping a dict with keys
-        ``"event"`` (str or ``None``), ``"tags"``, ``"fields"``,
-        ``"matches"``; or :class:`~app.error_values.Err` wrapping a
-        :class:`~app.exceptions.ValidationError` on parse / structure error.
+        ``"event"`` (str or ``None``), ``"variables"``, ``"tags"``,
+        ``"fields"``, ``"matches"``; or :class:`~app.error_values.Err`
+        wrapping a :class:`~app.exceptions.ValidationError` on parse /
+        structure error.
     """
     try:
         data = tomli.loads(content)
@@ -47,6 +50,11 @@ def parse_toml_schedule(content: str) -> Result[dict[str, Any], ArctosError]:
     event = data.get("event")
     if not isinstance(event, str) or not event:
         event = None
+
+    # Extract script variables (optional, defaults to empty list)
+    variables = data.get("variables", [])
+    if not isinstance(variables, list):
+        return Err(ValidationError("'variables' must be an array of tables"))
 
     # Extract tags (optional, defaults to empty list)
     tags = data.get("tags", [])
@@ -66,6 +74,7 @@ def parse_toml_schedule(content: str) -> Result[dict[str, Any], ArctosError]:
     return Ok(
         {
             "event": event,
+            "variables": variables,
             "tags": tags,
             "fields": fields,
             "matches": matches,
@@ -78,6 +87,7 @@ def write_toml_schedule(
     fields: list[dict[str, Any]],
     matches: list[dict[str, Any]],
     *,
+    variables: list[dict[str, Any]] | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> str:
     """Serialise a tournament schedule to a TOML string.
@@ -89,9 +99,12 @@ def write_toml_schedule(
 
     Args:
         tags: List of tag dicts with ``id``, ``name``, and optional
-            ``team`` (team ID).
+            ``team`` (team ID) and ``expression`` (ASS expression).
         fields: List of field dicts with ``id``, ``name``, and ``camera``.
         matches: List of match attribute dicts.
+        variables: Optional list of script-variable dicts with ``name`` and
+            ``expression``. Written before the tags section (tag / match
+            expressions may reference variables) and omitted when empty.
         metadata: Optional key-value pairs written as TOML comments at the
             top (e.g. ``{"export_date": "2024-06-01", "version": "1"}``)
 
@@ -107,6 +120,17 @@ def write_toml_schedule(
             lines.append(f"# {key}: {value}")
         lines.append("")
 
+    # Script variables (before tags: tag expressions may reference them)
+    if variables:
+        lines.append("# Script variables")
+        for variable in variables:
+            lines.append("[[variables]]")
+            if "name" in variable and variable["name"]:
+                lines.append(f'name = "{_escape_toml_string(variable["name"])}"')
+            if "expression" in variable and variable["expression"]:
+                lines.append(f'expression = "{_escape_toml_string(variable["expression"])}"')
+            lines.append("")
+
     # Tags
     if tags:
         lines.append("# Tags")
@@ -118,6 +142,8 @@ def write_toml_schedule(
                 lines.append(f'name = "{_escape_toml_string(tag["name"])}"')
             if "team" in tag and tag["team"]:
                 lines.append(f'team = "{_escape_toml_string(tag["team"])}"')
+            if "expression" in tag and tag["expression"]:
+                lines.append(f'expression = "{_escape_toml_string(tag["expression"])}"')
             lines.append("")
 
     # Fields
