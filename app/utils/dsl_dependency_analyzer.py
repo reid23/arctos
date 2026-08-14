@@ -20,17 +20,35 @@ class MatchDependencyAnalyzer:
     """
 
     # Functions that require match completion (direct dependencies)
-    # Note: points-won and points-lost take TEAM as first arg, MATCH as optional second arg
-    DIRECT_DEPENDENCY_FUNCTIONS = {"winner", "loser", "points-won", "points-lost"}
+    # Note: points-won and points-lost take TEAM as first arg, MATCH or MATCHLIST as optional second arg
+    # wins/losses take optional MATCHLIST as second arg; won? takes MATCH as second arg
+    DIRECT_DEPENDENCY_FUNCTIONS = {
+        "winner",
+        "loser",
+        "points-won",
+        "points-lost",
+        "wins",
+        "losses",
+        "won?",
+    }
 
     # Functions where match is the first argument
     DIRECT_DEPENDENCY_FUNCTIONS_MATCH_FIRST = {"winner", "loser"}
 
-    # Functions where match is the second argument (first is TEAM)
-    DIRECT_DEPENDENCY_FUNCTIONS_MATCH_SECOND = {"points-won", "points-lost"}
+    # Functions where match (or a list of matches) is the second argument (first is TEAM)
+    DIRECT_DEPENDENCY_FUNCTIONS_MATCH_SECOND = {
+        "points-won",
+        "points-lost",
+        "wins",
+        "losses",
+        "won?",
+    }
 
     # Functions that require match status (is-skipped: need status to be known)
     SKIP_CONDITION_DEPENDENCY_FUNCTIONS = {"is-skipped"}
+
+    # Special forms whose children must still be walked for nested deps
+    SPECIAL_FORMS = {"if", "lambda", "quote", "let", "cond"}
 
     def __init__(self, event: str):
         """
@@ -164,18 +182,24 @@ class MatchDependencyAnalyzer:
                     match_name = self._extract_match_name(arg)
                     if match_name:
                         dependencies["direct"].add(match_name)
-                    # Also recursively visit to find nested dependencies
+                    # Collect any nested match atoms too
+                    match_atoms = set()
+                    self._find_all_match_atoms(arg, match_atoms)
+                    dependencies["direct"] |= match_atoms
                     self._visit(arg, dependencies, visited_matches)
             elif function_name in self.DIRECT_DEPENDENCY_FUNCTIONS_MATCH_SECOND:
-                # points-won, points-lost: TEAM is first arg, MATCH is optional second arg
+                # TEAM first; optional second arg is MATCH or MATCHLIST (list of matches)
                 if len(tree.children) > 2:
-                    arg = tree.children[2]  # Second argument is the match (if present)
+                    arg = tree.children[2]
                     match_name = self._extract_match_name(arg)
                     if match_name:
                         dependencies["direct"].add(match_name)
-                    # Also recursively visit to find nested dependencies
+                    # Also pull every {Match} inside e.g. (list {m1} {m2})
+                    match_atoms = set()
+                    self._find_all_match_atoms(arg, match_atoms)
+                    dependencies["direct"] |= match_atoms
                     self._visit(arg, dependencies, visited_matches)
-                # Also visit first argument (TEAM) to find match references in team literals like [Match1::winner]
+                # Visit first argument (TEAM) for [Match1::winner] style refs
                 if tree.children[1:]:
                     self._visit(tree.children[1], dependencies, visited_matches)
 
@@ -190,7 +214,7 @@ class MatchDependencyAnalyzer:
                 self._visit(arg, dependencies, visited_matches)
                 dependencies["skip_condition"] -= dependencies["direct"]
 
-        # Recursively visit all children
+        # Recursively visit all children (covers let/cond/list/filter/sort-by bodies, etc.)
         for child in tree.children:
             self._visit(child, dependencies, visited_matches)
 
