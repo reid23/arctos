@@ -99,6 +99,15 @@ there are two subclasses of Dependency:
 
 ## Live PROCEDURE (writes `nominal_start_time` + status)
 
+Solver-earned statuses (`TIME_FINALIZED`, `READY_TO_START`, and BREAK/JOIN
+`COMPLETED`) are **re-earned on every solve**: a downgrade pass at the top of
+the procedure resets them to the type's floor (`NOT_STARTED`, or
+`TIME_FINALIZED` for STATIC) when their justification no longer holds — e.g.
+a reorder put an unfinished match in front, or a tag was unassigned. Only
+real-world facts (`IN_PROGRESS`, `COMPLETED` with a recorded result,
+`SKIPPED`) are never recomputed. Because nodes are processed in topological
+order, downgrades cascade down dependency chains in a single pass.
+
 Used by `run_scheduling(..., scheduled_pass=False)`.
 **Never writes `scheduled_start_time`.**
 
