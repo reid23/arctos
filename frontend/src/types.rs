@@ -1586,7 +1586,6 @@ pub struct CreateTagResponse {
     pub id: u32,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PushBackRequest {
     pub minutes: i32,

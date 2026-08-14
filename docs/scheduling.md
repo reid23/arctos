@@ -39,7 +39,7 @@ mode has an option to display times exactly as they happened.
 |-------|------|
 | Match start / end / finalize | Live only → `recompute_all_match_times` (= `run_scheduling(scheduled_pass=False)`) |
 | Match create / edit / delete | Both → `recompute_scheduled_and_nominal_times` |
-| TO “Recompute times” / TOML import (API) / app boot | Both |
+| Push-back / TOML import / app boot | Both |
 | Force-start convert to STATIC | Both (after writing the new STATIC anchor into **both** start fields) |
 
 `recompute_scheduled_and_nominal_times` always runs **planned first, then live**,
