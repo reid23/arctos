@@ -910,6 +910,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                         let id_for_stones = id.clone();
                         let u_for_stones = u.clone();
                         spawn(async move {
+                            // Native (test) builds skip the wasm-only tick deferral.
                             #[cfg(target_arch = "wasm32")]
                             gloo_timers::future::TimeoutFuture::new(0).await;
                             let mut final_stones_for_api: Option<u32> = None;
@@ -1071,6 +1072,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                         let id_for_stones = id.clone();
                         let u_for_stones = u.clone();
                         spawn(async move {
+                            // Native (test) builds skip the wasm-only tick deferral.
                             #[cfg(target_arch = "wasm32")]
                             gloo_timers::future::TimeoutFuture::new(0).await;
                             let mut final_stones_for_api: Option<u32> = None;
