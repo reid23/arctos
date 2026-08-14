@@ -3418,8 +3418,8 @@ pub async fn create_match(
     response_json(r).await
 }
 
-/// Create a break group: one BREAK/STATBREAK row per selected field, sharing
-/// name / length / team requirements (and start time for STATBREAK).
+/// Create a break group: one BREAK/STATBREAK/JOIN row per selected field,
+/// sharing name / length (and start time for STATBREAK).
 pub async fn create_break_group(
     tournament_url: &str,
     req: &CreateBreakGroupRequest,
@@ -3439,7 +3439,7 @@ pub async fn create_break_group(
     response_json(r).await
 }
 
-/// Edit every same-name break row at once (length / teams / start_time / fields).
+/// Edit every same-name break row at once (length / start_time / fields).
 pub async fn update_break_group(
     tournament_url: &str,
     name: &str,

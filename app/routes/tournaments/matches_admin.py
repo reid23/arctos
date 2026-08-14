@@ -22,8 +22,6 @@ from app.domain.enums import (
 from app.services.dual_write import (
     clear_match_referees,
     get_match_ref_initials,
-    get_match_refs_csv,
-    get_match_refs_initial_csv,
     set_match_referees_from_csv,
 )
 from app.services.permission_service import PermissionService
@@ -131,8 +129,9 @@ def update_match_api(tournament_url, match_id):
         return jsonify({"error": "Forbidden"}), 403
 
     match = Match.query.filter_by(uuid=match_id, event=tournament_url).first_or_404()
-    # STATBREAKs auto-complete on a timer (nobody "starts" them), so they stay
-    # editable even in COMPLETED state.
+    # STATBREAK status is time-derived at read time (nobody "starts" them) and
+    # the stored status stays NOT_STARTED, but keep the exemption so legacy rows
+    # with a stored COMPLETED remain editable too.
     if match.status in _LOCKED_STATUSES and match.schedule_type != ScheduleType.STATBREAK:
         return (
             jsonify({"error": (f"Match cannot be edited once it has started (current status: {match.status.value}).")}),
@@ -222,23 +221,14 @@ def update_match_api(tournament_url, match_id):
                     400,
                 )
 
-    # Structural matches never have playing teams. JOINs also have no refs;
-    # BREAK/STATBREAK accept refs as team requirements ("these teams must
-    # attend the break").
+    # Structural matches (BREAK/STATBREAK/JOIN) never have playing teams or
+    # refs — they only occupy fields.
     if match.schedule_type in STRUCTURAL_SCHEDULE_TYPES:
         match.team1 = None
         match.team1_initial = None
         match.team2 = None
         match.team2_initial = None
-        if match.schedule_type == ScheduleType.JOIN:
-            clear_match_referees(match)
-        elif refs is not None:
-            if isinstance(refs, list):
-                r_csv, i_csv = resolve_refs_slots(refs, tournament_url)
-            else:
-                toks = refs_string_to_tokens(refs)
-                r_csv, i_csv = resolve_refs_slots(toks, tournament_url)
-            set_match_referees_from_csv(match, r_csv, i_csv)
+        clear_match_referees(match)
     else:
         # When _initial fields change, write through to the resolved team cache
         # (team1 / team2). _resolve_initial_to_cached_team returns None for
@@ -641,11 +631,10 @@ def create_match_api(tournament_url):
 
     # Refs: parallel refs / refs_initial (same slot count). Resolved here but
     # written below after the flush so the match has a uuid the join-table
-    # rows can reference. Allowed on BREAK/STATBREAK (team requirements for
-    # attending the break) but never on JOIN.
+    # rows can reference. Never allowed on structural types (BREAK/STATBREAK/JOIN).
     refs = data.get("refs")
     refs_csv_pair: tuple[str, str] | None = None
-    if refs and isinstance(refs, list) and match.schedule_type != ScheduleType.JOIN:
+    if refs and isinstance(refs, list) and match.schedule_type not in STRUCTURAL_SCHEDULE_TYPES:
         refs_csv_pair = resolve_refs_slots(refs, tournament_url)
 
     # Format
@@ -734,8 +723,8 @@ def delete_match_api(tournament_url, match_id):
 # ---------------------------------------------------------------------------
 # Structural groups ("break-groups" API): same-name BREAK/STATBREAK/JOIN rows
 # across multiple fields, created and edited as one unit (shared name / length /
-# team requirements / start time; JOINs carry only a name — length is always 0
-# and they never have team requirements).
+# start time; JOINs carry only a name — length is always 0). Structural rows
+# only occupy fields; they never have teams or refs.
 # ---------------------------------------------------------------------------
 
 
@@ -796,9 +785,10 @@ def _structural_name_collision(tournament_url: str, name: str, field_name: str) 
 @bp.route("/tournaments/<tournament_url>/break-groups", methods=["POST"])
 @login_required
 def create_break_group_api(tournament_url):
-    """Create one BREAK/STATBREAK/JOIN row per field, sharing name/length/teams.
+    """Create one BREAK/STATBREAK/JOIN row per field, sharing name/length.
 
-    JOIN rows always have ``nominal_length`` 0 and never carry team requirements.
+    JOIN rows always have ``nominal_length`` 0. Structural rows never carry
+    teams — they only occupy fields.
     """
     if not _check_to(tournament_url):
         return jsonify({"error": "Forbidden"}), 403
@@ -848,12 +838,8 @@ def create_break_group_api(tournament_url):
     if unknown:
         return jsonify({"error": f"Unknown field(s): {', '.join(unknown)}"}), 400
 
-    teams = data.get("teams") or []
-    if not isinstance(teams, list):
-        return jsonify({"error": "teams must be a list of team tokens."}), 400
-    if is_join and teams:
-        return jsonify({"error": "Joins cannot have team requirements."}), 400
-    refs_csv_pair = resolve_refs_slots(teams, tournament_url) if teams else None
+    if data.get("teams"):
+        return jsonify({"error": "Breaks and joins cannot have team requirements; they only occupy fields."}), 400
 
     start_dt = None
     if schedule_type == ScheduleType.STATBREAK:
@@ -884,8 +870,6 @@ def create_break_group_api(tournament_url):
             match.scheduled_start_time = start_dt
         db.session.add(match)
         db.session.flush()
-        if refs_csv_pair is not None:
-            set_match_referees_from_csv(match, refs_csv_pair[0], refs_csv_pair[1])
         if schedule_type in (ScheduleType.BREAK, ScheduleType.JOIN):
             prev_id = str(previous_map.get(f) or "").strip()
             if prev_id:
@@ -917,10 +901,10 @@ def create_break_group_api(tournament_url):
 @bp.route("/tournaments/<tournament_url>/break-groups/<name>", methods=["PUT"])
 @login_required
 def update_break_group_api(tournament_url, name):
-    """Edit every same-name structural row at once (length/teams/start_time/fields).
+    """Edit every same-name structural row at once (length/start_time/fields).
 
-    JOIN groups only support field membership changes; length stays 0 and team
-    requirements are rejected.
+    JOIN groups only support field membership changes; length stays 0. Team
+    requirements are rejected for every structural type.
     """
     if not _check_to(tournament_url):
         return jsonify({"error": "Forbidden"}), 403
@@ -935,9 +919,9 @@ def update_break_group_api(tournament_url, name):
 
     group_type = rows[0].schedule_type
     is_join = group_type == ScheduleType.JOIN
-    # No started-lock here: structural statuses are solver-derived (BREAK/JOIN
-    # complete when their dependencies complete, STATBREAK when its window
-    # elapses), not user-started, and the recompute below re-derives them.
+    # No started-lock here: structural statuses are never user-started (BREAK/JOIN
+    # complete when their dependencies complete; STATBREAK status is derived from
+    # the current time when read), and the recompute below re-derives them.
 
     # The group PUT never changes the group's type. BREAK↔STATBREAK conversion
     # goes through the single-match PUT; JOIN converts to/from nothing.
@@ -962,11 +946,8 @@ def update_break_group_api(tournament_url, name):
         if length < 0:
             return jsonify({"error": "Length cannot be negative."}), 400
 
-    teams = data.get("teams")
-    if teams is not None and not isinstance(teams, list):
-        return jsonify({"error": "teams must be a list of team tokens."}), 400
-    if is_join and teams:
-        return jsonify({"error": "Joins cannot have team requirements."}), 400
+    if data.get("teams"):
+        return jsonify({"error": "Breaks and joins cannot have team requirements; they only occupy fields."}), 400
 
     start_dt = None
     if data.get("start_time") is not None:
@@ -998,19 +979,10 @@ def update_break_group_api(tournament_url, name):
         if unknown:
             return jsonify({"error": f"Unknown field(s): {', '.join(unknown)}"}), 400
 
-    refs_csv_pair = None
-    if teams is not None and teams:
-        refs_csv_pair = resolve_refs_slots(teams, tournament_url)
-
     # Shared edits on existing rows.
     for m in rows:
         if length is not None:
             m.nominal_length = length
-        if teams is not None:
-            if refs_csv_pair is not None:
-                set_match_referees_from_csv(m, refs_csv_pair[0], refs_csv_pair[1])
-            else:
-                clear_match_referees(m)
         if start_dt is not None:
             m.nominal_start_time = start_dt
             m.scheduled_start_time = start_dt
@@ -1039,15 +1011,6 @@ def update_break_group_api(tournament_url, name):
                 match.scheduled_start_time = template.scheduled_start_time
             db.session.add(match)
             db.session.flush()
-            if refs_csv_pair is not None:
-                set_match_referees_from_csv(match, refs_csv_pair[0], refs_csv_pair[1])
-            elif teams is None and not is_join:
-                # Copy the group's existing team requirements onto the new row.
-                set_match_referees_from_csv(
-                    match,
-                    get_match_refs_csv(template),
-                    get_match_refs_initial_csv(template),
-                )
             if group_type in (ScheduleType.BREAK, ScheduleType.JOIN):
                 tail = _field_chain_tail(tournament_url, f, exclude_uuids={match.uuid})
                 if tail is not None:

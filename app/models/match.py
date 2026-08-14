@@ -222,6 +222,22 @@ class Match(db.Model):
                 return None
 
     @property
+    def effective_status(self) -> MatchStatus:
+        """Lifecycle status as clients should see it.
+
+        For ``STATBREAK`` the status is a pure function of the current time —
+        ``COMPLETED`` once the scheduled start has passed, ``NOT_STARTED``
+        before that — and the stored :attr:`status` is ignored (the solver
+        never writes it). All other schedule types return the stored status.
+        """
+        if self.schedule_type == ScheduleType.STATBREAK:
+            start = self.nominal_start_time or self.scheduled_start_time
+            if start is not None and now_utc_naive() >= start:
+                return MatchStatus.COMPLETED
+            return MatchStatus.NOT_STARTED
+        return self.status
+
+    @property
     def is_time_finalized(self) -> bool:
         """True when start time is locked: status is TIME_FINALIZED or any later state (READY_TO_START, IN_PROGRESS, COMPLETED, SKIPPED)."""
         if self.status is None:

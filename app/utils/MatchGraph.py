@@ -509,7 +509,7 @@ def build_match_graph(
             confirmed_end_time=representative.finalized_at,
             schedule_type=representative.schedule_type,
             skip_condition=representative.skip_condition,
-            status=representative.status,
+            status=representative.effective_status,
             component_uuids=component_uuids,
             field="",
         )
@@ -527,9 +527,13 @@ def build_match_graph(
             nominal_length=match.nominal_length,
             confirmed_start_time=match.confirmed_start_time,
             confirmed_end_time=match.finalized_at,
+            # Effective status: for STATBREAK the lifecycle status is derived
+            # from the current time (COMPLETED once its start has passed), so
+            # solver-internal status checks see the derived value. The write-back
+            # step never persists STATBREAK status.
             schedule_type=match.schedule_type,
             skip_condition=match.skip_condition,
-            status=match.status,
+            status=match.effective_status,
             field=match.field or "",
         )
         graph.add_node(node)
@@ -617,13 +621,10 @@ def build_match_graph(
         if include_resource_conflict_edges and match.schedule_type in (ScheduleType.SAFE, ScheduleType.FAST):
             # Cross-field same-team serialization: a SAFE/FAST match depends on the
             # latest match on *another* field that shares a team and is scheduled
-            # before it, so the two don't run simultaneously. Candidates include
-            # BREAK/STATBREAK rows with team requirements (refs), so a SAFE/FAST
-            # match whose team must attend a break elsewhere waits for that break.
-            # Same-field ordering is already handled by the previous_match chain, so
-            # we skip the match's own field. The anchor is scheduled_start_time
-            # (computed in the planned pass without these edges), which is stable —
-            # so this ordering doesn't flip-flop.
+            # before it, so the two don't run simultaneously. Same-field ordering is
+            # already handled by the previous_match chain, so we skip the match's own
+            # field. The anchor is scheduled_start_time (computed in the planned pass
+            # without these edges), which is stable — so this ordering doesn't flip-flop.
             match_start = _scheduled_anchor(match)
             participants = _match_participant_team_ids(match, ref_ids_by_uuid)
             latest_shared_matches_by_field: Dict[str, Match] = {}

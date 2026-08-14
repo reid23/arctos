@@ -211,15 +211,10 @@ fn is_structural_type(schedule_type: Option<&str>) -> bool {
     )
 }
 
-/// True for BREAK / STATBREAK — break-like blocks that may carry team
-/// requirements (refs = "these teams must attend") and are edited as a
+/// True for BREAK / STATBREAK — break-like blocks that are edited as a
 /// same-name group across fields.
 fn is_break_like_type(schedule_type: Option<&str>) -> bool {
     matches!(schedule_type, Some("BREAK") | Some("STATBREAK"))
-}
-
-fn is_break_like_match(m: &MatchSetupData) -> bool {
-    is_break_like_type(m.schedule_type.as_deref())
 }
 
 /// True if a ref/team token refers to the given focus team id.
@@ -1526,21 +1521,11 @@ fn CreateMatchModal(
             error.set(None);
             if matches!(schedule_type().as_str(), "BREAK" | "STATBREAK" | "JOIN") {
                 let is_join = schedule_type() == "JOIN";
-                let teams_vec: Vec<String> = if is_join {
-                    Vec::new() // Joins never carry team requirements.
-                } else {
-                    refs()
-                        .split(',')
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty())
-                        .collect()
-                };
                 let req = CreateBreakGroupRequest {
                     name: name(),
                     schedule_type: schedule_type(),
                     length: if is_join { 0 } else { length() },
                     fields: break_fields(),
-                    teams: teams_vec,
                     start_time: if schedule_type() == "STATBREAK" {
                         local_datetime_to_utc_iso(&start_time()).or_else(|| Some(start_time()))
                     } else {
@@ -1668,21 +1653,11 @@ fn CreateMatchModal(
                 error.set(None);
                 if matches!(schedule_type().as_str(), "BREAK" | "STATBREAK" | "JOIN") {
                     let is_join = schedule_type() == "JOIN";
-                    let teams_vec: Vec<String> = if is_join {
-                        Vec::new() // Joins never carry team requirements.
-                    } else {
-                        refs()
-                            .split(',')
-                            .map(|s| s.trim().to_string())
-                            .filter(|s| !s.is_empty())
-                            .collect()
-                    };
                     let req = CreateBreakGroupRequest {
                         name: name(),
                         schedule_type: schedule_type(),
                         length: if is_join { 0 } else { length() },
                         fields: break_fields(),
-                        teams: teams_vec,
                         start_time: if schedule_type() == "STATBREAK" {
                             local_datetime_to_utc_iso(&start_time()).or_else(|| Some(start_time()))
                         } else {
@@ -1966,16 +1941,6 @@ fn CreateMatchModal(
                                         }
                                     }
                                 }
-                                if schedule_type() != "JOIN" {
-                                    TeamChecklistField {
-                                        label: "Teams required to attend".to_string(),
-                                        id_prefix: "create-break".to_string(),
-                                        team_options: data.team_options.clone(),
-                                        value: refs(),
-                                        on_change: move |s| refs.set(s),
-                                        help_text: Some("These teams' matches on other fields will wait for the break.".to_string()),
-                                    }
-                                }
                             }
 
                             if schedule_type() == "STATIC" || schedule_type() == "SAFE" || schedule_type() == "FAST" {
@@ -2113,91 +2078,11 @@ fn SelectAllToggle(all_selected: bool, on_toggle: EventHandler<bool>) -> Element
     }
 }
 
-/// Checkbox list over the tournament's team options with a select-all toggle.
-/// The selection is stored as comma-separated ref tokens (team ids), exactly
-/// like the token input it replaces; non-team tokens already present in the
-/// value (tags, match refs) are preserved untouched.
-#[component]
-fn TeamChecklistField(
-    label: String,
-    id_prefix: String,
-    team_options: Vec<TeamOption>,
-    value: String,
-    on_change: EventHandler<String>,
-    #[props(optional)] help_text: Option<String>,
-) -> Element {
-    let tokens: Vec<String> = value
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-    let all_ids: Vec<String> = team_options.iter().map(|o| o.id.clone()).collect();
-    let all_selected = !all_ids.is_empty() && all_ids.iter().all(|id| tokens.contains(id));
-    let toggle_tokens = tokens.clone();
-    let toggle_ids = all_ids.clone();
-
-    rsx! {
-        div { class: "mb-3",
-            label { class: "form-label", "{label}" }
-            SelectAllToggle {
-                all_selected: all_selected,
-                on_toggle: move |select: bool| {
-                    // Keep non-team tokens; replace the team-id part wholesale.
-                    let mut v: Vec<String> = toggle_tokens
-                        .iter()
-                        .filter(|t| !toggle_ids.contains(t))
-                        .cloned()
-                        .collect();
-                    if select {
-                        v.extend(toggle_ids.iter().cloned());
-                    }
-                    on_change.call(v.join(", "));
-                },
-            }
-            div { class: "d-flex flex-wrap gap-3",
-                for opt in &team_options {
-                    {
-                        let id = opt.id.clone();
-                        let display = opt.pseudonym.clone().unwrap_or_else(|| opt.id.clone());
-                        let checked = tokens.contains(&id);
-                        let toks = tokens.clone();
-                        rsx! {
-                            div { class: "form-check form-check-inline", key: "{opt.id}",
-                                input {
-                                    class: "form-check-input",
-                                    "type": "checkbox",
-                                    id: "{id_prefix}-team-{opt.id}",
-                                    checked: checked,
-                                    onchange: move |e| {
-                                        let mut v = toks.clone();
-                                        if e.value() == "true" {
-                                            if !v.contains(&id) {
-                                                v.push(id.clone());
-                                            }
-                                        } else {
-                                            v.retain(|x| x != &id);
-                                        }
-                                        on_change.call(v.join(", "));
-                                    }
-                                }
-                                label { class: "form-check-label", "for": "{id_prefix}-team-{opt.id}", "{display}" }
-                            }
-                        }
-                    }
-                }
-            }
-            if let Some(help) = &help_text {
-                div { class: "form-text", "{help}" }
-            }
-        }
-    }
-}
-
 /// Edit a structural group: every same-name BREAK/STATBREAK/JOIN row across
 /// fields at once. Members are derived from the already-loaded schedule data;
-/// edits go through the break-group endpoints (shared length / teams / start
-/// time, field add/remove, whole-group delete). JOIN groups expose only field
-/// membership: no length, teams, or start time.
+/// edits go through the break-group endpoints (shared length / start time,
+/// field add/remove, whole-group delete). JOIN groups expose only field
+/// membership: no length or start time.
 #[component]
 fn BreakGroupModal(
     tournament_url: String,
@@ -2233,13 +2118,6 @@ fn BreakGroupModal(
     let type_noun = if is_join { "join" } else { "break" };
 
     let mut length = use_signal(|| first.nominal_length.unwrap_or(30));
-    let mut teams = use_signal(|| {
-        first
-            .refs_initial
-            .clone()
-            .or(first.refs.clone())
-            .unwrap_or_default()
-    });
     let mut start_time = use_signal(|| {
         first
             .nominal_start_time
@@ -2276,15 +2154,9 @@ fn BreakGroupModal(
         spawn(async move {
             saving.set(true);
             error.set(None);
-            let teams_vec: Vec<String> = teams()
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
-            // JOIN groups only edit field membership: no length/teams/start.
+            // JOIN groups only edit field membership: no length/start.
             let req = UpdateBreakGroupRequest {
                 length: if is_join { None } else { Some(length()) },
-                teams: if is_join { None } else { Some(teams_vec) },
                 start_time: if is_statbreak {
                     local_datetime_to_utc_iso(&start_time()).or_else(|| Some(start_time()))
                 } else {
@@ -2436,16 +2308,6 @@ fn BreakGroupModal(
                             }
                             div { class: "form-text",
                                 "Checking a new field adds this {type_noun} there; unchecking removes that field's copy."
-                            }
-                        }
-                        if !is_join {
-                            TeamChecklistField {
-                                label: "Teams required to attend".to_string(),
-                                id_prefix: "break-group".to_string(),
-                                team_options: data.team_options.clone(),
-                                value: teams(),
-                                on_change: move |s| teams.set(s),
-                                help_text: Some("These teams' matches on other fields will wait for the break.".to_string()),
                             }
                         }
                         div { class: "modal-footer",
@@ -3937,14 +3799,6 @@ fn TimelineEventCard(
             } else {
                 div { class: "schedule-timeline-event-header d-flex align-items-center flex-wrap gap-1",
                     div { class: "schedule-timeline-event-name", "{event.name}" }
-                    if team_view {
-                        span { class: "schedule-role-badge schedule-role-badge--reffing", "Break" }
-                    }
-                }
-                if team_view {
-                    div { class: "schedule-timeline-event-teams text-muted small",
-                        "{field_label} · {start_time_label}"
-                    }
                 }
             }
             if event.ribbon {
@@ -4188,20 +4042,13 @@ fn ScheduleTimeline(
         .filter(|m| m.status != "SKIPPED")
         .filter(|m| m.schedule_type.as_deref() != Some("JOIN"))
         .filter({
-            // Team view: play/ref matches for the focus team, plus breaks that
-            // require the team to attend (refs tokens). Same-name break rows
-            // are one logical break across fields — show it once.
-            let mut seen_break_names: std::collections::HashSet<String> =
-                std::collections::HashSet::new();
+            // Team view: only matches the focus team plays or refs. Structural
+            // rows (breaks/joins) have no participants, so they never appear.
             let team_options = data.team_options.clone();
             let focus_team_id = focus_team_id.clone();
             move |m: &&MatchSetupData| {
                 if !team_view {
                     return true;
-                }
-                if is_break_like_match(m) {
-                    return team_is_reffing(m, &focus_team_id, &team_options)
-                        && seen_break_names.insert(m.name.clone());
                 }
                 !is_structural_match(m)
                     && match_involves_team(m, &focus_team_id, &team_options)

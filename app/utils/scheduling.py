@@ -14,7 +14,6 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
 from app.domain.enums import (
-    BREAK_SCHEDULE_TYPES,
     STRUCTURAL_SCHEDULE_TYPES,
     MatchStatus,
     ScheduleType,
@@ -225,20 +224,12 @@ def _procedure_with_match(
     Mutates node (nominal_start_time, status). No callbacks.
     """
     if node.schedule_type == ScheduleType.STATBREAK:
-        # Statically-scheduled break: the solver never moves its time, and it
-        # is never startable (no READY_TO_START). Its status is purely
-        # time-derived — COMPLETED once its window (start + length) has
-        # elapsed, NOT_STARTED otherwise — so moving a completed STATBREAK
-        # into the future un-completes it. Downstream dependents then use its
-        # end (start + length) exactly like a BREAK's. Handled before the
-        # started/completed early-return below because that lock never applies
-        # to STATBREAKs.
-        anchor = node.nominal_start_time or node.scheduled_start_time
-        if anchor is not None and node.nominal_length is not None:
-            if _now_utc() >= anchor + timedelta(minutes=node.nominal_length):
-                node.status = MatchStatus.COMPLETED
-            elif node.status == MatchStatus.COMPLETED:
-                node.status = MatchStatus.NOT_STARTED
+        # Statically-scheduled break: the solver never moves its time and never
+        # writes its status. STATBREAK status is derived from the current time
+        # when read (Match.effective_status: COMPLETED once the start has
+        # passed), so the stored status stays NOT_STARTED. Downstream
+        # dependents still use its end (start + length) exactly like a
+        # BREAK's for time purposes.
         return
 
     if node.status in (
@@ -399,14 +390,20 @@ def _scheduled_procedure_for_cycle_node(
 
 
 def _write_graph_to_db(graph: MatchGraph, uuid_to_match: Dict[str, object]) -> None:
-    """Persist graph state to in-memory Match objects (no DB read). Caller commits once."""
+    """Persist graph state to in-memory Match objects (no DB read). Caller commits once.
+
+    STATBREAK statuses are never written: they're derived from the current time
+    at read time (``Match.effective_status``), and the graph node carries that
+    derived value, not the stored one.
+    """
     for node in graph.get_all_nodes():
         uuids_to_update = list(node.component_uuids) if node.component_uuids else [node.uuid]
         for uid in uuids_to_update:
             m = uuid_to_match.get(uid)
             if m is not None:
                 m.nominal_start_time = node.nominal_start_time
-                m.status = node.status
+                if node.schedule_type != ScheduleType.STATBREAK:
+                    m.status = node.status
 
 
 def _write_scheduled_to_db(graph: MatchGraph, uuid_to_match: Dict[str, object]) -> None:
@@ -709,8 +706,9 @@ def validate_match_warnings(tournament_url: str) -> List[dict]:
                 )
 
     # Duplicate-team within a single match (same id or same `_initial` token in 2+ slots).
+    # Structural matches have no team or ref slots, so skip them.
     for m in matches:
-        if m.schedule_type in (ScheduleType.JOIN,):
+        if m.schedule_type in STRUCTURAL_SCHEDULE_TYPES:
             continue
         slot_entries: list[tuple[str, str]] = []
         for slot, team_id, initial in (
@@ -783,17 +781,10 @@ def validate_match_warnings(tournament_url: str) -> List[dict]:
     # serializes cross-field same-team matches so they don't actually collide, which
     # means the conflict only shows up on the planned timeline — that's the timeline
     # we check here. Two matches sharing a team whose scheduled intervals overlap are
-    # double-booked, regardless of field or schedule type. Same-name break rows are
-    # one logical break spanning fields, so a shared team attending "both" is fine.
+    # double-booked, regardless of field or schedule type.
     ref_ids_by_uuid = referee_team_ids_by_match_uuid(matches)
     for i, m in enumerate(matches):
         for other in matches[i + 1 :]:
-            if (
-                m.name == other.name
-                and m.schedule_type in BREAK_SCHEDULE_TYPES
-                and other.schedule_type in BREAK_SCHEDULE_TYPES
-            ):
-                continue
             if not _matches_share_any_team(m, other, ref_ids_by_uuid):
                 continue
             if _intervals_overlap(
