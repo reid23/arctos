@@ -642,7 +642,9 @@ def tournament_schedule(tournament_url):
                 "team2": m.team2,
                 "team1_initial": m.team1_initial,
                 "team2_initial": m.team2_initial,
-                "status": (m.status.value if hasattr(m.status, "value") else str(m.status)),
+                "status": (
+                    m.effective_status.value if hasattr(m.effective_status, "value") else str(m.effective_status)
+                ),
                 "scheduled_start_time": dt_iso(m.scheduled_start_time),
                 "nominal_start_time": dt_iso(m.nominal_start_time),
                 "confirmed_start_time": dt_iso(m.confirmed_start_time),
@@ -780,7 +782,9 @@ def tournament_schedule_setup(tournament_url):
                 "team2": m.team2,
                 "team1_initial": m.team1_initial,
                 "team2_initial": m.team2_initial,
-                "status": (m.status.value if hasattr(m.status, "value") else str(m.status)),
+                "status": (
+                    m.effective_status.value if hasattr(m.effective_status, "value") else str(m.effective_status)
+                ),
                 "scheduled_start_time": dt_iso(m.scheduled_start_time),
                 "nominal_start_time": dt_iso(m.nominal_start_time),
                 "confirmed_start_time": dt_iso(m.confirmed_start_time),
@@ -1177,7 +1181,11 @@ def tournament_match_detail(tournament_url):
                 "team2_shortname": team2_shortname,
                 "team1_initial": match.team1_initial,
                 "team2_initial": match.team2_initial,
-                "status": (match.status.value if hasattr(match.status, "value") else str(match.status)),
+                "status": (
+                    match.effective_status.value
+                    if hasattr(match.effective_status, "value")
+                    else str(match.effective_status)
+                ),
                 "scheduled_start_time": dt_iso(match.scheduled_start_time),
                 "nominal_start_time": dt_iso(match.nominal_start_time),
                 "confirmed_start_time": dt_iso(match.confirmed_start_time),
@@ -1262,7 +1270,11 @@ def tournament_match_state(tournament_url):
     return jsonify(
         {
             "match_id": match.uuid,
-            "status": (match.status.value if hasattr(match.status, "value") else str(match.status)),
+            "status": (
+                match.effective_status.value
+                if hasattr(match.effective_status, "value")
+                else str(match.effective_status)
+            ),
             "team1_score": team1_score,
             "team2_score": team2_score,
             "scores_by_set": scores_by_set,

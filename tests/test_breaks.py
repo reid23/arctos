@@ -4,10 +4,11 @@ Tests for multi-field break groups and STATBREAK.
 Covers:
 - same-name BREAK rows across fields start together in both solver passes
   (their dependency edges are unioned in build_match_graph);
-- SAFE matches wait for breaks on other fields that require one of their teams
-  (cross-field resource-conflict edges now see referee team requirements);
-- STATBREAK: never moved by either pass, auto-completes once its window
-  elapses, chained matches respect its end, editable while COMPLETED;
+- breaks and joins only occupy fields: team requirements are rejected on every
+  structural type, and the single-match endpoints clear refs on them;
+- STATBREAK: never moved by either pass; its status is derived from the
+  current time when read (COMPLETED once its start passes) and never stored;
+  chained matches respect its end; always editable;
 - break-group JSON endpoints (create/update/delete).
 """
 
@@ -18,11 +19,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.domain.enums import MatchStatus, ScheduleType
-from app.services.dual_write import (
-    get_match_ref_initials,
-    get_match_ref_team_ids,
-    set_match_referees_from_csv,
-)
+from app.services.dual_write import get_match_ref_team_ids
 from app.utils.scheduling import recompute_scheduled_and_nominal_times
 from models import TO, Match, Player, db
 from tests.utils import login_as
@@ -158,103 +155,19 @@ class TestSameNameBreakSync:
             assert _close(brk.nominal_start_time, base + timedelta(minutes=75))
 
 
-class TestBreakTeamRequirements:
-    @pytest.mark.unit
-    def test_safe_match_waits_for_break_requiring_its_team(self, app, test_db, tournament, seeded_teams):
-        """A SAFE match with team X waits for a break on another field that
-        requires X to attend (cross-field resource-conflict edge, live pass)."""
-        url = tournament.url
-        with app.app_context():
-            base = datetime.now(timezone.utc).replace(tzinfo=None)
-
-            # Field 1: anchor runs 30 min late, then a break requiring team1.
-            a1 = _mk(url, "F1 Anchor", "Field 1", ScheduleType.STATIC, start=base, scheduled=base, length=60)
-            a1.status = MatchStatus.COMPLETED
-            a1.finalized_at = base + timedelta(minutes=90)
-            brk = _mk(url, "Team Break", "Field 1", ScheduleType.BREAK, length=30)
-            brk.previous_match = a1.uuid
-            a1.next_match = brk.uuid
-            set_match_referees_from_csv(brk, "team1", "team1")
-
-            # Field 2: anchor ends at base+80; team1's match is planned after the
-            # break's planned start (base+60), so the conflict edge applies.
-            a2 = _mk(
-                url,
-                "F2 Anchor",
-                "Field 2",
-                ScheduleType.STATIC,
-                start=base + timedelta(minutes=70),
-                scheduled=base + timedelta(minutes=70),
-                length=10,
-            )
-            a2.status = MatchStatus.COMPLETED
-            a2.finalized_at = base + timedelta(minutes=80)
-            m2 = _mk(url, "Team1 Game", "Field 2", ScheduleType.SAFE, length=60)
-            m2.previous_match = a2.uuid
-            a2.next_match = m2.uuid
-            m2.team1 = "team1"
-            m2.team1_initial = "team1"
-            m2.team2 = "team2"
-            m2.team2_initial = "team2"
-            db.session.commit()
-
-            recompute_scheduled_and_nominal_times(url)
-            db.session.refresh(m2)
-            db.session.refresh(brk)
-
-            # Break runs base+90 .. base+120 (anchor finished late). Without the
-            # conflict edge m2 would start at base+80; it must wait for the break.
-            assert _close(brk.nominal_start_time, base + timedelta(minutes=90))
-            assert _aware_utc(m2.nominal_start_time) >= _aware_utc(base + timedelta(minutes=120))
-
-    @pytest.mark.unit
-    def test_unrelated_team_not_delayed_by_break(self, app, test_db, tournament, seeded_teams):
-        """A SAFE match with no shared team ignores the other field's break."""
-        url = tournament.url
-        with app.app_context():
-            base = datetime.now(timezone.utc).replace(tzinfo=None)
-            a1 = _mk(url, "F1 Anchor", "Field 1", ScheduleType.STATIC, start=base, scheduled=base, length=60)
-            a1.status = MatchStatus.COMPLETED
-            a1.finalized_at = base + timedelta(minutes=90)
-            brk = _mk(url, "Team Break", "Field 1", ScheduleType.BREAK, length=30)
-            brk.previous_match = a1.uuid
-            a1.next_match = brk.uuid
-            set_match_referees_from_csv(brk, "team1", "team1")
-
-            a2 = _mk(
-                url,
-                "F2 Anchor",
-                "Field 2",
-                ScheduleType.STATIC,
-                start=base + timedelta(minutes=70),
-                scheduled=base + timedelta(minutes=70),
-                length=10,
-            )
-            a2.status = MatchStatus.COMPLETED
-            a2.finalized_at = base + timedelta(minutes=80)
-            m2 = _mk(url, "Other Game", "Field 2", ScheduleType.SAFE, length=60)
-            m2.previous_match = a2.uuid
-            a2.next_match = m2.uuid
-            m2.team1 = "team2"
-            m2.team1_initial = "team2"
-            m2.team2 = "team3"
-            m2.team2_initial = "team3"
-            db.session.commit()
-
-            recompute_scheduled_and_nominal_times(url)
-            db.session.refresh(m2)
-            assert _close(m2.nominal_start_time, base + timedelta(minutes=80))
-
-
 class TestStatBreak:
     @pytest.mark.unit
-    def test_statbreak_never_moves_and_autocompletes(self, app, test_db, tournament):
-        """A STATBREAK keeps its user-set times through both passes; once its
-        window has elapsed it auto-completes; a chained match respects its end."""
+    def test_statbreak_never_moves_and_completes_at_start(self, app, test_db, tournament):
+        """A STATBREAK keeps its user-set times through both passes; its
+        effective status is COMPLETED as soon as its START passes (not
+        start + length) while the stored status stays NOT_STARTED; a chained
+        match still respects its END (start + length)."""
         url = tournament.url
         with app.app_context():
             base = datetime.now(timezone.utc).replace(tzinfo=None)
-            past_start = base - timedelta(minutes=60)
+            # Start 10 min ago with a 30-min length: the window has NOT elapsed
+            # yet, but the start has passed — that's enough for completion.
+            past_start = base - timedelta(minutes=10)
 
             sb = _mk(
                 url,
@@ -276,8 +189,11 @@ class TestStatBreak:
 
             assert _close(sb.nominal_start_time, past_start)
             assert _close(sb.scheduled_start_time, past_start)
-            assert sb.status == MatchStatus.COMPLETED  # window elapsed
-            # Chained match starts no earlier than the STATBREAK's end.
+            # Effective status is time-derived; the solver never stores it.
+            assert sb.effective_status == MatchStatus.COMPLETED
+            assert sb.status == MatchStatus.NOT_STARTED
+            # Chained match starts no earlier than the STATBREAK's end
+            # (start + length — the dependency end time is unchanged).
             assert _close(after.nominal_start_time, past_start + timedelta(minutes=30))
             assert _close(after.scheduled_start_time, past_start + timedelta(minutes=30))
 
@@ -301,6 +217,7 @@ class TestStatBreak:
             recompute_scheduled_and_nominal_times(url)
             db.session.refresh(sb)
             assert sb.status == MatchStatus.NOT_STARTED
+            assert sb.effective_status == MatchStatus.NOT_STARTED
             assert _close(sb.nominal_start_time, future_start)
             assert _close(sb.scheduled_start_time, future_start)
 
@@ -314,7 +231,7 @@ class TestBreakGroupEndpoints:
             login_as(client, p)
         return t
 
-    def test_create_break_group_rows_per_field_with_refs(self, app, client, tournament, to_player, seeded_teams):
+    def test_create_break_group_rows_per_field(self, app, client, tournament, to_player):
         t = self._login(app, client, tournament, to_player)
         resp = client.post(
             f"/_api/tournaments/{t.url}/break-groups",
@@ -323,7 +240,6 @@ class TestBreakGroupEndpoints:
                 "schedule_type": "BREAK",
                 "length": 30,
                 "fields": ["Field 1", "Field 2"],
-                "teams": ["team1", "team2"],
             },
         )
         assert resp.status_code == 200, resp.get_json()
@@ -335,7 +251,7 @@ class TestBreakGroupEndpoints:
             assert m.schedule_type == ScheduleType.BREAK
             assert m.nominal_length == 30
             assert m.team1 is None and m.team2 is None
-            assert get_match_ref_team_ids(m) == ["team1", "team2"]
+            assert get_match_ref_team_ids(m) == []
 
         # Creating the same group again collides per (name, event, field).
         resp2 = client.post(
@@ -343,6 +259,44 @@ class TestBreakGroupEndpoints:
             json={"name": "Lunch", "schedule_type": "BREAK", "length": 30, "fields": ["Field 1"]},
         )
         assert resp2.status_code == 400
+
+    @pytest.mark.parametrize("schedule_type", ["BREAK", "STATBREAK", "JOIN"])
+    def test_structural_group_rejects_teams(self, app, client, tournament, to_player, seeded_teams, schedule_type):
+        """Breaks and joins only occupy fields: a non-empty `teams` list is
+        rejected on create for every structural type."""
+        t = self._login(app, client, tournament, to_player)
+        start = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        resp = client.post(
+            f"/_api/tournaments/{t.url}/break-groups",
+            json={
+                "name": "Blocked",
+                "schedule_type": schedule_type,
+                "length": 30,
+                "fields": ["Field 1"],
+                "teams": ["team1"],
+                "start_time": start,
+            },
+        )
+        assert resp.status_code == 400
+        assert "team requirements" in resp.get_json()["error"]
+        assert Match.query.filter_by(event=t.url, name="Blocked").count() == 0
+
+    def test_break_group_put_rejects_teams(self, app, client, tournament, to_player, seeded_teams):
+        t = self._login(app, client, tournament, to_player)
+        resp = client.post(
+            f"/_api/tournaments/{t.url}/break-groups",
+            json={"name": "Lunch", "schedule_type": "BREAK", "length": 30, "fields": ["Field 1"]},
+        )
+        assert resp.status_code == 200, resp.get_json()
+
+        resp = client.put(
+            f"/_api/tournaments/{t.url}/break-groups/Lunch",
+            json={"teams": ["team1"]},
+        )
+        assert resp.status_code == 400
+        assert "team requirements" in resp.get_json()["error"]
+        row = Match.query.filter_by(event=t.url, name="Lunch").one()
+        assert get_match_ref_team_ids(row) == []
 
     def test_create_break_group_appends_at_chain_tail(self, app, client, tournament, to_player):
         t = self._login(app, client, tournament, to_player)
@@ -362,7 +316,7 @@ class TestBreakGroupEndpoints:
         # Appended after the tail, so it inherits the chain's planned end.
         assert brk.scheduled_start_time is not None
 
-    def test_update_break_group_length_teams_and_fields(self, app, client, tournament, to_player, seeded_teams):
+    def test_update_break_group_length_and_fields(self, app, client, tournament, to_player):
         t = self._login(app, client, tournament, to_player)
         resp = client.post(
             f"/_api/tournaments/{t.url}/break-groups",
@@ -371,23 +325,21 @@ class TestBreakGroupEndpoints:
                 "schedule_type": "BREAK",
                 "length": 30,
                 "fields": ["Field 1"],
-                "teams": ["team1"],
             },
         )
         assert resp.status_code == 200, resp.get_json()
 
-        # Add Field 2, change length and teams in one PUT.
+        # Add Field 2 and change length in one PUT.
         resp = client.put(
             f"/_api/tournaments/{t.url}/break-groups/Lunch",
-            json={"length": 45, "teams": ["team2"], "fields": ["Field 1", "Field 2"]},
+            json={"length": 45, "fields": ["Field 1", "Field 2"]},
         )
         assert resp.status_code == 200, resp.get_json()
         rows = Match.query.filter_by(event=t.url, name="Lunch").all()
         assert {m.field for m in rows} == {"Field 1", "Field 2"}
         for m in rows:
             assert m.nominal_length == 45
-            assert get_match_ref_team_ids(m) == ["team2"]
-            assert get_match_ref_initials(m) == ["team2"]
+            assert get_match_ref_team_ids(m) == []
 
         # Remove Field 1 again.
         resp = client.put(
@@ -446,9 +398,9 @@ class TestBreakGroupEndpoints:
             assert _close(m.nominal_start_time, expected)
             assert _close(m.scheduled_start_time, expected)
 
-    def test_completed_statbreak_still_editable(self, app, client, tournament, to_player):
-        """STATBREAKs auto-complete on a timer, so COMPLETED must not lock edits
-        (group PUT and single-match PUT both work)."""
+    def test_past_start_statbreak_still_editable(self, app, client, tournament, to_player):
+        """STATBREAK status is time-derived at read time and never stored, so a
+        past-start STATBREAK stays editable (group PUT and single-match PUT)."""
         t = self._login(app, client, tournament, to_player)
         start = (datetime.now(timezone.utc) - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
         resp = client.post(
@@ -463,7 +415,8 @@ class TestBreakGroupEndpoints:
         )
         assert resp.status_code == 200, resp.get_json()
         row = Match.query.filter_by(event=t.url, name="Dinner").one()
-        assert row.status == MatchStatus.COMPLETED  # window already elapsed
+        assert row.effective_status == MatchStatus.COMPLETED  # start passed
+        assert row.status == MatchStatus.NOT_STARTED  # never stored
 
         new_start = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
         resp = client.put(
@@ -475,9 +428,9 @@ class TestBreakGroupEndpoints:
         expected = datetime.fromisoformat(new_start.replace("Z", "+00:00")).replace(tzinfo=None)
         assert row.nominal_length == 60
         assert _close(row.nominal_start_time, expected)
-        assert row.status == MatchStatus.NOT_STARTED  # window no longer elapsed
+        assert row.effective_status == MatchStatus.NOT_STARTED  # start now in the future
 
-        # Single-match update endpoint is also exempt from the started-lock.
+        # Single-match update endpoint also works.
         resp = client.put(
             f"/_api/tournaments/{t.url}/matches/{row.uuid}",
             json={"length": 90},
@@ -486,8 +439,40 @@ class TestBreakGroupEndpoints:
         row = Match.query.filter_by(event=t.url, name="Dinner").one()
         assert row.nominal_length == 90
 
-    def test_update_match_api_accepts_refs_on_break(self, app, client, tournament, to_player, seeded_teams):
-        """The single-match PUT stores refs on BREAK rows instead of clearing them."""
+    def test_statbreak_serialized_status_is_time_derived(self, app, client, tournament, to_player):
+        """The schedule payload reports the time-derived STATBREAK status, not
+        the stored one: COMPLETED once the start passes, NOT_STARTED before."""
+        t = self._login(app, client, tournament, to_player)
+        past = (datetime.now(timezone.utc) - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        future = (datetime.now(timezone.utc) + timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for name, start in (("Past Break", past), ("Future Break", future)):
+            resp = client.post(
+                f"/_api/tournaments/{t.url}/break-groups",
+                json={
+                    "name": name,
+                    "schedule_type": "STATBREAK",
+                    "length": 30,
+                    "fields": ["Field 1"],
+                    "start_time": start,
+                },
+            )
+            assert resp.status_code == 200, resp.get_json()
+
+        # Stored status is untouched either way.
+        for name in ("Past Break", "Future Break"):
+            assert Match.query.filter_by(event=t.url, name=name).one().status == MatchStatus.NOT_STARTED
+
+        resp = client.get(f"/_api/tournaments/{t.url}/schedule-setup")
+        assert resp.status_code == 200, resp.get_json()
+        by_name = {m["name"]: m for m in resp.get_json()["matches"]}
+        # Past-start STATBREAK reads COMPLETED (even though its window — start
+        # + length — has not elapsed yet); future one reads NOT_STARTED.
+        assert by_name["Past Break"]["status"] == "COMPLETED"
+        assert by_name["Future Break"]["status"] == "NOT_STARTED"
+
+    def test_update_match_api_clears_refs_on_break(self, app, client, tournament, to_player, seeded_teams):
+        """The single-match PUT clears refs on BREAK rows (like JOIN): breaks
+        only occupy fields and never carry team requirements."""
         t = self._login(app, client, tournament, to_player)
         with app.app_context():
             base = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -511,7 +496,7 @@ class TestBreakGroupEndpoints:
         )
         assert resp.status_code == 200, resp.get_json()
         brk = Match.query.filter_by(uuid=brk_uuid).one()
-        assert get_match_ref_team_ids(brk) == ["team1"]
+        assert get_match_ref_team_ids(brk) == []
         assert brk.team1 is None and brk.team2 is None
 
     def test_break_to_statbreak_conversion(self, app, client, tournament, to_player):
@@ -596,20 +581,11 @@ class TestJoinGroupEndpoints:
         )
         assert resp2.status_code == 400
 
-    def test_join_group_rejects_teams(self, app, client, tournament, to_player, seeded_teams):
+    def test_join_group_put_rejects_teams(self, app, client, tournament, to_player, seeded_teams):
+        """Group PUT rejects team requirements for JOIN groups too (create-time
+        rejection for every structural type is covered in
+        TestBreakGroupEndpoints.test_structural_group_rejects_teams)."""
         t = self._login(app, client, tournament, to_player)
-        resp = client.post(
-            f"/_api/tournaments/{t.url}/break-groups",
-            json={
-                "name": "Sync",
-                "schedule_type": "JOIN",
-                "fields": ["Field 1"],
-                "teams": ["team1"],
-            },
-        )
-        assert resp.status_code == 400
-        assert "team requirements" in resp.get_json()["error"]
-
         resp = client.post(
             f"/_api/tournaments/{t.url}/break-groups",
             json={"name": "Sync", "schedule_type": "JOIN", "fields": ["Field 1"]},
