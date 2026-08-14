@@ -4239,6 +4239,10 @@ fn TimelineEventCard(
             class: "{event_class}",
             style: "{event_style}",
             title: "{timeline_title}",
+            // Hit-test anchor: the grid's pointermove reconciles hovered_block
+            // from the real DOM (see reconcile_hover_from_point), so a missed
+            // mouseleave can never wedge the alt-dependency outlines.
+            "data-event-id": "{event.id}",
             cursor: if can_drag { "grab" } else if is_break && !edit_mode { "default" } else { "pointer" },
             onpointerdown: move |ev: Event<PointerData>| {
                 if !editor {
@@ -5802,6 +5806,32 @@ fn ScheduleTimeline(
             }));
         }
     };
+    // Reconcile hovered_block against the element actually under the pointer.
+    // mouseenter/mouseleave are non-bubbling synthetic events and a dropped
+    // mouseleave used to leave hovered_block stuck (alt-dependency outlines
+    // persisting after the cursor left the block); hit-testing on every grid
+    // pointermove makes the state self-healing.
+    #[cfg(target_arch = "wasm32")]
+    let mut reconcile_hover_from_point = {
+        let mut hovered_block = hovered_block;
+        move |client_x: f64, client_y: f64| {
+            let under: Option<String> = web_sys::window()
+                .and_then(|w| w.document())
+                .and_then(|d| d.element_from_point(client_x as f32, client_y as f32))
+                .and_then(|el| {
+                    use wasm_bindgen::JsCast;
+                    el.dyn_into::<web_sys::Element>().ok()
+                })
+                .and_then(|el| el.closest("[data-event-id]").ok().flatten())
+                .and_then(|el| el.get_attribute("data-event-id"));
+            if *hovered_block.peek() != under {
+                hovered_block.set(under);
+            }
+        }
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let reconcile_hover_from_point = move |_client_x: f64, _client_y: f64| {};
+
     let grid_pointer_move = {
         move |ev: Event<PointerData>| {
             if !editor {
@@ -5810,6 +5840,12 @@ fn ScheduleTimeline(
             let alt = ev.modifiers().alt();
             if *alt_down.peek() != alt {
                 alt_down.set(alt);
+            }
+            // Keep the alt-hover target honest whenever the dependency view is
+            // active (cheap: one elementFromPoint per move while Alt is held).
+            if alt {
+                let c = ev.client_coordinates();
+                reconcile_hover_from_point(c.x, c.y);
             }
             let Some(state) = drag_state.peek().clone() else {
                 return;
@@ -5966,6 +6002,10 @@ fn ScheduleTimeline(
     let grid_pointer_cancel = move |_ev: Event<PointerData>| {
         if drag_state.peek().is_some() {
             drag_state.set(None);
+        }
+        // Pointer left the grid: nothing can be alt-hovered anymore.
+        if hovered_block.peek().is_some() {
+            hovered_block.set(None);
         }
     };
 
