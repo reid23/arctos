@@ -4556,10 +4556,11 @@ fn ref_token_match_name(token: &str) -> Option<&str> {
 
 /// Line color for a dependency edge kind
 /// (0 = chain / previous match, 1 = team1 result, 2 = team2 result, _ = ref result).
+/// kind: 0 = chain (blue), 1 = team supplier (green), 2 = ref supplier (orange).
 fn dep_edge_color(kind: u8) -> &'static str {
     match kind {
         0 => "#0d6efd",
-        1 | 2 => "#d63384",
+        1 => "#198754",
         _ => "#fd7e14",
     }
 }
@@ -4604,48 +4605,46 @@ struct DepBlockGeom {
     height_slots: f64,
 }
 
-/// Endpoints for the `index`-th of `n_lines` visible dependency lines leaving
-/// the hovered block `from` toward `to`, in events-layer percentages
-/// (x: % of width, y: % of height).
-///
-/// - The line leaves the vertical edge of `from` facing `to` (top edge if the
-///   target's center is above, else bottom edge) and arrives at the opposing
-///   edge of `to`, both at the blocks' horizontal midpoints.
-/// - When several lines leave the hovered block, their origins fan out around
-///   its midpoint in ~0.6%-of-layer steps, clamped so the whole fan stays
-///   within the middle 80% of the block's width. `index`/`n_lines` must count
-///   only *visible* lines, otherwise a lone line gets a spurious offset.
-fn dep_line_endpoints(
-    index: usize,
-    n_lines: usize,
-    from: DepBlockGeom,
-    to: DepBlockGeom,
-    slots_per_day: usize,
-) -> (f64, f64, f64, f64) {
-    let step = if n_lines > 1 {
-        (0.6_f64).min(from.width * 0.8 / (n_lines as f64 - 1.0))
+/// Fan offset for the `index`-th of `n` line endpoints sharing a block edge:
+/// centered on the midpoint, ~0.6%-of-layer steps, clamped so the whole fan
+/// stays within the middle 80% of the block's width. Counts must cover only
+/// *visible* lines, otherwise a lone line gets a spurious offset.
+fn dep_fan_offset(index: usize, n: usize, block_width: f64) -> f64 {
+    let step = if n > 1 {
+        (0.6_f64).min(block_width * 0.8 / (n as f64 - 1.0))
     } else {
         0.0
     };
-    let offset = (index as f64 - (n_lines as f64 - 1.0) / 2.0) * step;
-    let fx = from.left + from.width / 2.0 + offset;
-    let tx = to.left + to.width / 2.0;
+    (index as f64 - (n as f64 - 1.0) / 2.0) * step
+}
+
+/// Endpoints for one dependency line, in events-layer percentages
+/// (x: % of width, y: % of height).
+///
+/// Lines always flow supply → demand: they LEAVE the BOTTOM edge of the
+/// dependency block `dep` and ENTER the TOP edge of the hovered (dependent)
+/// block `hovered`, each at the block's horizontal midpoint plus a fan offset.
+///
+/// - `exit_index`/`n_exit`: this line's position among the visible lines
+///   leaving `dep` (fans the bottom-edge exits when one dependency supplies
+///   several distinct things).
+/// - `entry_index`/`n_entry`: this line's position among ALL visible lines
+///   entering `hovered` (fans the top-edge entries).
+fn dep_line_endpoints(
+    exit_index: usize,
+    n_exit: usize,
+    entry_index: usize,
+    n_entry: usize,
+    dep: DepBlockGeom,
+    hovered: DepBlockGeom,
+    slots_per_day: usize,
+) -> (f64, f64, f64, f64) {
     let slot_pct = |slots: f64| slots / slots_per_day as f64 * 100.0;
-    let fcy = slot_pct(from.top_slots + from.height_slots / 2.0);
-    let tcy = slot_pct(to.top_slots + to.height_slots / 2.0);
-    let (fy, ty) = if tcy < fcy {
-        // Target above: leave from the top edge, arrive at the target's bottom.
-        (
-            slot_pct(from.top_slots),
-            slot_pct(to.top_slots + to.height_slots),
-        )
-    } else {
-        (
-            slot_pct(from.top_slots + from.height_slots),
-            slot_pct(to.top_slots),
-        )
-    };
-    (fx, fy, tx, ty)
+    let x1 = dep.left + dep.width / 2.0 + dep_fan_offset(exit_index, n_exit, dep.width);
+    let y1 = slot_pct(dep.top_slots + dep.height_slots);
+    let x2 = hovered.left + hovered.width / 2.0 + dep_fan_offset(entry_index, n_entry, hovered.width);
+    let y2 = slot_pct(hovered.top_slots);
+    (x1, y1, x2, y2)
 }
 
 #[cfg(test)]
@@ -4664,53 +4663,64 @@ mod dep_geometry_tests {
     }
 
     #[test]
-    fn single_line_starts_at_block_edge_midpoint() {
-        // Hovered block: second of four field columns (25% wide), 10:00–11:00.
-        let from = geom(25.0, 25.0, 20.0, 2.0);
-        // Target above it, first column, 08:00–09:00.
-        let to = geom(0.0, 25.0, 16.0, 2.0);
-        let (fx, fy, tx, ty) = dep_line_endpoints(0, 1, from, to, SLOTS);
-        assert_eq!(fx, 25.0 + 12.5); // exact horizontal midpoint, no fan offset
-        assert_eq!(fy, 20.0 / 48.0 * 100.0); // top edge (target is above)
-        assert_eq!(tx, 12.5);
-        assert_eq!(ty, (16.0 + 2.0) / 48.0 * 100.0); // target bottom edge
+    fn single_line_flows_dep_bottom_to_hovered_top() {
+        // Dependency: first column (25% wide), 08:00–09:00.
+        let dep = geom(0.0, 25.0, 16.0, 2.0);
+        // Hovered block below it, second column, 10:00–11:00.
+        let hovered = geom(25.0, 25.0, 20.0, 2.0);
+        let (x1, y1, x2, y2) = dep_line_endpoints(0, 1, 0, 1, dep, hovered, SLOTS);
+        assert_eq!(x1, 12.5); // dependency horizontal midpoint, no fan offset
+        assert_eq!(y1, (16.0 + 2.0) / 48.0 * 100.0); // dependency BOTTOM edge
+        assert_eq!(x2, 25.0 + 12.5); // hovered horizontal midpoint
+        assert_eq!(y2, 20.0 / 48.0 * 100.0); // hovered TOP edge
     }
 
     #[test]
-    fn single_line_respects_lane_inset() {
-        // Hovered block in the right lane of a two-lane column: lane-adjusted
-        // left/width, so the midpoint is the lane's center, not the column's.
-        let from = geom(37.5, 12.5, 20.0, 2.0);
-        let to = geom(0.0, 25.0, 30.0, 2.0);
-        let (fx, fy, _, ty) = dep_line_endpoints(0, 1, from, to, SLOTS);
-        assert_eq!(fx, 37.5 + 6.25);
-        assert_eq!(fy, (20.0 + 2.0) / 48.0 * 100.0); // bottom edge (target below)
-        assert_eq!(ty, 30.0 / 48.0 * 100.0);
+    fn direction_fixed_even_when_dep_is_below() {
+        // Even a dependency later in the day exits its bottom and enters the
+        // hovered block's top (the flow direction is semantic, not spatial).
+        let dep = geom(0.0, 25.0, 30.0, 2.0);
+        let hovered = geom(37.5, 12.5, 20.0, 2.0);
+        let (x1, y1, _, y2) = dep_line_endpoints(0, 1, 0, 1, dep, hovered, SLOTS);
+        assert_eq!(x1, 12.5);
+        assert_eq!(y1, (30.0 + 2.0) / 48.0 * 100.0); // dep bottom
+        assert_eq!(y2, 20.0 / 48.0 * 100.0); // hovered top (lane-inset midpoint on x2)
     }
 
     #[test]
-    fn fan_is_centered_and_stays_inside_block() {
-        let from = geom(0.0, 25.0, 20.0, 2.0);
-        let to = geom(50.0, 25.0, 16.0, 2.0);
+    fn entry_fan_is_centered_and_stays_inside_block() {
+        let dep = geom(50.0, 25.0, 16.0, 2.0);
+        let hovered = geom(0.0, 25.0, 20.0, 2.0);
         let n = 3;
         let xs: Vec<f64> = (0..n)
-            .map(|i| dep_line_endpoints(i, n, from, to, SLOTS).0)
+            .map(|i| dep_line_endpoints(0, 1, i, n, dep, hovered, SLOTS).2)
             .collect();
-        // Centered on the midpoint, symmetric, evenly spaced.
+        // Centered on the hovered block's midpoint, symmetric, evenly spaced.
         assert_eq!(xs[1], 12.5);
         assert!((xs[1] - xs[0] - (xs[2] - xs[1])).abs() < 1e-9);
-        // Whole fan within the block's width.
+        // Whole fan within the hovered block's width.
         assert!(xs[0] > 0.0 && xs[2] < 25.0);
     }
 
     #[test]
-    fn ring_shadow_one_ring_per_edge_in_order() {
-        let css = dep_ring_shadow(&[0, 1, 3]);
+    fn exit_fan_separates_lines_leaving_one_dependency() {
+        // A dependency supplying a team AND a ref: two exits, side by side.
+        let dep = geom(0.0, 25.0, 16.0, 2.0);
+        let hovered = geom(25.0, 25.0, 20.0, 2.0);
+        let (xa, ..) = dep_line_endpoints(0, 2, 0, 2, dep, hovered, SLOTS);
+        let (xb, ..) = dep_line_endpoints(1, 2, 1, 2, dep, hovered, SLOTS);
+        assert!(xa < 12.5 && 12.5 < xb); // straddle the midpoint
+        assert!((12.5 - xa - (xb - 12.5)).abs() < 1e-9); // symmetric
+    }
+
+    #[test]
+    fn ring_shadow_one_ring_per_distinct_edge_in_order() {
+        let css = dep_ring_shadow(&[0, 1, 2]);
         assert!(css.starts_with("box-shadow: "));
         assert_eq!(css.matches("rgba(255,255,255,0.9)").count(), 3);
         // Ring order (inner→outer) follows edge order; colors match the lines.
         let chain = css.find("#0d6efd").unwrap();
-        let team = css.find("#d63384").unwrap();
+        let team = css.find("#198754").unwrap();
         let refc = css.find("#fd7e14").unwrap();
         assert!(chain < team && team < refc);
     }
@@ -5622,8 +5632,12 @@ fn ScheduleTimeline(
         on_edit_match.call(id);
     });
 
-    // Alt-hover dependency edges for the hovered block: (from, to, kind)
-    // kind: 0 = chain (previous_match), 1 = team1 result, 2 = team2 result, 3 = ref result.
+    // Alt-hover dependency edges for the hovered block: (hovered, dependency, kind)
+    // kind: 0 = chain (previous_match), 1 = team supplier (team1 OR team2 —
+    // both render identically), 2 = ref supplier. Duplicate (dependency, kind)
+    // pairs are collapsed: a match supplying both teams draws ONE green line
+    // and one green ring, but supplying a team AND a ref draws two distinct
+    // edges.
     let dep_edges: Vec<(String, String, u8)> = if editor && alt_down() {
         if let Some(hid) = hovered_block() {
             let name_to_uuid: HashMap<&str, &str> = data
@@ -5633,23 +5647,29 @@ fn ScheduleTimeline(
                 .map(|m| (m.name.as_str(), m.uuid.as_str()))
                 .collect();
             let mut edges: Vec<(String, String, u8)> = Vec::new();
+            let mut seen: std::collections::HashSet<(String, u8)> = std::collections::HashSet::new();
+            let mut push_edge = |edges: &mut Vec<(String, String, u8)>, to: String, kind: u8| {
+                if seen.insert((to.clone(), kind)) {
+                    edges.push((hid.clone(), to, kind));
+                }
+            };
             if let Some(m) = data.matches.iter().find(|m| m.uuid == hid) {
                 if let Some(prev) = m.previous_match.as_deref() {
                     if !prev.is_empty() {
-                        edges.push((hid.clone(), prev.to_string(), 0));
+                        push_edge(&mut edges, prev.to_string(), 0);
                     }
                 }
-                for (tok, kind) in [(m.team1_initial.as_deref(), 1u8), (m.team2_initial.as_deref(), 2u8)] {
+                for tok in [m.team1_initial.as_deref(), m.team2_initial.as_deref()] {
                     if let Some(name) = tok.and_then(ref_token_match_name) {
                         if let Some(&uuid) = name_to_uuid.get(name) {
-                            edges.push((hid.clone(), uuid.to_string(), kind));
+                            push_edge(&mut edges, uuid.to_string(), 1);
                         }
                     }
                 }
                 for tok in m.refs_initial.as_deref().unwrap_or("").split(',') {
                     if let Some(name) = ref_token_match_name(tok) {
                         if let Some(&uuid) = name_to_uuid.get(name) {
-                            edges.push((hid.clone(), uuid.to_string(), 3));
+                            push_edge(&mut edges, uuid.to_string(), 2);
                         }
                     }
                 }
@@ -5661,7 +5681,9 @@ fn ScheduleTimeline(
     } else {
         Vec::new()
     };
-    // Highlight classes for dependency targets (and the hovered source).
+    // Highlight classes: the hovered block only gets a z-lift (its identity is
+    // obvious — it's under the cursor); dependency blocks get a light tint by
+    // their primary incoming edge kind.
     let dep_class_map: HashMap<String, &'static str> = {
         let mut map = HashMap::new();
         if !dep_edges.is_empty() {
@@ -5669,7 +5691,7 @@ fn ScheduleTimeline(
                 map.insert(from.clone(), "schedule-timeline-event--dep-source");
                 let class = match kind {
                     0 => "schedule-timeline-event--dep-chain",
-                    1 | 2 => "schedule-timeline-event--dep-team",
+                    1 => "schedule-timeline-event--dep-team",
                     _ => "schedule-timeline-event--dep-ref",
                 };
                 // Chain highlight wins if a block is referenced multiple ways.
@@ -5678,19 +5700,22 @@ fn ScheduleTimeline(
         }
         map
     };
-    // Nested outline rings, one ring per edge, colored like its line: the
-    // hovered source gets a ring per OUTGOING edge, and every dependency
-    // target gets a ring per INCOMING edge from the hovered match (e.g. a
-    // match used as `A::winner` team and `A::loser` ref shows two rings on A).
+    // Outline rings on DEPENDENCY blocks only: one ring per distinct incoming
+    // edge kind, colored like the corresponding line — "this match supplies a
+    // team (green) and the field slot (blue)" reads directly off the rings.
+    // The hovered match itself gets no rings. Kinds are already deduped in
+    // dep_edges; sort so ring order is stable (chain, team, ref).
     let dep_shadow_by_id: HashMap<String, String> = {
         let mut kinds_by_id: HashMap<String, Vec<u8>> = HashMap::new();
-        for (from, to, kind) in &dep_edges {
-            kinds_by_id.entry(from.clone()).or_default().push(*kind);
+        for (_, to, kind) in &dep_edges {
             kinds_by_id.entry(to.clone()).or_default().push(*kind);
         }
         kinds_by_id
             .into_iter()
-            .map(|(id, kinds)| (id, dep_ring_shadow(&kinds)))
+            .map(|(id, mut kinds)| {
+                kinds.sort_unstable();
+                (id, dep_ring_shadow(&kinds))
+            })
             .collect()
     };
 
@@ -6322,41 +6347,64 @@ fn ScheduleTimeline(
                     // the index among visible lines — indexing over all edges gave a
                     // lone visible line a spurious offset whenever a sibling edge's
                     // target was hidden (other day / other field filter).
-                    let visible_dep_edges: Vec<(DepBlockGeom, DepBlockGeom, u8)> = dep_edges
+                    // (dep id, dep geom, hovered geom, kind) for edges whose
+                    // both blocks are visible on the current day/filter.
+                    let visible_dep_edges: Vec<(String, DepBlockGeom, DepBlockGeom, u8)> = dep_edges
                         .iter()
                         .filter_map(|(from, to, kind)| {
-                            let (fl, fw, ft, fh) = *geom_by_id.get(from)?;
-                            let (tl, tw, tt, th) = *geom_by_id.get(to)?;
+                            let (hl, hw, ht, hh) = *geom_by_id.get(from)?;
+                            let (dl, dw, dt, dh) = *geom_by_id.get(to)?;
                             Some((
+                                to.clone(),
                                 DepBlockGeom {
-                                    left: fl,
-                                    width: fw,
-                                    top_slots: ft,
-                                    height_slots: fh,
+                                    left: dl,
+                                    width: dw,
+                                    top_slots: dt,
+                                    height_slots: dh,
                                 },
                                 DepBlockGeom {
-                                    left: tl,
-                                    width: tw,
-                                    top_slots: tt,
-                                    height_slots: th,
+                                    left: hl,
+                                    width: hw,
+                                    top_slots: ht,
+                                    height_slots: hh,
                                 },
                                 *kind,
                             ))
                         })
                         .collect();
-                    let n_dep_lines = visible_dep_edges.len();
+                    // Lines flow dependency-bottom → hovered-top. Entries fan
+                    // by position among ALL visible lines; exits fan by
+                    // position among the lines leaving that same dependency.
+                    let n_entry = visible_dep_edges.len();
+                    let n_exit_by_dep: HashMap<&str, usize> = {
+                        let mut m: HashMap<&str, usize> = HashMap::new();
+                        for (dep_id, ..) in &visible_dep_edges {
+                            *m.entry(dep_id.as_str()).or_insert(0) += 1;
+                        }
+                        m
+                    };
+                    let mut exit_seen: HashMap<&str, usize> = HashMap::new();
                     let dep_lines: Vec<(f64, f64, f64, f64, u8)> = visible_dep_edges
                         .iter()
                         .enumerate()
-                        .map(|(i, (from_geom, to_geom, kind))| {
-                            let (fx, fy, tx, ty) = dep_line_endpoints(
-                                i,
-                                n_dep_lines,
-                                *from_geom,
-                                *to_geom,
+                        .map(|(entry_index, (dep_id, dep_geom, hovered_geom, kind))| {
+                            let exit_index = {
+                                let e = exit_seen.entry(dep_id.as_str()).or_insert(0);
+                                let i = *e;
+                                *e += 1;
+                                i
+                            };
+                            let n_exit = *n_exit_by_dep.get(dep_id.as_str()).unwrap_or(&1);
+                            let (x1, y1, x2, y2) = dep_line_endpoints(
+                                exit_index,
+                                n_exit,
+                                entry_index,
+                                n_entry,
+                                *dep_geom,
+                                *hovered_geom,
                                 slots_per_day,
                             );
-                            (fx, fy, tx, ty, *kind)
+                            (x1, y1, x2, y2, *kind)
                         })
                         .collect();
                     let dep_lines_active = !dep_lines.is_empty();
@@ -6508,28 +6556,20 @@ fn ScheduleTimeline(
                                             y1: "{y1}%",
                                             x2: "{x2}%",
                                             y2: "{y2}%",
-                                            stroke: match kind {
-                                                0 => "#0d6efd",
-                                                1 | 2 => "#d63384",
-                                                _ => "#fd7e14",
-                                            },
+                                            stroke: dep_edge_color(*kind),
                                             stroke_width: "2.5",
                                             stroke_dasharray: match kind {
-                                                0 => "none",
-                                                1 => "none",
-                                                2 => "7 4",
+                                                0 | 1 => "none",
                                                 _ => "3 3",
                                             },
                                         }
+                                        // Dot at the supply end (the dependency's
+                                        // bottom edge, where the line leaves).
                                         circle {
-                                            cx: "{x2}%",
-                                            cy: "{y2}%",
+                                            cx: "{x1}%",
+                                            cy: "{y1}%",
                                             r: "3.5",
-                                            fill: match kind {
-                                                0 => "#0d6efd",
-                                                1 | 2 => "#d63384",
-                                                _ => "#fd7e14",
-                                            },
+                                            fill: dep_edge_color(*kind),
                                         }
                                         }
                                     }
@@ -6540,12 +6580,12 @@ fn ScheduleTimeline(
                                         "previous match"
                                     }
                                     span { class: "schedule-dep-legend-item",
-                                        span { class: "schedule-dep-legend-swatch", style: "background:#d63384;" }
-                                        "team result (dashed = team 2)"
+                                        span { class: "schedule-dep-legend-swatch", style: "background:#198754;" }
+                                        "supplies a team"
                                     }
                                     span { class: "schedule-dep-legend-item",
                                         span { class: "schedule-dep-legend-swatch", style: "background:#fd7e14;" }
-                                        "ref result"
+                                        "supplies a ref"
                                     }
                                 }
                             }
