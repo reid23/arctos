@@ -72,7 +72,7 @@ Authoritative algorithm docs: [`docs/scheduling.md`](scheduling.md).
 
 | Pass | Writes | Trigger |
 |------|--------|---------|
-| Planned (`scheduled_pass=True`) | `scheduled_start_time` only | create/edit/delete, import, recompute button, push-back, boot |
+| Planned (`scheduled_pass=True`) | `scheduled_start_time` only | create/edit/delete, import, push-back, boot |
 | Live (`scheduled_pass=False`) | `nominal_start_time` + status | match start/end **and** after every planned pass |
 
 **Invariants:**

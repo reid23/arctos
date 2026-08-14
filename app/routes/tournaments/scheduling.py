@@ -109,20 +109,6 @@ def schedule_warnings(tournament_url):
         return jsonify({"success": False, "error": f"Schedule warnings failed: {e}"}), 500
 
 
-@bp.route("/<tournament_url>/recompute-schedule", methods=["POST"])
-@require_tournament_organizer("Only tournament organizers can access this page")
-def recompute_schedule(tournament_url):
-    """Force full recompute of match times as if a match were just edited (TO only)."""
-    try:
-        recompute_scheduled_and_nominal_times(tournament_url)
-        return (
-            jsonify({"success": True, "message": "Schedule recomputed successfully."}),
-            200,
-        )
-    except Exception as e:
-        return jsonify({"success": False, "error": f"Recompute failed: {e}"}), 500
-
-
 @bp.route("/<tournament_url>/export-schedule")
 @require_tournament_organizer("You must be a tournament organizer to export schedules")
 def export_schedule(tournament_url):
@@ -1289,16 +1275,6 @@ def force_start_match_api(tournament_url, match_id):
     # Structural change to a STATIC anchor: re-solve plan then live.
     recompute_scheduled_and_nominal_times(tournament_url)
 
-    return jsonify({"success": True})
-
-
-@bp.route("/tournaments/<tournament_url>/recompute-schedule", methods=["POST"])
-@login_required
-def recompute_schedule_api(tournament_url):
-    if not _check_to(tournament_url):
-        return jsonify({"error": "Forbidden"}), 403
-
-    recompute_scheduled_and_nominal_times(tournament_url)
     return jsonify({"success": True})
 
 

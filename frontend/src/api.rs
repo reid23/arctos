@@ -3658,29 +3658,6 @@ pub async fn delete_tag(tournament_url: &str, tag_id: u32) -> Result<(), String>
     Err(err_msg)
 }
 
-pub async fn recompute_schedule(tournament_url: &str) -> Result<(), String> {
-    let c = client();
-    let r = with_credentials(c.post(format!(
-        "{}/_api/tournaments/{}/recompute-schedule",
-        base(),
-        tournament_url
-    )))
-    .send()
-    .await
-    .map_err(|e| e.to_string())?;
-
-    let data: Value = response_json(r).await?;
-    if data.get("success").and_then(|v| v.as_bool()) == Some(true) {
-        Ok(())
-    } else {
-        Err(data
-            .get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Unknown error")
-            .to_string())
-    }
-}
-
 #[allow(dead_code)]
 pub async fn update_all_references(tournament_url: &str) -> Result<(), String> {
     let c = client();

@@ -640,6 +640,9 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
     let mut bulk_mode = use_signal(|| false);
     let mut bulk_selected = use_signal(Vec::<String>::new);
     let mut bulk_length_input = use_signal(|| 30u32);
+    // "Push back day" tool: shift every not-yet-started match's plan by N minutes.
+    let mut push_back_open = use_signal(|| false);
+    let mut push_back_minutes = use_signal(|| 30i32);
     // Inline error affordance for drag-move / bulk failures (dismissible alert near the toolbar).
     let mut edit_error = use_signal(|| None::<String>);
     // Prefill for the create-match card when opened from a drag-to-create gesture.
@@ -851,9 +854,7 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
         Some(data) => {
             let is_to = data.is_to;
             let url_for_export = url.clone();
-            let url_for_recompute = url.clone();
             let url_for_export_key = url_for_export.clone();
-            let url_for_recompute_key = url_for_recompute.clone();
             let handle_keydown = move |ev: Event<KeyboardData>| {
                 let key_str = ev.key().to_string();
                 let modal_open = active_modal() != "none";
@@ -970,18 +971,6 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                             if editor {
                                 ev.prevent_default();
                                 active_modal.set("toml_import".to_string());
-                            }
-                        }
-                        "r" | "R" => {
-                            if editor {
-                                ev.prevent_default();
-                                let u = url_for_recompute_key.clone();
-                                let mut trigger = refresh_trigger;
-                                spawn(async move {
-                                    if let Ok(_) = api::recompute_schedule(&u).await {
-                                        trigger.set(trigger() + 1);
-                                    }
-                                });
                             }
                         }
                         _ => {}
@@ -1227,17 +1216,10 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                                             }, "Export TOML" }
                                             button { class: "btn btn-sm btn-outline-secondary", onclick: move |_| active_modal.set("toml_import".to_string()), "Import TOML" }
                                             button {
-                                                class: "btn btn-sm btn-outline-primary",
-                                                onclick: move |_| {
-                                                    let u = url_for_recompute.clone();
-                                                    let mut trigger = refresh_trigger;
-                                                    spawn(async move {
-                                                        if let Ok(_) = api::recompute_schedule(&u).await {
-                                                            trigger.set(trigger() + 1);
-                                                        }
-                                                    });
-                                                },
-                                                "Recompute Times"
+                                                class: if push_back_open() { "btn btn-sm btn-primary" } else { "btn btn-sm btn-outline-primary" },
+                                                title: "Shift every not-yet-started match's planned time by N minutes (e.g. the day started late)",
+                                                onclick: move |_| push_back_open.set(!push_back_open()),
+                                                "Push back day…"
                                             }
                                             button {
                                                 class: "btn btn-sm btn-outline-warning",
@@ -1293,6 +1275,55 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                                     class: "btn-close",
                                     "aria-label": "Dismiss",
                                     onclick: move |_| edit_error.set(None),
+                                }
+                            }
+                        }
+                        if push_back_open() {
+                            div { class: "card mb-2 border-secondary",
+                                div { class: "card-body py-2 d-flex flex-wrap align-items-center gap-2",
+                                    strong { class: "small", "Push back day:" }
+                                    span { class: "small text-muted",
+                                        "shifts the plan of every match that hasn't started (negative pulls the day forward)"
+                                    }
+                                    label { class: "small mb-0 ms-2", "Minutes" }
+                                    input {
+                                        class: "form-control form-control-sm d-inline-block",
+                                        style: "width: 6rem;",
+                                        r#type: "number",
+                                        value: "{push_back_minutes}",
+                                        onkeydown: move |ev: Event<KeyboardData>| ev.stop_propagation(),
+                                        oninput: move |e| {
+                                            push_back_minutes.set(e.value().parse().unwrap_or(0));
+                                        },
+                                    }
+                                    button {
+                                        class: "btn btn-sm btn-success",
+                                        disabled: push_back_minutes() == 0,
+                                        onclick: {
+                                            let u = url.clone();
+                                            move |_| {
+                                                let u = u.clone();
+                                                let minutes = push_back_minutes();
+                                                spawn(async move {
+                                                    let req = PushBackRequest { minutes };
+                                                    match api::push_back_matches(&u, &req).await {
+                                                        Ok(_) => {
+                                                            edit_error.set(None);
+                                                            push_back_open.set(false);
+                                                            refresh();
+                                                        }
+                                                        Err(e) => edit_error.set(Some(e)),
+                                                    }
+                                                });
+                                            }
+                                        },
+                                        "Apply"
+                                    }
+                                    button {
+                                        class: "btn btn-sm btn-outline-secondary",
+                                        onclick: move |_| push_back_open.set(false),
+                                        "Cancel"
+                                    }
                                 }
                             }
                         }
