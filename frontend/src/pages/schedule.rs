@@ -2118,6 +2118,8 @@ fn BreakGroupModal(
     let type_noun = if is_join { "join" } else { "break" };
 
     let mut length = use_signal(|| first.nominal_length.unwrap_or(30));
+    // Break↔Join whole-group conversion (STATBREAK groups don't convert).
+    let mut sel_type = use_signal(|| group_type.clone());
     let mut start_time = use_signal(|| {
         first
             .nominal_start_time
@@ -2137,6 +2139,7 @@ fn BreakGroupModal(
 
     let url_save = tournament_url.clone();
     let name_save = group_name.clone();
+    let group_type_save = group_type.clone();
     let do_save = move |_| {
         if fields_sel().is_empty() {
             error.set(Some(format!(
@@ -2151,12 +2154,16 @@ fn BreakGroupModal(
         let u = url_save.clone();
         let n = name_save.clone();
         let on_save = on_save.clone();
+        let group_type_now = group_type_save.clone();
         spawn(async move {
             saving.set(true);
             error.set(None);
+            let converting = sel_type() != group_type_now;
+            let now_join = sel_type() == "JOIN";
             // JOIN groups only edit field membership: no length/start.
             let req = UpdateBreakGroupRequest {
-                length: if is_join { None } else { Some(length()) },
+                schedule_type: if converting { Some(sel_type()) } else { None },
+                length: if now_join { None } else { Some(length()) },
                 start_time: if is_statbreak {
                     local_datetime_to_utc_iso(&start_time()).or_else(|| Some(start_time()))
                 } else {
@@ -2228,7 +2235,21 @@ fn BreakGroupModal(
                                 "Edits apply to every field's copy of this break. Same-name breaks always start together."
                             }
                         }
-                        if !is_join {
+                        // Whole-group Break↔Join conversion. Static breaks don't
+                        // convert (create one deliberately, with a start time).
+                        if !is_statbreak {
+                            div { class: "mb-3",
+                                label { class: "form-label", "Type" }
+                                select {
+                                    class: "form-select",
+                                    value: "{sel_type}",
+                                    onchange: move |e| sel_type.set(e.value()),
+                                    option { value: "BREAK", selected: sel_type() == "BREAK", "Break" }
+                                    option { value: "JOIN", selected: sel_type() == "JOIN", "Join" }
+                                }
+                            }
+                        }
+                        if sel_type() != "JOIN" {
                             div { class: "row",
                                 div { class: "col-md-6",
                                     div { class: "mb-3",

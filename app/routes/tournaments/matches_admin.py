@@ -129,10 +129,15 @@ def update_match_api(tournament_url, match_id):
         return jsonify({"error": "Forbidden"}), 403
 
     match = Match.query.filter_by(uuid=match_id, event=tournament_url).first_or_404()
-    # STATBREAK status is time-derived at read time (nobody "starts" them) and
-    # the stored status stays NOT_STARTED, but keep the exemption so legacy rows
-    # with a stored COMPLETED remain editable too.
-    if match.status in _LOCKED_STATUSES and match.schedule_type != ScheduleType.STATBREAK:
+    # STATBREAK status is time-derived (nobody "starts" them): locked once the
+    # effective status says the break has happened, editable before that.
+    if match.schedule_type == ScheduleType.STATBREAK:
+        if match.effective_status == MatchStatus.COMPLETED:
+            return (
+                jsonify({"error": "Static break cannot be edited once its start time has passed."}),
+                409,
+            )
+    elif match.status in _LOCKED_STATUSES:
         return (
             jsonify({"error": (f"Match cannot be edited once it has started (current status: {match.status.value}).")}),
             409,
@@ -150,9 +155,12 @@ def update_match_api(tournament_url, match_id):
         ),
         ScheduleType.SAFE: (ScheduleType.SAFE, ScheduleType.FAST),
         ScheduleType.FAST: (ScheduleType.FAST,),
-        ScheduleType.BREAK: (ScheduleType.BREAK, ScheduleType.STATBREAK),
+        # Breaks and joins interconvert (both are dynamic field reservations);
+        # nothing converts TO a STATBREAK — create one deliberately, with a
+        # start time, instead of mutating a dynamic break into a static one.
+        ScheduleType.BREAK: (ScheduleType.BREAK, ScheduleType.JOIN),
         ScheduleType.STATBREAK: (ScheduleType.STATBREAK, ScheduleType.BREAK),
-        ScheduleType.JOIN: (ScheduleType.JOIN,),
+        ScheduleType.JOIN: (ScheduleType.JOIN, ScheduleType.BREAK),
     }
 
     # Extract fields. `name` is intentionally not extracted — match names are immutable
@@ -182,7 +190,26 @@ def update_match_api(tournament_url, match_id):
                     jsonify(
                         {
                             "error": f"Match type cannot be changed from {current_schedule_type.value} to {new_schedule_type.value}. "
-                            "Allowed changes: Static→Safe/Fast, Safe→Fast only."
+                            "Allowed changes: Static→Safe/Fast, Safe→Fast, Break↔Join, Static Break→Break."
+                        }
+                    ),
+                    400,
+                )
+            # Structural rows sharing a name form one logical group; converting a
+            # single row of a multi-row group would leave it mixed-type. Convert
+            # the whole group at once via the break-groups endpoint instead.
+            if (
+                new_schedule_type != current_schedule_type
+                and current_schedule_type in STRUCTURAL_SCHEDULE_TYPES
+                and Match.query.filter_by(event=tournament_url, name=match.name)
+                .filter(Match.schedule_type.in_(STRUCTURAL_SCHEDULE_TYPES), Match.uuid != match.uuid)
+                .count()
+                > 0
+            ):
+                return (
+                    jsonify(
+                        {
+                            "error": "This break/join spans multiple fields; convert the whole group via the group editor."
                         }
                     ),
                     400,
@@ -904,7 +931,9 @@ def update_break_group_api(tournament_url, name):
     """Edit every same-name structural row at once (length/start_time/fields).
 
     JOIN groups only support field membership changes; length stays 0. Team
-    requirements are rejected for every structural type.
+    requirements are rejected for every structural type. The whole group can
+    be converted BREAK↔JOIN (JOIN→BREAK requires a length); nothing converts
+    to STATBREAK, and a STATBREAK group is locked once its start has passed.
     """
     if not _check_to(tournament_url):
         return jsonify({"error": "Forbidden"}), 403
@@ -918,26 +947,43 @@ def update_break_group_api(tournament_url, name):
         return jsonify({"error": "Invalid JSON"}), 400
 
     group_type = rows[0].schedule_type
-    is_join = group_type == ScheduleType.JOIN
-    # No started-lock here: structural statuses are never user-started (BREAK/JOIN
-    # complete when their dependencies complete; STATBREAK status is derived from
-    # the current time when read), and the recompute below re-derives them.
+    # A completed static break is history: its window has passed, so there is
+    # nothing meaningful left to edit. (BREAK/JOIN statuses are solver-derived
+    # and re-derived by the recompute below, so they carry no lock.)
+    if group_type == ScheduleType.STATBREAK and rows[0].effective_status == MatchStatus.COMPLETED:
+        return jsonify({"error": "Static break cannot be edited once its start time has passed."}), 409
 
-    # The group PUT never changes the group's type. BREAK↔STATBREAK conversion
-    # goes through the single-match PUT; JOIN converts to/from nothing.
+    # Whole-group type conversion: BREAK↔JOIN only (both are dynamic field
+    # reservations). Nothing converts TO a STATBREAK — create one deliberately
+    # with a start time instead.
+    convert_to: ScheduleType | None = None
     if data.get("schedule_type") is not None:
         try:
             requested_type = ScheduleType(data.get("schedule_type"))
         except ValueError:
             requested_type = None
-        if requested_type != group_type:
-            if is_join or requested_type == ScheduleType.JOIN:
-                return jsonify({"error": "Joins cannot be converted to or from breaks."}), 400
-            return jsonify({"error": "A group's schedule type cannot be changed here."}), 400
+        if requested_type is not None and requested_type != group_type:
+            if group_type in (ScheduleType.BREAK, ScheduleType.JOIN) and requested_type in (
+                ScheduleType.BREAK,
+                ScheduleType.JOIN,
+            ):
+                convert_to = requested_type
+            elif requested_type == ScheduleType.STATBREAK:
+                return jsonify(
+                    {"error": "Breaks cannot be converted to static breaks; create a new static break instead."}
+                ), 400
+            else:
+                return jsonify({"error": "A group's schedule type cannot be changed here."}), 400
+
+    effective_type = convert_to or group_type
+    is_join = effective_type == ScheduleType.JOIN
 
     length = data.get("length")
     if is_join:
-        length = None  # JOIN invariant: length stays 0.
+        length = 0 if convert_to is not None else None  # JOIN invariant: length is 0.
+    elif convert_to == ScheduleType.BREAK and length is None:
+        # JOIN rows carry length 0; a break needs a real duration.
+        return jsonify({"error": "Length (minutes) is required when converting a join to a break."}), 400
     elif length is not None:
         try:
             length = int(length)
@@ -981,6 +1027,8 @@ def update_break_group_api(tournament_url, name):
 
     # Shared edits on existing rows.
     for m in rows:
+        if convert_to is not None:
+            m.schedule_type = convert_to
         if length is not None:
             m.nominal_length = length
         if start_dt is not None:
@@ -1003,15 +1051,15 @@ def update_break_group_api(tournament_url, name):
                 )
             match = Match(event=tournament_url, name=name)
             match.field = f
-            match.schedule_type = group_type
-            match.nominal_length = template.nominal_length
+            match.schedule_type = effective_type
+            match.nominal_length = length if length is not None else template.nominal_length
             match.skip_condition = None
-            if group_type == ScheduleType.STATBREAK:
+            if effective_type == ScheduleType.STATBREAK:
                 match.nominal_start_time = template.nominal_start_time
                 match.scheduled_start_time = template.scheduled_start_time
             db.session.add(match)
             db.session.flush()
-            if group_type in (ScheduleType.BREAK, ScheduleType.JOIN):
+            if effective_type in (ScheduleType.BREAK, ScheduleType.JOIN):
                 tail = _field_chain_tail(tournament_url, f, exclude_uuids={match.uuid})
                 if tail is not None:
                     update_match_previous_link(match, tail.uuid, tournament_url, is_new=True)

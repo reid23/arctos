@@ -1538,6 +1538,9 @@ pub struct CreateBreakGroupRequest {
 /// Edit every same-name break row at once. `None` fields are left unchanged.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UpdateBreakGroupRequest {
+    /// Whole-group conversion; only BREAK↔JOIN is accepted by the server.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schedule_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub length: Option<u32>,
     /// STATBREAK groups only.

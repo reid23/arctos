@@ -398,11 +398,13 @@ class TestBreakGroupEndpoints:
             assert _close(m.nominal_start_time, expected)
             assert _close(m.scheduled_start_time, expected)
 
-    def test_past_start_statbreak_still_editable(self, app, client, tournament, to_player):
-        """STATBREAK status is time-derived at read time and never stored, so a
-        past-start STATBREAK stays editable (group PUT and single-match PUT)."""
+    def test_statbreak_locked_once_start_passes(self, app, client, tournament, to_player):
+        """A STATBREAK whose start has passed is history: both the group PUT and
+        the single-match PUT refuse to edit it. Before the start it's editable."""
         t = self._login(app, client, tournament, to_player)
-        start = (datetime.now(timezone.utc) - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # Future STATBREAK: fully editable.
+        future = (datetime.now(timezone.utc) + timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
         resp = client.post(
             f"/_api/tournaments/{t.url}/break-groups",
             json={
@@ -410,34 +412,47 @@ class TestBreakGroupEndpoints:
                 "schedule_type": "STATBREAK",
                 "length": 30,
                 "fields": ["Field 1"],
-                "start_time": start,
+                "start_time": future,
             },
         )
         assert resp.status_code == 200, resp.get_json()
         row = Match.query.filter_by(event=t.url, name="Dinner").one()
+        assert row.effective_status == MatchStatus.NOT_STARTED
+        resp = client.put(
+            f"/_api/tournaments/{t.url}/break-groups/Dinner",
+            json={"length": 60},
+        )
+        assert resp.status_code == 200, resp.get_json()
+        assert Match.query.filter_by(event=t.url, name="Dinner").one().nominal_length == 60
+
+        # Past-start STATBREAK: locked on both endpoints.
+        past = (datetime.now(timezone.utc) - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        resp = client.post(
+            f"/_api/tournaments/{t.url}/break-groups",
+            json={
+                "name": "Lunch",
+                "schedule_type": "STATBREAK",
+                "length": 30,
+                "fields": ["Field 1"],
+                "start_time": past,
+            },
+        )
+        assert resp.status_code == 200, resp.get_json()
+        row = Match.query.filter_by(event=t.url, name="Lunch").one()
         assert row.effective_status == MatchStatus.COMPLETED  # start passed
         assert row.status == MatchStatus.NOT_STARTED  # never stored
 
-        new_start = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
         resp = client.put(
-            f"/_api/tournaments/{t.url}/break-groups/Dinner",
-            json={"length": 60, "start_time": new_start},
+            f"/_api/tournaments/{t.url}/break-groups/Lunch",
+            json={"length": 90},
         )
-        assert resp.status_code == 200, resp.get_json()
-        row = Match.query.filter_by(event=t.url, name="Dinner").one()
-        expected = datetime.fromisoformat(new_start.replace("Z", "+00:00")).replace(tzinfo=None)
-        assert row.nominal_length == 60
-        assert _close(row.nominal_start_time, expected)
-        assert row.effective_status == MatchStatus.NOT_STARTED  # start now in the future
-
-        # Single-match update endpoint also works.
+        assert resp.status_code == 409
         resp = client.put(
             f"/_api/tournaments/{t.url}/matches/{row.uuid}",
             json={"length": 90},
         )
-        assert resp.status_code == 200, resp.get_json()
-        row = Match.query.filter_by(event=t.url, name="Dinner").one()
-        assert row.nominal_length == 90
+        assert resp.status_code == 409
+        assert Match.query.filter_by(event=t.url, name="Lunch").one().nominal_length == 30
 
     def test_statbreak_serialized_status_is_time_derived(self, app, client, tournament, to_player):
         """The schedule payload reports the time-derived STATBREAK status, not
@@ -499,8 +514,8 @@ class TestBreakGroupEndpoints:
         assert get_match_ref_team_ids(brk) == []
         assert brk.team1 is None and brk.team2 is None
 
-    def test_break_to_statbreak_conversion(self, app, client, tournament, to_player):
-        """BREAK→STATBREAK conversion via the single-match PUT is allowed."""
+    def test_statbreak_conversion_rules(self, app, client, tournament, to_player):
+        """Nothing converts TO a STATBREAK; STATBREAK→BREAK is still allowed."""
         t = self._login(app, client, tournament, to_player)
         with app.app_context():
             base = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -510,18 +525,43 @@ class TestBreakGroupEndpoints:
             a1.next_match = brk.uuid
             db.session.commit()
             brk_uuid = brk.uuid
+            a1_uuid = a1.uuid
 
+        # BREAK → STATBREAK: rejected (create a static break deliberately instead).
         start = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
         resp = client.put(
             f"/_api/tournaments/{t.url}/matches/{brk_uuid}",
             json={"schedule_type": "STATBREAK", "length": 20, "start_time": start},
         )
+        assert resp.status_code == 400
+        assert Match.query.filter_by(uuid=brk_uuid).one().schedule_type == ScheduleType.BREAK
+
+        # Group PUT rejects it too.
+        resp = client.put(
+            f"/_api/tournaments/{t.url}/break-groups/Break A",
+            json={"schedule_type": "STATBREAK"},
+        )
+        assert resp.status_code == 400
+
+        # STATBREAK → BREAK (future-start, so not locked): still allowed.
+        resp = client.post(
+            f"/_api/tournaments/{t.url}/break-groups",
+            json={
+                "name": "Pause",
+                "schedule_type": "STATBREAK",
+                "length": 15,
+                "fields": ["Field 1"],
+                "start_time": start,
+            },
+        )
         assert resp.status_code == 200, resp.get_json()
-        brk = Match.query.filter_by(uuid=brk_uuid).one()
-        assert brk.schedule_type == ScheduleType.STATBREAK
-        expected = datetime.fromisoformat(start.replace("Z", "+00:00")).replace(tzinfo=None)
-        assert _close(brk.nominal_start_time, expected)
-        assert _close(brk.scheduled_start_time, expected)
+        sb_uuid = Match.query.filter_by(event=t.url, name="Pause").one().uuid
+        resp = client.put(
+            f"/_api/tournaments/{t.url}/matches/{sb_uuid}",
+            json={"schedule_type": "BREAK", "length": 15, "previous_match_id": a1_uuid},
+        )
+        assert resp.status_code == 200, resp.get_json()
+        assert Match.query.filter_by(uuid=sb_uuid).one().schedule_type == ScheduleType.BREAK
 
 
 @pytest.mark.integration
@@ -659,48 +699,75 @@ class TestJoinGroupEndpoints:
         resp = client.delete(f"/_api/tournaments/{t.url}/break-groups/Sync")
         assert resp.status_code == 404
 
-    def test_join_break_conversion_rejected(self, app, client, tournament, to_player):
+    def test_join_break_group_conversion(self, app, client, tournament, to_player):
+        """Whole-group BREAK↔JOIN conversion via the group PUT."""
         t = self._login(app, client, tournament, to_player)
         self._mk_anchors(app, t)
         resp = client.post(
             f"/_api/tournaments/{t.url}/break-groups",
-            json={"name": "Sync", "schedule_type": "JOIN", "fields": ["Field 1"]},
+            json={"name": "Sync", "schedule_type": "JOIN", "fields": ["Field 1", "Field 2"]},
         )
         assert resp.status_code == 200, resp.get_json()
-        resp = client.post(
-            f"/_api/tournaments/{t.url}/break-groups",
-            json={"name": "Lunch", "schedule_type": "BREAK", "length": 30, "fields": ["Field 1"]},
-        )
-        assert resp.status_code == 200, resp.get_json()
-        join_uuid = Match.query.filter_by(event=t.url, name="Sync").one().uuid
-        break_uuid = Match.query.filter_by(event=t.url, name="Lunch").one().uuid
 
-        # Single-match PUT: JOIN converts to/from nothing.
-        resp = client.put(
-            f"/_api/tournaments/{t.url}/matches/{join_uuid}",
-            json={"schedule_type": "BREAK", "length": 30},
-        )
-        assert resp.status_code == 400
-        resp = client.put(
-            f"/_api/tournaments/{t.url}/matches/{break_uuid}",
-            json={"schedule_type": "JOIN"},
-        )
-        assert resp.status_code == 400
-
-        # Group PUT: any type change involving JOIN is rejected.
+        # JOIN → BREAK requires a length (JOIN rows carry 0).
         resp = client.put(
             f"/_api/tournaments/{t.url}/break-groups/Sync",
             json={"schedule_type": "BREAK"},
         )
         assert resp.status_code == 400
         resp = client.put(
-            f"/_api/tournaments/{t.url}/break-groups/Lunch",
+            f"/_api/tournaments/{t.url}/break-groups/Sync",
+            json={"schedule_type": "BREAK", "length": 45},
+        )
+        assert resp.status_code == 200, resp.get_json()
+        rows = Match.query.filter_by(event=t.url, name="Sync").all()
+        assert len(rows) == 2
+        assert all(m.schedule_type == ScheduleType.BREAK for m in rows)
+        assert all(m.nominal_length == 45 for m in rows)
+
+        # And back: BREAK → JOIN forces length 0 on every row.
+        resp = client.put(
+            f"/_api/tournaments/{t.url}/break-groups/Sync",
             json={"schedule_type": "JOIN"},
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 200, resp.get_json()
+        rows = Match.query.filter_by(event=t.url, name="Sync").all()
+        assert all(m.schedule_type == ScheduleType.JOIN for m in rows)
+        assert all(m.nominal_length == 0 for m in rows)
 
-        assert Match.query.filter_by(uuid=join_uuid).one().schedule_type == ScheduleType.JOIN
-        assert Match.query.filter_by(uuid=break_uuid).one().schedule_type == ScheduleType.BREAK
+    def test_single_row_conversion_rules(self, app, client, tournament, to_player):
+        """Single-match PUT: BREAK↔JOIN allowed for lone rows only; a row of a
+        multi-field group must convert through the group endpoint."""
+        t = self._login(app, client, tournament, to_player)
+        anchors = self._mk_anchors(app, t)
+        resp = client.post(
+            f"/_api/tournaments/{t.url}/break-groups",
+            json={"name": "Lunch", "schedule_type": "BREAK", "length": 30, "fields": ["Field 1"]},
+        )
+        assert resp.status_code == 200, resp.get_json()
+        lone_uuid = Match.query.filter_by(event=t.url, name="Lunch").one().uuid
+        resp = client.put(
+            f"/_api/tournaments/{t.url}/matches/{lone_uuid}",
+            json={"schedule_type": "JOIN", "previous_match_id": anchors["Field 1"]},
+        )
+        assert resp.status_code == 200, resp.get_json()
+        m = Match.query.filter_by(uuid=lone_uuid).one()
+        assert m.schedule_type == ScheduleType.JOIN
+        assert m.nominal_length == 0
+
+        # Multi-field group: converting one row would leave the group mixed-type.
+        resp = client.post(
+            f"/_api/tournaments/{t.url}/break-groups",
+            json={"name": "Sync", "schedule_type": "JOIN", "fields": ["Field 1", "Field 2"]},
+        )
+        assert resp.status_code == 200, resp.get_json()
+        row = Match.query.filter_by(event=t.url, name="Sync", field="Field 1").one()
+        resp = client.put(
+            f"/_api/tournaments/{t.url}/matches/{row.uuid}",
+            json={"schedule_type": "BREAK", "length": 30},
+        )
+        assert resp.status_code == 400
+        assert "group" in (resp.get_json().get("error") or "").lower()
 
     def test_same_name_join_rows_merge_in_solver(self, app, client, tournament, to_player):
         """Rows created via the group endpoint still collapse into one JOIN node
