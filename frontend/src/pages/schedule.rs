@@ -4229,11 +4229,11 @@ fn TimelineEventCard(
     let event_id_for_enter = event.id.clone();
     let event_id_for_leave = event.id.clone();
     let can_drag = editor;
-    // Hovered dependency source: append the per-edge outline rings.
-    let event_style = match dep_shadow.as_deref() {
-        Some(shadow) => format!("{event_style} {shadow}"),
-        None => event_style.clone(),
-    };
+    // NOTE: the dependency rings are deliberately NOT merged into the block's
+    // inline style. Removing a property from a `style` string does not
+    // reliably remove it from the live DOM (the stale box-shadow survived
+    // until a full view teardown); a conditionally-rendered child element is
+    // diffed by element add/remove, which always cleans up.
     rsx! {
         div {
             class: "{event_class}",
@@ -4277,6 +4277,12 @@ fn TimelineEventCard(
                     });
                 }
             },
+            // Dependency rings: one colored ring per distinct edge this block
+            // supplies to the alt-hovered match. Rendered as a child element so
+            // mount/unmount fully controls the visual (see NOTE above rsx!).
+            if let Some(shadow) = dep_shadow.as_deref() {
+                div { class: "schedule-dep-rings", style: "{shadow}" }
+            }
             if !is_structural || editor {
                 span {
                     class: "schedule-timeline-status-tag schedule-timeline-status-tag--corner",
@@ -4605,46 +4611,36 @@ struct DepBlockGeom {
     height_slots: f64,
 }
 
-/// Fan offset for the `index`-th of `n` line endpoints sharing a block edge:
-/// centered on the midpoint, ~0.6%-of-layer steps, clamped so the whole fan
-/// stays within the middle 80% of the block's width. Counts must cover only
-/// *visible* lines, otherwise a lone line gets a spurious offset.
-fn dep_fan_offset(index: usize, n: usize, block_width: f64) -> f64 {
-    let step = if n > 1 {
-        (0.6_f64).min(block_width * 0.8 / (n as f64 - 1.0))
-    } else {
-        0.0
-    };
-    (index as f64 - (n as f64 - 1.0) / 2.0) * step
-}
-
 /// Endpoints for one dependency line, in events-layer percentages
 /// (x: % of width, y: % of height).
 ///
 /// Lines always flow supply → demand: they LEAVE the BOTTOM edge of the
 /// dependency block `dep` and ENTER the TOP edge of the hovered (dependent)
-/// block `hovered`, each at the block's horizontal midpoint plus a fan offset.
-///
-/// - `exit_index`/`n_exit`: this line's position among the visible lines
-///   leaving `dep` (fans the bottom-edge exits when one dependency supplies
-///   several distinct things).
-/// - `entry_index`/`n_entry`: this line's position among ALL visible lines
-///   entering `hovered` (fans the top-edge entries).
+/// block `hovered`, each at the block's exact horizontal midpoint. Lines that
+/// share the same (dep, hovered) pair are separated afterwards by a whole-line
+/// pixel translate (`dep_pair_dx`), not by moving the endpoints.
 fn dep_line_endpoints(
-    exit_index: usize,
-    n_exit: usize,
-    entry_index: usize,
-    n_entry: usize,
     dep: DepBlockGeom,
     hovered: DepBlockGeom,
     slots_per_day: usize,
 ) -> (f64, f64, f64, f64) {
     let slot_pct = |slots: f64| slots / slots_per_day as f64 * 100.0;
-    let x1 = dep.left + dep.width / 2.0 + dep_fan_offset(exit_index, n_exit, dep.width);
+    let x1 = dep.left + dep.width / 2.0;
     let y1 = slot_pct(dep.top_slots + dep.height_slots);
-    let x2 = hovered.left + hovered.width / 2.0 + dep_fan_offset(entry_index, n_entry, hovered.width);
+    let x2 = hovered.left + hovered.width / 2.0;
     let y2 = slot_pct(hovered.top_slots);
     (x1, y1, x2, y2)
+}
+
+/// Stroke width of the dependency lines (px).
+const DEP_LINE_STROKE: f64 = 3.75;
+
+/// Horizontal pixel translate for the `index`-th of `n` lines sharing the same
+/// (dependency, hovered) pair: lines sit RIGHT next to each other — edge to
+/// edge, like one line n× as thick colored in stripes. Applied as an SVG
+/// `translate` so the spacing is exact pixels at any layer width or zoom.
+fn dep_pair_dx(index: usize, n: usize) -> f64 {
+    (index as f64 - (n as f64 - 1.0) / 2.0) * DEP_LINE_STROKE
 }
 
 #[cfg(test)]
@@ -4668,8 +4664,8 @@ mod dep_geometry_tests {
         let dep = geom(0.0, 25.0, 16.0, 2.0);
         // Hovered block below it, second column, 10:00–11:00.
         let hovered = geom(25.0, 25.0, 20.0, 2.0);
-        let (x1, y1, x2, y2) = dep_line_endpoints(0, 1, 0, 1, dep, hovered, SLOTS);
-        assert_eq!(x1, 12.5); // dependency horizontal midpoint, no fan offset
+        let (x1, y1, x2, y2) = dep_line_endpoints(dep, hovered, SLOTS);
+        assert_eq!(x1, 12.5); // dependency horizontal midpoint
         assert_eq!(y1, (16.0 + 2.0) / 48.0 * 100.0); // dependency BOTTOM edge
         assert_eq!(x2, 25.0 + 12.5); // hovered horizontal midpoint
         assert_eq!(y2, 20.0 / 48.0 * 100.0); // hovered TOP edge
@@ -4681,36 +4677,24 @@ mod dep_geometry_tests {
         // hovered block's top (the flow direction is semantic, not spatial).
         let dep = geom(0.0, 25.0, 30.0, 2.0);
         let hovered = geom(37.5, 12.5, 20.0, 2.0);
-        let (x1, y1, _, y2) = dep_line_endpoints(0, 1, 0, 1, dep, hovered, SLOTS);
+        let (x1, y1, x2, y2) = dep_line_endpoints(dep, hovered, SLOTS);
         assert_eq!(x1, 12.5);
         assert_eq!(y1, (30.0 + 2.0) / 48.0 * 100.0); // dep bottom
-        assert_eq!(y2, 20.0 / 48.0 * 100.0); // hovered top (lane-inset midpoint on x2)
+        assert_eq!(x2, 37.5 + 6.25); // lane-inset midpoint
+        assert_eq!(y2, 20.0 / 48.0 * 100.0); // hovered top
     }
 
     #[test]
-    fn entry_fan_is_centered_and_stays_inside_block() {
-        let dep = geom(50.0, 25.0, 16.0, 2.0);
-        let hovered = geom(0.0, 25.0, 20.0, 2.0);
-        let n = 3;
-        let xs: Vec<f64> = (0..n)
-            .map(|i| dep_line_endpoints(0, 1, i, n, dep, hovered, SLOTS).2)
-            .collect();
-        // Centered on the hovered block's midpoint, symmetric, evenly spaced.
-        assert_eq!(xs[1], 12.5);
-        assert!((xs[1] - xs[0] - (xs[2] - xs[1])).abs() < 1e-9);
-        // Whole fan within the hovered block's width.
-        assert!(xs[0] > 0.0 && xs[2] < 25.0);
-    }
-
-    #[test]
-    fn exit_fan_separates_lines_leaving_one_dependency() {
-        // A dependency supplying a team AND a ref: two exits, side by side.
-        let dep = geom(0.0, 25.0, 16.0, 2.0);
-        let hovered = geom(25.0, 25.0, 20.0, 2.0);
-        let (xa, ..) = dep_line_endpoints(0, 2, 0, 2, dep, hovered, SLOTS);
-        let (xb, ..) = dep_line_endpoints(1, 2, 1, 2, dep, hovered, SLOTS);
-        assert!(xa < 12.5 && 12.5 < xb); // straddle the midpoint
-        assert!((12.5 - xa - (xb - 12.5)).abs() < 1e-9); // symmetric
+    fn pair_lines_hug_edge_to_edge() {
+        // Two lines on the same (dep, hovered) pair: shifted by exactly one
+        // stroke width total, symmetric around zero — one thick bi-color line.
+        let (a, b) = (dep_pair_dx(0, 2), dep_pair_dx(1, 2));
+        assert_eq!(b - a, DEP_LINE_STROKE); // edges touch, no gap, no overlap
+        assert_eq!(a + b, 0.0); // centered on the true line position
+        // A lone line gets no shift; three lines stay contiguous and centered.
+        assert_eq!(dep_pair_dx(0, 1), 0.0);
+        assert_eq!(dep_pair_dx(1, 3), 0.0);
+        assert_eq!(dep_pair_dx(2, 3) - dep_pair_dx(1, 3), DEP_LINE_STROKE);
     }
 
     #[test]
@@ -6372,39 +6356,33 @@ fn ScheduleTimeline(
                             ))
                         })
                         .collect();
-                    // Lines flow dependency-bottom → hovered-top. Entries fan
-                    // by position among ALL visible lines; exits fan by
-                    // position among the lines leaving that same dependency.
-                    let n_entry = visible_dep_edges.len();
-                    let n_exit_by_dep: HashMap<&str, usize> = {
+                    // Lines flow dependency-bottom → hovered-top, endpoint =
+                    // exact midpoints. Lines sharing the same (dep, hovered)
+                    // pair are translated sideways by whole stroke-widths so
+                    // they hug like one thick multi-colored line.
+                    let n_pair_by_dep: HashMap<&str, usize> = {
                         let mut m: HashMap<&str, usize> = HashMap::new();
                         for (dep_id, ..) in &visible_dep_edges {
                             *m.entry(dep_id.as_str()).or_insert(0) += 1;
                         }
                         m
                     };
-                    let mut exit_seen: HashMap<&str, usize> = HashMap::new();
-                    let dep_lines: Vec<(f64, f64, f64, f64, u8)> = visible_dep_edges
+                    let mut pair_seen: HashMap<&str, usize> = HashMap::new();
+                    // (x1, y1, x2, y2, dx_px, kind)
+                    let dep_lines: Vec<(f64, f64, f64, f64, f64, u8)> = visible_dep_edges
                         .iter()
-                        .enumerate()
-                        .map(|(entry_index, (dep_id, dep_geom, hovered_geom, kind))| {
-                            let exit_index = {
-                                let e = exit_seen.entry(dep_id.as_str()).or_insert(0);
+                        .map(|(dep_id, dep_geom, hovered_geom, kind)| {
+                            let pair_index = {
+                                let e = pair_seen.entry(dep_id.as_str()).or_insert(0);
                                 let i = *e;
                                 *e += 1;
                                 i
                             };
-                            let n_exit = *n_exit_by_dep.get(dep_id.as_str()).unwrap_or(&1);
-                            let (x1, y1, x2, y2) = dep_line_endpoints(
-                                exit_index,
-                                n_exit,
-                                entry_index,
-                                n_entry,
-                                *dep_geom,
-                                *hovered_geom,
-                                slots_per_day,
-                            );
-                            (x1, y1, x2, y2, *kind)
+                            let n_pair = *n_pair_by_dep.get(dep_id.as_str()).unwrap_or(&1);
+                            let dx = dep_pair_dx(pair_index, n_pair);
+                            let (x1, y1, x2, y2) =
+                                dep_line_endpoints(*dep_geom, *hovered_geom, slots_per_day);
+                            (x1, y1, x2, y2, dx, *kind)
                         })
                         .collect();
                     let dep_lines_active = !dep_lines.is_empty();
@@ -6548,16 +6526,19 @@ fn ScheduleTimeline(
                                 svg {
                                     class: "schedule-dep-lines",
                                     style: "position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; z-index: 30; overflow: visible;",
-                                    for (i, (x1, y1, x2, y2, kind)) in dep_lines.iter().enumerate() {
+                                    for (i, (x1, y1, x2, y2, dx, kind)) in dep_lines.iter().enumerate() {
+                                        // Same-pair lines are shifted by whole
+                                        // stroke-widths so they touch edge to edge.
                                         g {
                                             key: "{i}",
+                                            transform: "translate({dx}, 0)",
                                         line {
                                             x1: "{x1}%",
                                             y1: "{y1}%",
                                             x2: "{x2}%",
                                             y2: "{y2}%",
                                             stroke: dep_edge_color(*kind),
-                                            stroke_width: "2.5",
+                                            stroke_width: "{DEP_LINE_STROKE}",
                                             stroke_dasharray: match kind {
                                                 0 | 1 => "none",
                                                 _ => "3 3",

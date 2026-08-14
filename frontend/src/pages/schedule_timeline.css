@@ -1076,6 +1076,17 @@
     z-index: 19 !important;
 }
 
+/* Ring carrier for the alt-dependency view: hugs its block and paints the
+ * per-edge box-shadow rings; mounted/unmounted with the view so no stale
+ * inline style can ever linger on the block itself. */
+.schedule-dep-rings {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    z-index: 1;
+}
+
 /* Legend chip shown while the alt-dependency view is active. */
 .schedule-dep-legend {
     position: sticky;
