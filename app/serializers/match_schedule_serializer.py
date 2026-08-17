@@ -30,7 +30,7 @@ class MatchScheduleSerializer:
             tag: The :class:`~app.models.tournament.Tag` ORM instance.
 
         Returns:
-            Dict with up to three keys: ``id``, ``name``, ``team``.
+            Dict with up to four keys: ``id``, ``name``, ``team``, ``expression``.
         """
         result = {}
         if tag.id is not None:
@@ -39,7 +39,57 @@ class MatchScheduleSerializer:
             result["name"] = tag.name
         if getattr(tag, "team", None):
             result["team"] = tag.team
+        if getattr(tag, "expression", None):
+            result["expression"] = tag.expression
         return result
+
+    @staticmethod
+    def script_variable_to_dict(variable) -> dict[str, Any]:
+        """Serialise a :class:`~app.models.tournament.ScriptVariable` to a TOML-compatible dict.
+
+        Variables are reconciled by name on import (unique per event), so no
+        ``id`` is exported.
+
+        Args:
+            variable: The :class:`~app.models.tournament.ScriptVariable` ORM
+                instance.
+
+        Returns:
+            Dict with ``name`` and ``expression`` keys.
+        """
+        result = {}
+        if variable.name:
+            result["name"] = variable.name
+        if variable.expression:
+            result["expression"] = variable.expression
+        return result
+
+    @staticmethod
+    def script_variable_from_dict(data: dict[str, Any], tournament_url: str) -> Result[dict[str, Any], ValidationError]:
+        """Convert a TOML ``[[variables]]`` dict to ScriptVariable creation data.
+
+        Only checks presence / non-emptiness of ``name`` and ``expression``;
+        identifier, reserved-name, cycle, and expression validation happen in
+        the import service (mirroring the CRUD endpoint's rules).
+        """
+        if "name" not in data:
+            return Err(ValidationError("Script variable missing required field: name"))
+
+        name = str(data["name"]).strip()
+        if not name:
+            return Err(ValidationError("Script variable name cannot be empty"))
+
+        expression = str(data.get("expression", "")).strip()
+        if not expression:
+            return Err(ValidationError(f"Script variable '{name}' missing required field: expression"))
+
+        return Ok(
+            {
+                "event": tournament_url,
+                "name": name,
+                "expression": expression,
+            }
+        )
 
     @staticmethod
     def field_to_dict(field) -> dict[str, Any]:
@@ -168,6 +218,7 @@ class MatchScheduleSerializer:
             "event": tournament_url,
             "name": name,
             "team": str(data.get("team", "")).strip() or None,
+            "expression": str(data.get("expression", "")).strip() or None,
         }
 
         # Include id if present (for same-tournament updates)

@@ -724,3 +724,297 @@ def test_reimport_of_rewritten_schedule_is_idempotent(test_db, tournament):
     assert m1.team1_initial == "tag::Mystery Team"
     tags = Tag.query.filter_by(event=tournament_url, name="Mystery Team").all()
     assert len(tags) == 1
+
+
+@pytest.mark.unit
+def test_tag_expression_roundtrips_through_toml(test_db, tournament):
+    """Tag expressions survive export -> wipe -> import, alongside a team override."""
+    tournament_url = tournament.url
+    _register_team(tournament_url, "known-team")
+
+    field = Field(event=tournament_url, name="Field 1", camera=None)
+    m1 = Match(
+        name="Semi A",
+        event=tournament_url,
+        field="Field 1",
+        schedule_type="STATIC",
+        set_type="SETS",
+        nominal_length=60,
+    )
+    expr_tag = Tag(event=tournament_url, name="SemiWinner", expression="(winner {Semi A})")
+    both_tag = Tag(event=tournament_url, name="Champ", team="known-team", expression="(winner {Semi A})")
+    db.session.add_all([field, m1, expr_tag, both_tag])
+    db.session.commit()
+
+    export_res = ScheduleImportExportService.export_schedule(tournament_url)
+    assert isinstance(export_res, Ok), getattr(export_res, "value", export_res)
+    exported = export_res.val
+    assert 'expression = "(winner {Semi A})"' in exported
+    assert 'team = "known-team"' in exported
+
+    # Wipe the tags to simulate a fresh tournament state, then re-import.
+    Tag.query.filter_by(event=tournament_url).delete()
+    db.session.commit()
+
+    res = ScheduleImportExportService.import_schedule(tournament_url, exported)
+    assert isinstance(res, Ok), getattr(res, "value", res)
+    assert res.val.warnings == []
+
+    restored = Tag.query.filter_by(event=tournament_url, name="SemiWinner").first()
+    assert restored is not None
+    assert restored.expression == "(winner {Semi A})"
+    assert restored.team is None
+
+    # A tag with BOTH an expression and a manual team override keeps both.
+    restored_both = Tag.query.filter_by(event=tournament_url, name="Champ").first()
+    assert restored_both is not None
+    assert restored_both.expression == "(winner {Semi A})"
+    assert restored_both.team == "known-team"
+
+
+@pytest.mark.unit
+def test_script_variables_roundtrip_through_toml(test_db, tournament):
+    """Variables export as a [[variables]] section and survive export -> wipe -> import."""
+    from models import ScriptVariable
+
+    tournament_url = tournament.url
+    db.session.add(ScriptVariable(event=tournament_url, name="base", expression="2"))
+    db.session.add(ScriptVariable(event=tournament_url, name="doubled", expression="(* base 2)"))
+    db.session.commit()
+
+    export_res = ScheduleImportExportService.export_schedule(tournament_url)
+    assert isinstance(export_res, Ok), getattr(export_res, "value", export_res)
+    exported = export_res.val
+    assert "[[variables]]" in exported
+    assert 'name = "base"' in exported
+    assert 'expression = "(* base 2)"' in exported
+
+    # Wipe all variables, then re-import the exported file.
+    ScriptVariable.query.filter_by(event=tournament_url).delete()
+    db.session.commit()
+
+    res = ScheduleImportExportService.import_schedule(tournament_url, exported)
+    assert isinstance(res, Ok), getattr(res, "value", res)
+    assert res.val.variables_created == 2
+    assert res.val.warnings == []
+
+    rows = {v.name: v.expression for v in ScriptVariable.query.filter_by(event=tournament_url).all()}
+    assert rows == {"base": "2", "doubled": "(* base 2)"}
+
+
+@pytest.mark.unit
+def test_variables_export_section_placed_before_tags(test_db, tournament):
+    """[[variables]] is written near (before) the [[tags]] section, and only when variables exist."""
+    from models import ScriptVariable
+
+    tournament_url = tournament.url
+
+    # Without variables the section is omitted entirely.
+    db.session.add(Tag(event=tournament_url, name="Pool A"))
+    db.session.commit()
+    export_res = ScheduleImportExportService.export_schedule(tournament_url)
+    assert isinstance(export_res, Ok)
+    assert "[[variables]]" not in export_res.val
+
+    db.session.add(ScriptVariable(event=tournament_url, name="threshold", expression="(+ 1 2)"))
+    db.session.commit()
+    export_res = ScheduleImportExportService.export_schedule(tournament_url)
+    assert isinstance(export_res, Ok)
+    exported = export_res.val
+    assert exported.index("[[variables]]") < exported.index("[[tags]]")
+
+
+@pytest.mark.unit
+def test_import_reconciles_variables_and_deletes_missing(test_db, tournament):
+    """Import updates variables by name, creates new ones, and deletes those absent from the file."""
+    from models import ScriptVariable
+
+    tournament_url = tournament.url
+    db.session.add(ScriptVariable(event=tournament_url, name="keep", expression="1"))
+    db.session.add(ScriptVariable(event=tournament_url, name="stale", expression="2"))
+    db.session.commit()
+
+    toml_content = textwrap.dedent(
+        """
+        [[variables]]
+        name = "keep"
+        expression = "(+ 1 1)"
+
+        [[variables]]
+        name = "fresh"
+        expression = "3"
+        """
+    ).strip()
+
+    res = ScheduleImportExportService.import_schedule(tournament_url, toml_content)
+    assert isinstance(res, Ok), getattr(res, "value", res)
+    assert res.val.variables_updated == 1
+    assert res.val.variables_created == 1
+
+    rows = {v.name: v.expression for v in ScriptVariable.query.filter_by(event=tournament_url).all()}
+    assert rows == {"keep": "(+ 1 1)", "fresh": "3"}
+
+    # A file without a [[variables]] section is authoritative too: all
+    # variables for the tournament are deleted (same semantics as tags).
+    res = ScheduleImportExportService.import_schedule(tournament_url, "")
+    assert isinstance(res, Ok)
+    assert ScriptVariable.query.filter_by(event=tournament_url).count() == 0
+
+
+@pytest.mark.unit
+def test_import_rejects_invalid_variable_entries(test_db, tournament):
+    """Bad identifiers, reserved names, cycles, and unparseable expressions fail the import."""
+    from app.exceptions import ValidationError
+    from models import ScriptVariable
+
+    bad_files = {
+        "bad identifier": '[[variables]]\nname = "has space"\nexpression = "1"',
+        "reserved name": '[[variables]]\nname = "winner"\nexpression = "1"',
+        "missing expression": '[[variables]]\nname = "x"',
+        "duplicate name": (
+            '[[variables]]\nname = "x"\nexpression = "1"\n\n[[variables]]\nname = "x"\nexpression = "2"'
+        ),
+        "cycle": (
+            '[[variables]]\nname = "a"\nexpression = "(+ b 1)"\n\n[[variables]]\nname = "b"\nexpression = "(+ a 1)"'
+        ),
+        "self reference": '[[variables]]\nname = "loop"\nexpression = "(+ loop 1)"',
+        "unparseable expression": '[[variables]]\nname = "bad"\nexpression = "(+ 1"',
+    }
+
+    for label, toml_content in bad_files.items():
+        res = ScheduleImportExportService.import_schedule(tournament.url, toml_content)
+        match res:
+            case Ok(_):
+                raise AssertionError(f"Expected Err(ValidationError) for {label}")
+            case Err(err):
+                assert isinstance(err, ValidationError), label
+        # Failed imports must not leave any variables behind.
+        assert ScriptVariable.query.filter_by(event=tournament.url).count() == 0, label
+
+
+@pytest.mark.unit
+def test_import_orders_variables_before_dependent_tag_expressions(test_db, tournament):
+    """A tag expression referencing a variable (which references an in-file match) imports cleanly."""
+    from models import ScriptVariable
+
+    tournament_url = tournament.url
+
+    toml_content = textwrap.dedent(
+        """
+        [[variables]]
+        name = "semi-winner"
+        expression = "(winner {Semi A})"
+
+        [[tags]]
+        name = "Champ"
+        expression = "semi-winner"
+
+        [[fields]]
+        name = "Field 1"
+
+        [[matches]]
+        name = "Semi A"
+        field = "Field 1"
+        schedule_type = "STATIC"
+        set_type = "SETS"
+        nominal_length = 60
+        """
+    ).strip()
+
+    res = ScheduleImportExportService.import_schedule(tournament_url, toml_content)
+    match res:
+        case Ok(result):
+            assert result.variables_created == 1
+            assert result.tags_created == 1
+            assert result.warnings == []
+        case Err(err):
+            raise AssertionError(f"Expected Ok(ImportResult), got Err({err})")
+
+    var = ScriptVariable.query.filter_by(event=tournament_url, name="semi-winner").first()
+    assert var is not None and var.expression == "(winner {Semi A})"
+    tag = Tag.query.filter_by(event=tournament_url, name="Champ").first()
+    assert tag is not None and tag.expression == "semi-winner"
+
+
+@pytest.mark.unit
+def test_import_rewrites_unknown_team_literals_in_tag_and_variable_expressions(test_db, tournament):
+    """Unknown [Team] literals in tag / variable expressions become [tag::Team] with warnings + auto-tags."""
+    from models import ScriptVariable
+
+    tournament_url = tournament.url
+    _register_team(tournament_url, "known-team")
+
+    toml_content = textwrap.dedent(
+        """
+        [[variables]]
+        name = "ghost"
+        expression = "[Ghost Team]"
+
+        [[tags]]
+        name = "Phantom"
+        expression = "[Phantom Squad]"
+
+        [[tags]]
+        name = "Known"
+        expression = "[known-team]"
+        """
+    ).strip()
+
+    res = ScheduleImportExportService.import_schedule(tournament_url, toml_content)
+    match res:
+        case Ok(result):
+            assert any("Ghost Team" in w for w in result.warnings)
+            assert any("Phantom Squad" in w for w in result.warnings)
+            assert not any("known-team" in w for w in result.warnings)
+        case Err(err):
+            raise AssertionError(f"Expected Ok(ImportResult), got Err({err})")
+
+    var = ScriptVariable.query.filter_by(event=tournament_url, name="ghost").first()
+    assert var.expression == "[tag::Ghost Team]"
+    assert Tag.query.filter_by(event=tournament_url, name="Phantom").first().expression == "[tag::Phantom Squad]"
+    # Registered team literal untouched.
+    assert Tag.query.filter_by(event=tournament_url, name="Known").first().expression == "[known-team]"
+
+    # Auto-created unassigned tags back the rewritten references.
+    for auto_name in ("Ghost Team", "Phantom Squad"):
+        auto_tag = Tag.query.filter_by(event=tournament_url, name=auto_name).first()
+        assert auto_tag is not None
+        assert auto_tag.team is None
+
+
+@pytest.mark.unit
+def test_reimport_of_rewritten_expressions_is_idempotent(test_db, tournament):
+    """Re-importing an export produced after expression rewrites must not double-tag (no tag::tag::X)."""
+    from models import ScriptVariable
+
+    tournament_url = tournament.url
+
+    toml_content = textwrap.dedent(
+        """
+        [[variables]]
+        name = "ghost"
+        expression = "[Ghost Team]"
+
+        [[tags]]
+        name = "Phantom"
+        expression = "[Phantom Squad]"
+        """
+    ).strip()
+
+    res = ScheduleImportExportService.import_schedule(tournament_url, toml_content)
+    assert isinstance(res, Ok), getattr(res, "value", res)
+    assert len(res.val.warnings) == 2
+
+    export_res = ScheduleImportExportService.export_schedule(tournament_url)
+    assert isinstance(export_res, Ok)
+    exported = export_res.val
+    assert 'expression = "[tag::Ghost Team]"' in exported
+    assert "tag::tag::" not in exported
+
+    res2 = ScheduleImportExportService.import_schedule(tournament_url, exported)
+    assert isinstance(res2, Ok), getattr(res2, "value", res2)
+    assert res2.val.warnings == []
+
+    assert ScriptVariable.query.filter_by(event=tournament_url, name="ghost").first().expression == "[tag::Ghost Team]"
+    assert Tag.query.filter_by(event=tournament_url, name="Phantom").first().expression == "[tag::Phantom Squad]"
+    assert len(Tag.query.filter_by(event=tournament_url, name="Ghost Team").all()) == 1

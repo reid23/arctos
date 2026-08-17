@@ -1161,6 +1161,7 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                                 if editor {
                                     div { class: "d-flex flex-wrap align-items-center gap-1",
                                             button { class: "btn btn-sm btn-outline-secondary", onclick: move |_| active_modal.set("tags".to_string()), "Tags" }
+                                            button { class: "btn btn-sm btn-outline-secondary", onclick: move |_| active_modal.set("scripting".to_string()), "Scripting" }
                                             button { class: "btn btn-sm btn-outline-secondary", onclick: move |_| active_modal.set("fields".to_string()), "Fields" }
                                             div {
                                                 class: "d-flex align-items-center gap-1 ms-1",
@@ -1660,6 +1661,14 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                     // Modals that don't need the schedule visible stay as real modals.
                     if active_modal() == "tags" {
                         TagsModal {
+                            tournament_url: url.clone(),
+                            data: data.clone(),
+                            on_close: move |_| active_modal.set("none".to_string()),
+                            on_change: move |_| refresh()
+                        }
+                    }
+                    if active_modal() == "scripting" {
+                        ScriptingModal {
                             tournament_url: url.clone(),
                             data: data.clone(),
                             on_close: move |_| active_modal.set("none".to_string()),
@@ -3657,15 +3666,22 @@ fn TagsModal(
     // Local state for dropdowns: tag_id -> team_id. Synced from data when modal has data so dropdowns show current values.
     let mut tag_teams = use_signal(|| HashMap::<u32, String>::new());
     let mut updating_tag_id = use_signal(|| None::<u32>);
+    // Per-tag ASS expression drafts + their latest validation verdicts.
+    let mut tag_exprs = use_signal(|| HashMap::<u32, String>::new());
+    let mut tag_expr_valid = use_signal(|| HashMap::<u32, Option<Result<(), String>>>::new());
 
-    // Sync tag_teams from data whenever we have tags, so dropdowns show correct values on open and after refetch.
+    // Sync tag_teams / expression drafts from data whenever we have tags, so
+    // inputs show correct values on open and after refetch.
     let data_effect = data.clone();
     use_effect(move || {
         let tags = data_effect.tags.clone();
         let mut map = tag_teams.write();
         map.clear();
+        let mut exprs = tag_exprs.write();
+        exprs.clear();
         for tag in tags {
             map.insert(tag.id, tag.team.unwrap_or_default());
+            exprs.insert(tag.id, tag.expression.unwrap_or_default());
         }
     });
 
@@ -3698,7 +3714,7 @@ fn TagsModal(
                                     }
                                     error.set(None);
                                     spawn(async move {
-                                        let req = CreateTagRequest { name };
+                                        let req = CreateTagRequest { name, expression: None };
                                         match api::create_tag(&u, &req).await {
                                             Ok(_) => { new_tag.set("".to_string()); on_change.call(()); }
                                             Err(e) => error.set(Some(e)),
@@ -3716,65 +3732,363 @@ fn TagsModal(
                                 let current_team = tag_teams().get(&tag_id).cloned().unwrap_or_default();
                                 let tag_name = tag.name.clone();
                                 let is_updating = updating_tag_id() == Some(tag_id);
+                                let saved_expr = tag.expression.clone().unwrap_or_default();
+                                let edited_expr = tag_exprs()
+                                    .get(&tag_id)
+                                    .cloned()
+                                    .unwrap_or_else(|| saved_expr.clone());
+                                let expr_dirty = edited_expr.trim() != saved_expr.trim();
+                                let expr_verdict = tag_expr_valid().get(&tag_id).cloned().flatten();
+                                // Clearing (empty) is always saveable; otherwise require a passing validation.
+                                let expr_can_save = expr_dirty
+                                    && (edited_expr.trim().is_empty() || matches!(expr_verdict, Some(Ok(()))));
+                                // Effective resolution hint: override beats expression.
+                                let team_label = |tid: &str| -> String {
+                                    data.team_options
+                                        .iter()
+                                        .find(|t| t.id == tid)
+                                        .and_then(|t| t.pseudonym.clone())
+                                        .unwrap_or_else(|| tid.to_string())
+                                };
+                                let resolution_hint = if let Some(t) = tag.team.as_deref().filter(|t| !t.is_empty()) {
+                                    Some(format!("Resolves to {} (manual override)", team_label(t)))
+                                } else if let Some(t) = tag.resolved_team.as_deref().filter(|t| !t.is_empty()) {
+                                    Some(format!("Resolves to {} (from expression)", team_label(t)))
+                                } else if !saved_expr.trim().is_empty() {
+                                    Some("Expression not resolved yet".to_string())
+                                } else {
+                                    None
+                                };
                                 rsx! {
-                                    li { key: "{tag_id}", class: "list-group-item d-flex justify-content-between align-items-center gap-2 flex-wrap",
-                                        span { class: "flex-grow-1", "{tag_name}" }
-                                        div { class: "d-flex align-items-center gap-1",
-                                            select {
-                                                class: "form-select form-select-sm",
-                                                style: "max-width: 12rem;",
-                                                value: "{current_team}",
+                                    li { key: "{tag_id}", class: "list-group-item",
+                                        div { class: "d-flex justify-content-between align-items-center gap-2 flex-wrap",
+                                            span { class: "flex-grow-1 fw-semibold", "{tag_name}" }
+                                            div { class: "d-flex align-items-center gap-1",
+                                                span { class: "text-muted small", "Override:" }
+                                                select {
+                                                    class: "form-select form-select-sm",
+                                                    style: "max-width: 12rem;",
+                                                    value: "{current_team}",
+                                                    disabled: is_updating,
+                                                    onchange: move |e| {
+                                                        let u = url_sig();
+                                                        let team_id = e.value();
+                                                        let on_change = on_change.clone();
+                                                        tag_teams.write().insert(tag_id, team_id.clone());
+                                                        updating_tag_id.set(Some(tag_id));
+                                                        error.set(None);
+                                                        let prev_team = current_team.clone();
+                                                        spawn(async move {
+                                                            let req = UpdateTagsRequest {
+                                                                tag_id,
+                                                                team_id: Some(team_id),
+                                                                expression: None,
+                                                            };
+                                                            match api::update_tags(&u, &req).await {
+                                                                Ok(_) => {
+                                                                    updating_tag_id.set(None);
+                                                                    on_change.call(());
+                                                                }
+                                                                Err(e) => {
+                                                                    tag_teams.write().insert(tag_id, prev_team);
+                                                                    updating_tag_id.set(None);
+                                                                    error.set(Some(e));
+                                                                }
+                                                            }
+                                                        });
+                                                    },
+                                                    option { value: "", "No override" }
+                                                    for opt in &data.team_options {
+                                                        option { value: "{opt.id}", "{opt.pseudonym.as_deref().unwrap_or(&opt.id)}" }
+                                                    }
+                                                }
+                                                if is_updating {
+                                                    span { class: "spinner-border spinner-border-sm text-secondary", role: "status", "aria-hidden": "true" }
+                                                }
+                                            }
+                                            button { class: "btn btn-sm btn-outline-danger",
                                                 disabled: is_updating,
-                                                onchange: move |e| {
+                                                onclick: move |_| {
                                                     let u = url_sig();
-                                                    let team_id = e.value();
                                                     let on_change = on_change.clone();
-                                                    tag_teams.write().insert(tag_id, team_id.clone());
-                                                    updating_tag_id.set(Some(tag_id));
-                                                    error.set(None);
-                                                    let prev_team = current_team.clone();
                                                     spawn(async move {
-                                                        let req = UpdateTagsRequest { tag_id, team_id };
-                                                        match api::update_tags(&u, &req).await {
-                                                            Ok(_) => {
-                                                                updating_tag_id.set(None);
-                                                                on_change.call(());
-                                                            }
-                                                            Err(e) => {
-                                                                tag_teams.write().insert(tag_id, prev_team);
-                                                                updating_tag_id.set(None);
-                                                                error.set(Some(e));
-                                                            }
+                                                        match api::delete_tag(&u, tag_id).await {
+                                                            Ok(_) => { error.set(None); on_change.call(()); }
+                                                            Err(e) => error.set(Some(e)),
                                                         }
                                                     });
                                                 },
-                                                option { value: "", "No team" }
-                                                for opt in &data.team_options {
-                                                    option { value: "{opt.id}", "{opt.pseudonym.as_deref().unwrap_or(&opt.id)}" }
-                                                }
-                                            }
-                                            if is_updating {
-                                                span { class: "spinner-border spinner-border-sm text-secondary", role: "status", "aria-hidden": "true" }
+                                                "×"
                                             }
                                         }
-                                        button { class: "btn btn-sm btn-outline-danger",
-                                            disabled: is_updating,
-                                            onclick: move |_| {
-                                                let u = url_sig();
-                                                let on_change = on_change.clone();
-                                                spawn(async move {
-                                                    match api::delete_tag(&u, tag_id).await {
-                                                        Ok(_) => { error.set(None); on_change.call(()); }
-                                                        Err(e) => error.set(Some(e)),
+                                        div { class: "mt-2 d-flex align-items-start gap-2",
+                                            div { class: "flex-grow-1",
+                                                AssEntry {
+                                                    id_suffix: format!("tag-expr-{tag_id}"),
+                                                    value: edited_expr.clone(),
+                                                    on_change: move |v: String| { tag_exprs.write().insert(tag_id, v); },
+                                                    team_options: data.team_options.clone(),
+                                                    tags: data.tags.clone(),
+                                                    matches: data.matches.clone(),
+                                                    tournament_url: url_sig(),
+                                                    placeholder: "Expression, e.g. (winner {Semi A})".to_string(),
+                                                    expected_type: vec!["TEAM".to_string()],
+                                                    on_validity_change: move |v: Option<Result<(), String>>| {
+                                                        tag_expr_valid.write().insert(tag_id, v);
+                                                    },
+                                                }
+                                            }
+                                            button { class: "btn btn-sm btn-outline-primary",
+                                                disabled: !expr_can_save || is_updating,
+                                                onclick: {
+                                                    let expr_to_save = edited_expr.clone();
+                                                    move |_| {
+                                                        let u = url_sig();
+                                                        let on_change = on_change.clone();
+                                                        let expression = expr_to_save.trim().to_string();
+                                                        updating_tag_id.set(Some(tag_id));
+                                                        error.set(None);
+                                                        spawn(async move {
+                                                            let req = UpdateTagsRequest {
+                                                                tag_id,
+                                                                team_id: None,
+                                                                expression: Some(expression),
+                                                            };
+                                                            match api::update_tags(&u, &req).await {
+                                                                Ok(_) => {
+                                                                    updating_tag_id.set(None);
+                                                                    on_change.call(());
+                                                                }
+                                                                Err(e) => {
+                                                                    updating_tag_id.set(None);
+                                                                    error.set(Some(e));
+                                                                }
+                                                            }
+                                                        });
                                                     }
-                                                });
-                                            },
-                                            "×"
+                                                },
+                                                "Save"
+                                            }
+                                        }
+                                        if let Some(hint) = resolution_hint {
+                                            div { class: "form-text text-muted", "{hint}" }
                                         }
                                     }
                                 }
                             })}
                         }
+                        div { class: "form-text mt-2",
+                            "A tag resolves to its Override team if set, otherwise by evaluating its expression (which must produce a TEAM)."
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn ScriptingModal(
+    tournament_url: String,
+    data: ScheduleSetupResponse,
+    on_close: EventHandler<()>,
+    on_change: EventHandler<()>,
+) -> Element {
+    let url_sig = use_signal(|| tournament_url.clone());
+    let mut error = use_signal(|| None::<String>);
+    let mut saving_var_id = use_signal(|| None::<u32>);
+    // New-variable form.
+    let mut new_name = use_signal(|| "".to_string());
+    let mut new_expr = use_signal(|| "".to_string());
+    let mut new_expr_valid = use_signal(|| None::<Result<(), String>>);
+    // Per-variable drafts (name + expression) and validation verdicts.
+    let mut var_names = use_signal(|| HashMap::<u32, String>::new());
+    let mut var_exprs = use_signal(|| HashMap::<u32, String>::new());
+    let mut var_expr_valid = use_signal(|| HashMap::<u32, Option<Result<(), String>>>::new());
+
+    // Sync drafts from data so inputs show current values on open and after refetch.
+    let data_effect = data.clone();
+    use_effect(move || {
+        let vars = data_effect.script_variables.clone();
+        let mut names = var_names.write();
+        names.clear();
+        let mut exprs = var_exprs.write();
+        exprs.clear();
+        for v in vars {
+            names.insert(v.id, v.name);
+            exprs.insert(v.id, v.expression);
+        }
+    });
+
+    let new_can_add = !new_name().trim().is_empty()
+        && !new_expr().trim().is_empty()
+        && matches!(new_expr_valid(), Some(Ok(())));
+
+    rsx! {
+        div { class: "modal d-block", tabindex: "-1", style: "background: rgba(0,0,0,0.5)",
+            div { class: "modal-dialog modal-lg",
+                div { class: "modal-content",
+                    div { class: "modal-header d-flex justify-content-between align-items-center",
+                        h5 { class: "modal-title mb-0", "Scripting" }
+                        button { type: "button", class: "btn-close", "aria-label": "Close", onclick: move |_| on_close.call(()) }
+                    }
+                    div { class: "modal-body",
+                        if let Some(err) = error() { div { class: "alert alert-danger", "{err}" } }
+                        p { class: "form-text",
+                            "Variables can be used by name in any ASS expression in this tournament — skip conditions, tag expressions, and other variables."
+                        }
+
+                        h6 { "New Variable" }
+                        div { class: "d-flex align-items-start gap-2 mb-3",
+                            input {
+                                class: "form-control",
+                                style: "max-width: 12rem;",
+                                placeholder: "name (e.g. threshold)",
+                                value: "{new_name}",
+                                oninput: move |e| { new_name.set(e.value()); error.set(None); },
+                            }
+                            div { class: "flex-grow-1",
+                                AssEntry {
+                                    id_suffix: "script-var-new".to_string(),
+                                    value: new_expr(),
+                                    on_change: move |v: String| new_expr.set(v),
+                                    team_options: data.team_options.clone(),
+                                    tags: data.tags.clone(),
+                                    matches: data.matches.clone(),
+                                    tournament_url: url_sig(),
+                                    placeholder: "expression, e.g. (+ 1 2)".to_string(),
+                                    on_validity_change: move |v: Option<Result<(), String>>| {
+                                        new_expr_valid.set(v);
+                                    },
+                                }
+                            }
+                            button { class: "btn btn-outline-success",
+                                disabled: !new_can_add,
+                                onclick: move |_| {
+                                    let u = url_sig();
+                                    let on_change = on_change.clone();
+                                    let req = CreateScriptVariableRequest {
+                                        name: new_name().trim().to_string(),
+                                        expression: new_expr().trim().to_string(),
+                                    };
+                                    error.set(None);
+                                    spawn(async move {
+                                        match api::create_script_variable(&u, &req).await {
+                                            Ok(_) => {
+                                                new_name.set("".to_string());
+                                                new_expr.set("".to_string());
+                                                new_expr_valid.set(None);
+                                                on_change.call(());
+                                            }
+                                            Err(e) => error.set(Some(e)),
+                                        }
+                                    });
+                                },
+                                "Add"
+                            }
+                        }
+
+                        h6 { "Variables" }
+                        if data.script_variables.is_empty() {
+                            p { class: "text-muted small", "No variables defined yet." }
+                        }
+                        ul { class: "list-group",
+                            {data.script_variables.iter().map(|var| {
+                                let var_id = var.id;
+                                let saved_name = var.name.clone();
+                                let saved_expr = var.expression.clone();
+                                let edited_name = var_names()
+                                    .get(&var_id)
+                                    .cloned()
+                                    .unwrap_or_else(|| saved_name.clone());
+                                let edited_expr = var_exprs()
+                                    .get(&var_id)
+                                    .cloned()
+                                    .unwrap_or_else(|| saved_expr.clone());
+                                let dirty = edited_name.trim() != saved_name
+                                    || edited_expr.trim() != saved_expr.trim();
+                                let expr_changed = edited_expr.trim() != saved_expr.trim();
+                                let verdict = var_expr_valid().get(&var_id).cloned().flatten();
+                                let can_save = dirty
+                                    && !edited_name.trim().is_empty()
+                                    && !edited_expr.trim().is_empty()
+                                    && (!expr_changed || matches!(verdict, Some(Ok(()))));
+                                let is_saving = saving_var_id() == Some(var_id);
+                                let name_to_save = edited_name.clone();
+                                let expr_to_save = edited_expr.clone();
+                                rsx! {
+                                    li { key: "{var_id}", class: "list-group-item",
+                                        div { class: "d-flex align-items-start gap-2",
+                                            input {
+                                                class: "form-control font-monospace",
+                                                style: "max-width: 12rem;",
+                                                value: "{edited_name}",
+                                                disabled: is_saving,
+                                                oninput: move |e| { var_names.write().insert(var_id, e.value()); },
+                                            }
+                                            div { class: "flex-grow-1",
+                                                AssEntry {
+                                                    id_suffix: format!("script-var-{var_id}"),
+                                                    value: edited_expr.clone(),
+                                                    on_change: move |v: String| { var_exprs.write().insert(var_id, v); },
+                                                    team_options: data.team_options.clone(),
+                                                    tags: data.tags.clone(),
+                                                    matches: data.matches.clone(),
+                                                    tournament_url: url_sig(),
+                                                    placeholder: "expression".to_string(),
+                                                    on_validity_change: move |v: Option<Result<(), String>>| {
+                                                        var_expr_valid.write().insert(var_id, v);
+                                                    },
+                                                }
+                                            }
+                                            button { class: "btn btn-sm btn-outline-primary",
+                                                disabled: !can_save || is_saving,
+                                                onclick: move |_| {
+                                                    let u = url_sig();
+                                                    let on_change = on_change.clone();
+                                                    let req = UpdateScriptVariableRequest {
+                                                        name: name_to_save.trim().to_string(),
+                                                        expression: expr_to_save.trim().to_string(),
+                                                    };
+                                                    saving_var_id.set(Some(var_id));
+                                                    error.set(None);
+                                                    spawn(async move {
+                                                        match api::update_script_variable(&u, var_id, &req).await {
+                                                            Ok(_) => {
+                                                                saving_var_id.set(None);
+                                                                on_change.call(());
+                                                            }
+                                                            Err(e) => {
+                                                                saving_var_id.set(None);
+                                                                error.set(Some(e));
+                                                            }
+                                                        }
+                                                    });
+                                                },
+                                                "Save"
+                                            }
+                                            button { class: "btn btn-sm btn-outline-danger",
+                                                disabled: is_saving,
+                                                onclick: move |_| {
+                                                    let u = url_sig();
+                                                    let on_change = on_change.clone();
+                                                    spawn(async move {
+                                                        match api::delete_script_variable(&u, var_id).await {
+                                                            Ok(_) => { error.set(None); on_change.call(()); }
+                                                            Err(e) => error.set(Some(e)),
+                                                        }
+                                                    });
+                                                },
+                                                "×"
+                                            }
+                                        }
+                                    }
+                                }
+                            })}
+                        }
+                    }
+                    div { class: "modal-footer",
+                        button { class: "btn btn-secondary", onclick: move |_| on_close.call(()), "Close" }
                     }
                 }
             }

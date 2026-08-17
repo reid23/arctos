@@ -1343,14 +1343,25 @@ def update_tags_api(tournament_url):
 
     data = request.get_json()
     tag_id = data.get("tag_id")
-    team_id = data.get("team_id")
 
     if not tag_id:
         return jsonify({"error": "Tag required"}), 400
 
     tag = Tag.query.filter_by(id=tag_id, event=tournament_url).first_or_404()
-    tag.team = team_id if team_id else None
+    if "expression" in data:
+        from app.routes.tournaments.matches_admin import validate_tag_expression
+
+        expression, err = validate_tag_expression(tournament_url, data.get("expression"))
+        if err:
+            return jsonify({"error": err}), 400
+        tag.expression = expression
+    if "team_id" in data:
+        team_id = data.get("team_id")
+        tag.team = team_id if team_id else None
     db.session.commit()
+
+    # Effective resolution: manual override if set, else the tag's expression.
+    effective_team = resolve_tag_to_team(f"tag::{tag.name}", tournament_url)
 
     # Update matches
     matches = Match.query.filter_by(event=tournament_url).all()
@@ -1364,13 +1375,13 @@ def update_tags_api(tournament_url):
         ):
             continue
         if m.team1_initial == tag_ref:
-            m.team1 = team_id
+            m.team1 = effective_team
         if m.team2_initial == tag_ref:
-            m.team2 = team_id
+            m.team2 = effective_team
 
         for row in get_match_referee_rows(m):
             if (row.initial or "").strip() == tag_ref:
-                row.team_id = team_id
+                row.team_id = effective_team
 
     db.session.commit()
     recompute_all_match_times(tournament_url)

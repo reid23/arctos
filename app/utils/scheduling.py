@@ -160,7 +160,15 @@ def _slot_resolved(
             tag = tag_by_name.get(tag_name)
         else:
             tag = Tag.query.filter_by(event=tournament_url, name=tag_name).first()
-        return bool(tag and getattr(tag, "team", None))
+        if tag is None:
+            return False
+        if getattr(tag, "team", None):
+            return True
+        if (getattr(tag, "expression", None) or "").strip():
+            from app.utils.helpers import resolve_tag_to_team
+
+            return resolve_tag_to_team(f"tag::{tag_name}", tournament_url) is not None
+        return False
     if "::winner" in initial or "::loser" in initial:
         base = initial.split("::")[0].strip()
         dep = name_to_match.get(base)

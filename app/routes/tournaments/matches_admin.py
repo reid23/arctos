@@ -44,6 +44,7 @@ from models import (
     Field,
     Match,
     Point,
+    ScriptVariable,
     Tag,
     db,
 )
@@ -1206,6 +1207,33 @@ def delete_field_api(tournament_url, field_id):
     return jsonify({"success": True})
 
 
+def validate_tag_expression(tournament_url, expression):
+    """Validate an ASS tag expression: parse + type check (must include TEAM).
+
+    Returns ``(normalized_expression_or_None, error_or_None)``. An empty or
+    None expression normalizes to None (clears the tag's expression).
+    """
+    from app.utils.parser import DSLValidationError, _human_type_name, _infer_types, get_parser
+
+    expression = (expression or "").strip()
+    if not expression:
+        return None, None
+    try:
+        parser = get_parser(tournament_url)
+        warnings = parser.static_check(expression)
+        if warnings:
+            return None, "; ".join(warnings)
+        result = parser.parse(expression)
+    except DSLValidationError as e:
+        return None, str(e)
+    except Exception as e:
+        return None, f"Parse error: {e}"
+    types = _infer_types(result)
+    if "TEAM" not in types:
+        return None, f"Tag expression must resolve to a TEAM, got {_human_type_name(types)}."
+    return expression, None
+
+
 @bp.route("/tournaments/<tournament_url>/tags", methods=["POST"])
 @login_required
 def create_tag_api(tournament_url):
@@ -1225,7 +1253,11 @@ def create_tag_api(tournament_url):
     if Tag.query.filter_by(event=tournament_url, name=name).first():
         return jsonify({"error": "Tag already exists"}), 400
 
-    tag = Tag(event=tournament_url, name=name)
+    expression, err = validate_tag_expression(tournament_url, data.get("expression"))
+    if err:
+        return jsonify({"error": err}), 400
+
+    tag = Tag(event=tournament_url, name=name, expression=expression)
     db.session.add(tag)
     db.session.commit()
     return jsonify({"success": True, "id": tag.id})
@@ -1268,6 +1300,142 @@ def update_tag_api(tournament_url, tag_id):
     data = request.get_json()
     if not data or "name" not in data:
         return jsonify({"error": "Name required"}), 400
+    if "expression" in data:
+        expression, err = validate_tag_expression(tournament_url, data.get("expression"))
+        if err:
+            return jsonify({"error": err}), 400
+        tag.expression = expression
     tag.name = data["name"]
+    db.session.commit()
+    return jsonify({"success": True})
+
+
+def _validate_script_variable(tournament_url, name, expression, exclude_id=None):
+    """Validate a script variable's name and expression. Returns an error string or None."""
+    from app.utils.parser import (
+        RESERVED_IDENTIFIERS,
+        DSLValidationError,
+        extract_variable_references,
+        get_parser,
+        is_valid_identifier,
+    )
+
+    if not name:
+        return "Name required"
+    if not is_valid_identifier(name):
+        return f"'{name}' is not a valid identifier."
+    if name in RESERVED_IDENTIFIERS:
+        return f"'{name}' is a builtin function or reserved word."
+    query = ScriptVariable.query.filter_by(event=tournament_url, name=name)
+    if exclude_id is not None:
+        query = query.filter(ScriptVariable.id != exclude_id)
+    if query.first():
+        return f"Variable '{name}' already exists."
+    if not expression:
+        return "Expression required"
+
+    # Static cycle check over variable-to-variable references, with this
+    # variable's (new) expression substituted in.
+    graph = {name: extract_variable_references(expression)}
+    for row in ScriptVariable.query.filter_by(event=tournament_url).all():
+        if exclude_id is not None and row.id == exclude_id:
+            continue
+        if row.name == name:
+            continue
+        graph[row.name] = extract_variable_references(row.expression)
+    # Iterative DFS with colors, only following edges to defined variables.
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color = {n: WHITE for n in graph}
+
+    def _has_cycle_from(start):
+        stack = [(start, iter(sorted(graph[start] & set(graph))))]
+        color[start] = GRAY
+        while stack:
+            node, it = stack[-1]
+            advanced = False
+            for nxt in it:
+                if color[nxt] == GRAY:
+                    return True
+                if color[nxt] == WHITE:
+                    color[nxt] = GRAY
+                    stack.append((nxt, iter(sorted(graph[nxt] & set(graph)))))
+                    advanced = True
+                    break
+            if not advanced:
+                color[node] = BLACK
+                stack.pop()
+        return False
+
+    if _has_cycle_from(name):
+        return f"Cyclic variable reference involving '{name}'."
+
+    # The expression must parse and evaluate cleanly (other variables are
+    # available in the environment; the candidate itself is not).
+    try:
+        parser = get_parser(tournament_url)
+        warnings = parser.static_check(expression)
+        if warnings:
+            return "; ".join(warnings)
+        parser.parse(expression)
+    except DSLValidationError as e:
+        return str(e)
+    except Exception as e:
+        return f"Parse error: {e}"
+    return None
+
+
+def _script_variable_to_dict(var):
+    return {"id": var.id, "name": var.name, "expression": var.expression}
+
+
+@bp.route("/tournaments/<tournament_url>/script-variables", methods=["POST"])
+@login_required
+def create_script_variable_api(tournament_url):
+    if not _check_to(tournament_url):
+        return jsonify({"error": "Forbidden"}), 403
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Name required"}), 400
+    name = (data.get("name") or "").strip()
+    expression = (data.get("expression") or "").strip()
+    err = _validate_script_variable(tournament_url, name, expression)
+    if err:
+        return jsonify({"error": err}), 400
+
+    var = ScriptVariable(event=tournament_url, name=name, expression=expression)
+    db.session.add(var)
+    db.session.commit()
+    return jsonify({"success": True, "id": var.id})
+
+
+@bp.route("/tournaments/<tournament_url>/script-variables/<int:var_id>", methods=["PUT"])
+@login_required
+def update_script_variable_api(tournament_url, var_id):
+    if not _check_to(tournament_url):
+        return jsonify({"error": "Forbidden"}), 403
+
+    var = ScriptVariable.query.filter_by(id=var_id, event=tournament_url).first_or_404()
+    data = request.get_json() or {}
+    name = (data.get("name") or var.name).strip()
+    expression = (data.get("expression") or var.expression).strip()
+    err = _validate_script_variable(tournament_url, name, expression, exclude_id=var.id)
+    if err:
+        return jsonify({"error": err}), 400
+
+    var.name = name
+    var.expression = expression
+    db.session.commit()
+    return jsonify({"success": True})
+
+
+@bp.route("/tournaments/<tournament_url>/script-variables/<int:var_id>", methods=["DELETE"])
+@login_required
+def delete_script_variable_api(tournament_url, var_id):
+    if not _check_to(tournament_url):
+        return jsonify({"error": "Forbidden"}), 403
+
+    var = ScriptVariable.query.filter_by(id=var_id, event=tournament_url).first_or_404()
+    db.session.delete(var)
     db.session.commit()
     return jsonify({"success": True})

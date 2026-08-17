@@ -150,11 +150,20 @@ class Tag(db.Model):
     Tags allow Arctos Schedule Script expressions to refer to a team
     symbolically (e.g. ``[GroupA::winner]``) rather than by their ID.
 
+    A tag resolves to a team in this order:
+
+    1. The manually assigned ``team`` column (an override).
+    2. Evaluating ``expression`` (an ASS expression whose result type must
+       include TEAM, e.g. ``(winner {Semi A})``) to a concrete team.
+    3. Otherwise the tag is unresolved.
+
     Attributes:
         id: Auto-increment primary key.
         event: Tournament URL slug this tag belongs to.
         name: Tag name used in ASS expressions.
-        team: ID of the team assigned to this tag, or ``None`` if unresolved.
+        team: ID of the team manually assigned to this tag (overrides
+            ``expression``), or ``None``.
+        expression: Optional ASS expression that resolves to a team.
     """
 
     __tablename__ = "tags"
@@ -163,3 +172,31 @@ class Tag(db.Model):
     event = db.Column(db.String(URL_SLUG_LEN), db.ForeignKey("tournaments.url"), nullable=False)
     name = db.Column(db.String(SHORT_NAME_LEN), nullable=False)
     team = db.Column(db.String(USER_ID_LEN), db.ForeignKey("teams.id"), nullable=True)
+    expression = db.Column(db.Text, nullable=True)
+
+
+class ScriptVariable(db.Model):
+    """A tournament-scoped Arctos Schedule Script variable.
+
+    Variables are usable as identifiers in any ASS expression evaluated within
+    the tournament (skip conditions, tag expressions, other variables). Each
+    variable's ``expression`` is evaluated when a tournament-bound parser is
+    built and its value is bound to ``name`` in the interpreter environment.
+
+    Attributes:
+        id: Auto-increment primary key.
+        event: Tournament URL slug this variable belongs to.
+        name: Identifier name (must match the ASS ``IDENTIFIER`` token rules
+            and must not collide with builtin functions/special forms).
+            Unique per event.
+        expression: ASS expression that defines the variable's value.
+    """
+
+    __tablename__ = "script_variables"
+
+    id = db.Column(db.Integer, primary_key=True)
+    event = db.Column(db.String(URL_SLUG_LEN), db.ForeignKey("tournaments.url"), nullable=False)
+    name = db.Column(db.String(SHORT_NAME_LEN), nullable=False)
+    expression = db.Column(db.Text, nullable=False)
+
+    __table_args__ = (db.UniqueConstraint("event", "name", name="uq_script_variables_event_name"),)
