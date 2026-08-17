@@ -91,14 +91,14 @@ class Match(db.Model):
             "event",
             "field",
             unique=True,
-            sqlite_where=sa.text("schedule_type IN ('BREAK', 'JOIN')"),
+            sqlite_where=sa.text("schedule_type IN ('BREAK', 'JOIN', 'STATBREAK')"),
         ),
         db.Index(
             "unique_without_field",
             "name",
             "event",
             unique=True,
-            sqlite_where=sa.text("schedule_type NOT IN ('BREAK', 'JOIN')"),
+            sqlite_where=sa.text("schedule_type NOT IN ('BREAK', 'JOIN', 'STATBREAK')"),
         ),
     )
 
@@ -115,7 +115,9 @@ class Match(db.Model):
     confirmed_start_time = db.Column(db.DateTime)
     completed_time = db.Column(db.DateTime)
     nominal_length = db.Column(db.Integer)  # minutes
-    schedule_type = db.Column(db.Enum(ScheduleType), default=ScheduleType.STATIC)  # STATIC, SAFE, FAST, BREAK, JOIN
+    schedule_type = db.Column(
+        db.Enum(ScheduleType), default=ScheduleType.STATIC
+    )  # STATIC, SAFE, FAST, BREAK, STATBREAK, JOIN
     set_type = db.Column(db.Enum(SetType), default=SetType.SETS)  # SETS, STONES (only for non-BREAK/JOIN matches)
     ribbon = db.Column(db.Boolean, default=False)  # True if this is a ribbon game (not counted in results)
     nsets = db.Column(db.Integer)
@@ -220,6 +222,22 @@ class Match(db.Model):
                 return None
 
     @property
+    def effective_status(self) -> MatchStatus:
+        """Lifecycle status as clients should see it.
+
+        For ``STATBREAK`` the status is a pure function of the current time —
+        ``COMPLETED`` once the scheduled start has passed, ``NOT_STARTED``
+        before that — and the stored :attr:`status` is ignored (the solver
+        never writes it). All other schedule types return the stored status.
+        """
+        if self.schedule_type == ScheduleType.STATBREAK:
+            start = self.nominal_start_time or self.scheduled_start_time
+            if start is not None and now_utc_naive() >= start:
+                return MatchStatus.COMPLETED
+            return MatchStatus.NOT_STARTED
+        return self.status
+
+    @property
     def is_time_finalized(self) -> bool:
         """True when start time is locked: status is TIME_FINALIZED or any later state (READY_TO_START, IN_PROGRESS, COMPLETED, SKIPPED)."""
         if self.status is None:
@@ -229,18 +247,20 @@ class Match(db.Model):
     def finalize(self) -> None:
         """Mark this match as finalised and set completion metadata.
 
-        Sets :attr:`finalized_at` to the current UTC time.  For ``JOIN``
-        and ``BREAK`` schedule types the method also transitions the match
-        to ``COMPLETED`` and calculates :attr:`completed_time`:
+        Sets :attr:`finalized_at` to the current UTC time.  For ``JOIN``,
+        ``BREAK``, and ``STATBREAK`` schedule types the method also
+        transitions the match to ``COMPLETED`` and calculates
+        :attr:`completed_time`:
 
         * ``JOIN``: completed at :attr:`nominal_start_time`.
-        * ``BREAK``: completed at ``nominal_start_time + nominal_length``.
+        * ``BREAK`` / ``STATBREAK``: completed at
+          ``nominal_start_time + nominal_length``.
 
         For all other schedule types the caller is responsible for setting
         :attr:`status` and :attr:`completed_time`.
         """
         self.finalized_at = now_utc_naive()
-        if self.schedule_type in (ScheduleType.JOIN, ScheduleType.BREAK):
+        if self.schedule_type in (ScheduleType.JOIN, ScheduleType.BREAK, ScheduleType.STATBREAK):
             self.confirmed_start_time = self.nominal_start_time
             self.status = MatchStatus.COMPLETED
             self.completed_time = (

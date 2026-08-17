@@ -795,7 +795,7 @@ def tournament_autocomplete(tournament_url):
     # Exclude BREAK and JOIN matches entirely
     matches = (
         Match.query.filter_by(event=tournament_url)
-        .filter(Match.schedule_type.notin_([ScheduleType.BREAK, ScheduleType.JOIN]))
+        .filter(Match.schedule_type.notin_([ScheduleType.BREAK, ScheduleType.STATBREAK, ScheduleType.JOIN]))
         .all()
     )
     for m in matches:
