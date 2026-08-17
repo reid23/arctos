@@ -80,29 +80,347 @@ fn utc_iso_to_local_datetime_input(iso: &str) -> Option<String> {
     Some(local.format("%Y-%m-%dT%H:%M").to_string())
 }
 
-/// Effective start time for timeline/date nav: confirmed when set, else nominal.
-fn effective_start_str(m: &MatchSetupData) -> Option<&str> {
-    m.confirmed_start_time
+/// Plan-mode start: stable published time. Falls back to nominal if scheduled is missing.
+fn plan_start_str(m: &MatchSetupData) -> Option<&str> {
+    m.scheduled_start_time
         .as_deref()
         .or(m.nominal_start_time.as_deref())
 }
 
-/// Format ISO timestamp in user's local time, without seconds (e.g. "14:30" or "2025-02-16 14:30").
-fn format_time_local(iso: &str, tz_offset_minutes: i64) -> String {
-    let utc_dt = if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(iso) {
-        dt.naive_utc()
-    } else if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(iso, "%Y-%m-%dT%H:%M:%S%.f") {
-        dt
-    } else if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(iso, "%Y-%m-%dT%H:%M") {
-        dt
-    } else {
-        return iso.to_string();
-    };
-    let local = utc_dt + chrono::Duration::minutes(tz_offset_minutes);
-    local.format("%H:%M").to_string()
+/// Real/estimated start: confirmed if started, else the solver's live estimate.
+fn actual_start_str(m: &MatchSetupData) -> Option<&str> {
+    m.confirmed_start_time
+        .as_deref()
+        .or(m.nominal_start_time.as_deref())
+        .or(m.scheduled_start_time.as_deref())
 }
 
-/// Like `format_time_local` but includes the date so debug-mode tables show the full timestamp.
+/// Parse an ISO-ish schedule timestamp from the API into naive UTC.
+fn parse_schedule_time_utc(s: &str) -> Option<chrono::NaiveDateTime> {
+    use chrono::NaiveDateTime;
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Some(dt.naive_utc());
+    }
+    for fmt in [
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+    ] {
+        if let Ok(dt) = NaiveDateTime::parse_from_str(s, fmt) {
+            return Some(dt);
+        }
+    }
+    None
+}
+
+/// Displayed interval (naive UTC) for a match block. Single source of truth for
+/// table, timeline, and team views.
+///
+/// Viewer rule ("planned or earlier"): element-wise minimum of
+/// - the planned interval: plan start (`scheduled_start_time`, fallback nominal)
+///   .. plan start + `nominal_length`, and
+/// - the real/estimated interval: `confirmed_start_time` if started else
+///   `nominal_start_time` .. `completed_time` if completed else real start +
+///   `nominal_length`.
+///
+/// When the day runs ahead, blocks pull earlier and completed matches show their
+/// real (earlier) end; a late-running day never shifts blocks later — lateness is
+/// visible via the now line.
+///
+/// `show_as_happened` (edit-mode-only toggle) instead places blocks at the exact
+/// real/estimated times with no min-capping.
+fn display_interval_utc(
+    m: &MatchSetupData,
+    show_as_happened: bool,
+) -> Option<(chrono::NaiveDateTime, chrono::NaiveDateTime)> {
+    let len = chrono::Duration::minutes(m.nominal_length.unwrap_or(30) as i64);
+    let min_len = chrono::Duration::minutes(1);
+    let real_start = actual_start_str(m).and_then(parse_schedule_time_utc);
+    let real_end = m
+        .completed_time
+        .as_deref()
+        .and_then(parse_schedule_time_utc)
+        .or_else(|| real_start.map(|s| s + len));
+    if show_as_happened {
+        let start = real_start?;
+        let end = real_end.unwrap_or(start + len).max(start + min_len);
+        return Some((start, end));
+    }
+    let plan_start = plan_start_str(m).and_then(parse_schedule_time_utc);
+    let plan_end = plan_start.map(|s| s + len);
+    let start = match (plan_start, real_start) {
+        (Some(p), Some(r)) => p.min(r),
+        (p, r) => p.or(r)?,
+    };
+    let end = match (plan_end, real_end) {
+        (Some(p), Some(r)) => p.min(r),
+        (p, r) => p.or(r).unwrap_or(start + len),
+    }
+    .max(start + min_len);
+    Some((start, end))
+}
+
+/// Format a naive-UTC timestamp as local "HH:MM".
+fn format_naive_utc_time_local(dt: chrono::NaiveDateTime, tz_offset_minutes: i64) -> String {
+    (dt + chrono::Duration::minutes(tz_offset_minutes))
+        .format("%H:%M")
+        .to_string()
+}
+
+/// Per-slot ref tokens: prefer resolved team id, else initial expression.
+/// Important: `refs` CSV can be non-empty while only containing blank slots (`",,"`);
+/// those must still fall through to `refs_initial` per slot so reffing teams show up.
+fn refs_tokens(m: &MatchSetupData) -> Vec<String> {
+    let resolved: Vec<&str> = m
+        .refs
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .map(|s| s.trim())
+        .collect();
+    let initial: Vec<&str> = m
+        .refs_initial
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .map(|s| s.trim())
+        .collect();
+    let n = resolved.len().max(initial.len());
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let r = resolved.get(i).copied().unwrap_or("");
+        let init = initial.get(i).copied().unwrap_or("");
+        let tok = if !r.is_empty() { r } else { init };
+        if !tok.is_empty() {
+            out.push(tok.to_string());
+        }
+    }
+    out
+}
+
+/// True for BREAK / JOIN — structural schedule items, not games with lifecycle chrome.
+fn is_structural_match(m: &MatchSetupData) -> bool {
+    matches!(m.schedule_type.as_deref(), Some("BREAK") | Some("JOIN"))
+}
+
+fn is_structural_type(schedule_type: Option<&str>) -> bool {
+    matches!(schedule_type, Some("BREAK") | Some("JOIN"))
+}
+
+/// True if a ref/team token refers to the given focus team id.
+fn token_matches_team(token: &str, team_id: &str, team_options: &[TeamOption]) -> bool {
+    let token = token.trim();
+    let team_id = team_id.trim();
+    if token.is_empty() || team_id.is_empty() {
+        return false;
+    }
+    if token == team_id {
+        return true;
+    }
+    let Some(opt) = team_options.iter().find(|o| o.id == team_id) else {
+        return token.eq_ignore_ascii_case(team_id);
+    };
+    if opt.id.eq_ignore_ascii_case(token) {
+        return true;
+    }
+    if opt
+        .pseudonym
+        .as_deref()
+        .map(|p| p.eq_ignore_ascii_case(token))
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    if opt
+        .shortname
+        .as_deref()
+        .map(|s| s.eq_ignore_ascii_case(token))
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    false
+}
+
+/// Full display name for a team option (no shortname truncation).
+fn team_full_label(opt: &TeamOption) -> String {
+    opt.pseudonym
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(opt.id.as_str())
+        .to_string()
+}
+
+/// Resolve a team id/token to (full label, photo). Uses full pseudonym, never shortname.
+fn resolve_team_display(
+    token: &str,
+    team_options: &[TeamOption],
+) -> (String, Option<String>, u8) {
+    if let Some(opt) = team_options.iter().find(|o| o.id == token) {
+        return (team_full_label(opt), opt.profile_photo.clone(), 0);
+    }
+    // Unresolved tag/reference expression
+    let (kind, label) = team_ref_display(token);
+    (label, None, kind)
+}
+
+/// Whether a match involves a focus team (playing or reffing).
+fn match_involves_team(m: &MatchSetupData, team_id: &str, team_options: &[TeamOption]) -> bool {
+    if team_id.is_empty() {
+        return false;
+    }
+    team_is_playing(m, team_id) || team_is_reffing(m, team_id, team_options)
+}
+
+fn team_is_playing(m: &MatchSetupData, team_id: &str) -> bool {
+    !team_id.is_empty()
+        && (m.team1.as_deref() == Some(team_id) || m.team2.as_deref() == Some(team_id))
+}
+
+fn team_is_reffing(m: &MatchSetupData, team_id: &str, team_options: &[TeamOption]) -> bool {
+    if team_id.is_empty() || team_is_playing(m, team_id) {
+        return false;
+    }
+    refs_tokens(m)
+        .iter()
+        .any(|t| token_matches_team(t, team_id, team_options))
+}
+
+/// Opponent full label + photo relative to focus team. None if not playing.
+fn opponent_for_focus(
+    m: &MatchSetupData,
+    team_id: &str,
+    team_options: &[TeamOption],
+) -> Option<(String, Option<String>, u8)> {
+    if m.team1.as_deref() == Some(team_id) {
+        let token = m
+            .team2
+            .as_deref()
+            .or(m.team2_initial.as_deref())
+            .unwrap_or("TBA");
+        return Some(resolve_team_display(token, team_options));
+    }
+    if m.team2.as_deref() == Some(team_id) {
+        let token = m
+            .team1
+            .as_deref()
+            .or(m.team1_initial.as_deref())
+            .unwrap_or("TBA");
+        return Some(resolve_team_display(token, team_options));
+    }
+    None
+}
+
+/// localStorage helpers (wasm only).
+fn ls_get(key: &str) -> Option<String> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::window()?
+            .local_storage()
+            .ok()??
+            .get_item(key)
+            .ok()?
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = key;
+        None
+    }
+}
+
+fn ls_set(key: &str, val: &str) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Some(window) = web_sys::window() {
+            if let Ok(Some(storage)) = window.local_storage() {
+                let _ = storage.set_item(key, val);
+            }
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (key, val);
+    }
+}
+
+/// Compute the scrollTop that keeps the current viewport center fixed after a
+/// uniform content-height scale of `ratio` (new/old). Returns None if the
+/// scroll element is missing.
+fn scroll_top_after_centered_zoom(scroll_el_id: &str, ratio: f64) -> Option<i32> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        use wasm_bindgen::JsCast;
+        let window = web_sys::window()?;
+        let doc = window.document()?;
+        let el = doc.get_element_by_id(scroll_el_id)?;
+        let html_el = el.dyn_ref::<web_sys::HtmlElement>()?;
+        let client_h = html_el.client_height() as f64;
+        let scroll_top = html_el.scroll_top() as f64;
+        let center = scroll_top + client_h / 2.0;
+        Some((center * ratio - client_h / 2.0).max(0.0) as i32)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (scroll_el_id, ratio);
+        None
+    }
+}
+
+fn apply_scroll_top(scroll_el_id: &str, scroll_top: i32) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        use wasm_bindgen::JsCast;
+        if let Some(window) = web_sys::window() {
+            if let Some(doc) = window.document() {
+                if let Some(el) = doc.get_element_by_id(scroll_el_id) {
+                    if let Some(html_el) = el.dyn_ref::<web_sys::HtmlElement>() {
+                        html_el.set_scroll_top(scroll_top);
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = (scroll_el_id, scroll_top);
+    }
+}
+
+fn focus_team_storage_key(tournament_url: &str) -> String {
+    format!("schedule_focus_team:{tournament_url}")
+}
+
+/// Remembered nav location (view + team + field) per tournament, used when the
+/// URL carries no query params.
+fn nav_storage_key(tournament_url: &str) -> String {
+    format!("schedule_last_nav:{tournament_url}")
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, serde::Deserialize)]
+struct ScheduleNavState {
+    #[serde(default)]
+    view: String,
+    #[serde(default)]
+    team: String,
+    #[serde(default)]
+    field: String,
+}
+
+/// View modes: "team" / "field" are public; "timeline" (all fields) / "table" are TO-only.
+fn is_valid_view(view: &str) -> bool {
+    matches!(view, "team" | "field" | "timeline" | "table")
+}
+
+const VERTICAL_SCALE_KEY: &str = "schedule_vertical_scale";
+/// Edit-mode-only "Show times as they happened" toggle. No effect outside edit mode.
+const EDIT_SHOW_AS_HAPPENED_KEY: &str = "schedule_edit_show_as_happened";
+/// Base slot height in rem at scale 1.0
+const BASE_SLOT_HEIGHT_REM: f64 = 7.0;
+const MIN_VERTICAL_SCALE: f64 = 0.55;
+const MAX_VERTICAL_SCALE: f64 = 2.5;
+
+/// Full-timestamp local formatter so debug-mode tables show the full timestamp.
 fn format_datetime_local(iso: &str, tz_offset_minutes: i64) -> String {
     let utc_dt = if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(iso) {
         dt.naive_utc()
@@ -138,17 +456,77 @@ fn read_debug_mode() -> bool {
 }
 
 #[component]
-pub fn Schedule(url: String) -> Element {
+pub fn Schedule(url: String, view: String, team: String, field: String) -> Element {
     let url_data = url.clone();
     let mut setup_data = use_resource(move || {
         let u = url_data.clone();
         async move { api::schedule_setup(&u).await }
     });
 
-    let mut view_mode = use_signal(|| "timeline".to_string());
+    // Initial nav state: URL query params win; otherwise fall back to the
+    // remembered location. Computed once so navigator().replace below (which
+    // changes props) can't feed back into state.
+    let initial_nav = use_hook(|| {
+        let from_url = ScheduleNavState {
+            view: view.clone(),
+            team: team.clone(),
+            field: field.clone(),
+        };
+        let mut nav = if !view.is_empty() || !team.is_empty() || !field.is_empty() {
+            from_url
+        } else {
+            ls_get(&nav_storage_key(&url))
+                .and_then(|s| serde_json::from_str::<ScheduleNavState>(&s).ok())
+                .unwrap_or_default()
+        };
+        if !is_valid_view(&nav.view) {
+            // Default view is the personal single-column timeline.
+            nav.view = "team".to_string();
+        }
+        if nav.field.is_empty() {
+            nav.field = "all".to_string();
+        }
+        nav
+    });
+
+    let mut view_mode = use_signal({
+        let v = initial_nav.view.clone();
+        move || v
+    });
     let mut edit_mode = use_signal(|| false);
-    let mut selected_field = use_signal(|| "all".to_string());
+    let mut selected_field = use_signal({
+        let f = initial_nav.field.clone();
+        move || f
+    });
     let mut highlight_team = use_signal(|| "".to_string());
+    /// Edit-mode-only "Show times as they happened" toggle: place blocks at exact
+    /// real times (confirmed/completed, falling back to nominal estimates) with no
+    /// min-capping. Viewers always get the "planned or earlier" rule.
+    let mut show_as_happened = use_signal(|| {
+        ls_get(EDIT_SHOW_AS_HAPPENED_KEY)
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    });
+    /// Vertical scale for timeline slot height (#222). 1.0 = default.
+    let mut vertical_scale = use_signal(|| {
+        ls_get(VERTICAL_SCALE_KEY)
+            .and_then(|s| s.parse::<f64>().ok())
+            .map(|s| s.clamp(MIN_VERTICAL_SCALE, MAX_VERTICAL_SCALE))
+            .unwrap_or(1.0)
+    });
+    /// Focus team id for Team view (#195). URL/remembered nav wins; otherwise
+    /// prefer localStorage so the dropdown shows a selection immediately, then
+    /// upgrade from registration if needed (effect below).
+    let mut focus_team_id = use_signal({
+        let t = initial_nav.team.clone();
+        move || t
+    });
+    // When a team was specified via URL or remembered nav, skip the
+    // localStorage/registration resolution entirely.
+    let mut focus_team_ready = use_signal({
+        let specified = !initial_nav.team.is_empty();
+        move || specified
+    });
 
     let mut is_to = use_signal(|| false);
 
@@ -175,8 +553,109 @@ pub fn Schedule(url: String) -> Element {
     use_effect(move || {
         if let Some(Ok(data)) = setup_data.value().read().as_ref() {
             is_to.set(data.is_to);
+            let v = view_mode();
+            // "All fields" and "Table" are TO-only; coerce stray values (e.g. from URL).
+            if !data.is_to && matches!(v.as_str(), "timeline" | "table") {
+                view_mode.set("team".to_string());
+                return;
+            }
+            // "By field" needs a concrete field: keep a remembered valid one, else
+            // default to the first field alphabetically.
+            if v == "field" {
+                let sf = selected_field.peek().clone();
+                let valid = data.fields.iter().any(|f| f.id.to_string() == sf);
+                if !valid {
+                    let mut fields: Vec<&FieldSetupData> = data.fields.iter().collect();
+                    fields.sort_by(|a, b| a.name.cmp(&b.name));
+                    if let Some(f) = fields.first() {
+                        selected_field.set(f.id.to_string());
+                    }
+                }
+            }
         }
     });
+
+    // Keep localStorage and the URL in sync with the nav state (view/team/field)
+    // so copying the address bar deep-links correctly. `replace` (not `push`) to
+    // avoid history spam; the guard prevents loops with the route props.
+    {
+        let url_for_nav = url.clone();
+        let nav_handle = use_navigator();
+        let mut last_nav_synced = use_signal(|| None::<ScheduleNavState>);
+        use_effect(move || {
+            let state = ScheduleNavState {
+                view: view_mode(),
+                team: focus_team_id(),
+                field: {
+                    let f = selected_field();
+                    if f == "all" { String::new() } else { f }
+                },
+            };
+            if last_nav_synced.peek().as_ref() == Some(&state) {
+                return;
+            }
+            if let Ok(encoded) = serde_json::to_string(&state) {
+                ls_set(&nav_storage_key(&url_for_nav), &encoded);
+            }
+            nav_handle.replace(Route::Schedule {
+                url: url_for_nav.clone(),
+                view: state.view.clone(),
+                team: state.team.clone(),
+                field: state.field.clone(),
+            });
+            last_nav_synced.set(Some(state));
+        });
+    }
+
+    // Resolve default focus team for Team view: localStorage first (instant select),
+    // then registered team / player's team (overrides empty only, or confirms).
+    {
+        let url_for_focus = url.clone();
+        use_effect(move || {
+            if focus_team_ready() {
+                return;
+            }
+            let u = url_for_focus.clone();
+            // Immediate: restore persisted selection so the dropdown isn't blank on first paint.
+            if let Some(stored) = ls_get(&focus_team_storage_key(&u)) {
+                if !stored.is_empty() {
+                    focus_team_id.set(stored);
+                }
+            }
+            spawn(async move {
+                let mut resolved = String::new();
+                // 1) Logged-in team with a registration for this tournament
+                if let Ok(me) = api::me().await {
+                    if me.user_type == "team" {
+                        if api::get_my_team_registration(&u).await.is_ok() {
+                            resolved = me.id.clone();
+                        }
+                    } else if me.user_type == "player" {
+                        if let Ok(preg) = api::get_my_player_registration(&u).await {
+                            if let Some(team) = preg.current_team {
+                                resolved = team.id;
+                            } else if let Some(tid) = preg.registration.team {
+                                resolved = tid;
+                            }
+                        }
+                    }
+                }
+                // Prefer registration identity when available; else keep localStorage.
+                if resolved.is_empty() {
+                    if let Some(stored) = ls_get(&focus_team_storage_key(&u)) {
+                        if !stored.is_empty() {
+                            resolved = stored;
+                        }
+                    }
+                }
+                if !resolved.is_empty() {
+                    focus_team_id.set(resolved.clone());
+                    ls_set(&focus_team_storage_key(&u), &resolved);
+                }
+                focus_team_ready.set(true);
+            });
+        });
+    }
 
     use_effect(move || {
         if refresh_trigger() > 0 {
@@ -255,13 +734,13 @@ pub fn Schedule(url: String) -> Element {
                     match key_str.as_str() {
                         "n" | "N" => {
                             ev.prevent_default();
-                            if view_mode() == "timeline" {
+                            if matches!(view_mode().as_str(), "team" | "field" | "timeline") {
                                 key_nav.set(Some("next".to_string()));
                             }
                         }
                         "p" | "P" => {
                             ev.prevent_default();
-                            if view_mode() == "timeline" {
+                            if matches!(view_mode().as_str(), "team" | "field" | "timeline") {
                                 key_nav.set(Some("prev".to_string()));
                             }
                         }
@@ -269,22 +748,38 @@ pub fn Schedule(url: String) -> Element {
                             ev.prevent_default();
                             if edit_mode() && is_to {
                                 active_modal.set("tags".to_string());
-                            } else if view_mode() == "timeline" {
+                            } else if matches!(view_mode().as_str(), "team" | "field" | "timeline")
+                            {
                                 key_nav.set(Some("today".to_string()));
                             }
                         }
                         "a" | "A" => {
                             ev.prevent_default();
-                            view_mode.set("table".to_string());
+                            if is_to {
+                                view_mode.set("table".to_string());
+                            }
                         }
                         "l" | "L" => {
                             ev.prevent_default();
-                            view_mode.set("timeline".to_string());
+                            if is_to {
+                                view_mode.set("timeline".to_string());
+                            }
+                        }
+                        "y" | "Y" => {
+                            ev.prevent_default();
+                            if !edit_mode() {
+                                view_mode.set("team".to_string());
+                            }
                         }
                         "e" | "E" => {
                             ev.prevent_default();
                             if is_to {
-                                edit_mode.set(!edit_mode());
+                                let on = !edit_mode();
+                                edit_mode.set(on);
+                                // Team/field views are viewer-only; bounce to the grid.
+                                if on && matches!(view_mode().as_str(), "team" | "field") {
+                                    view_mode.set("timeline".to_string());
+                                }
                             }
                         }
                         "m" | "M" => {
@@ -297,6 +792,9 @@ pub fn Schedule(url: String) -> Element {
                             if edit_mode() && is_to {
                                 ev.prevent_default();
                                 active_modal.set("fields".to_string());
+                            } else if !edit_mode() {
+                                ev.prevent_default();
+                                view_mode.set("field".to_string());
                             }
                         }
                         "x" | "X" => {
@@ -427,33 +925,101 @@ pub fn Schedule(url: String) -> Element {
                         div { class: "card-body p-2",
                             div { class: "d-flex flex-wrap justify-content-between align-items-center gap-2",
                                 div { class: "d-flex flex-wrap align-items-center gap-2",
-                                    select {
-                                        class: "form-select form-select-sm d-inline-block w-auto",
-                                        value: "{selected_field}",
-                                        onchange: move |e| selected_field.set(e.value()),
-                                        option { value: "all", "All Fields" }
-                                        for f in &data.fields {
-                                            option { value: "{f.id}", "{f.name}" }
+                                    if view_mode() != "team" {
+                                        select {
+                                            class: "form-select form-select-sm d-inline-block w-auto",
+                                            value: "{selected_field}",
+                                            onchange: move |e| selected_field.set(e.value()),
+                                            // "By field" requires a concrete field; the grid/table allow "all".
+                                            if view_mode() != "field" {
+                                                option { value: "all", "All Fields" }
+                                            }
+                                            for f in &data.fields {
+                                                option {
+                                                    value: "{f.id}",
+                                                    selected: f.id.to_string() == selected_field(),
+                                                    "{f.name}"
+                                                }
+                                            }
                                         }
-                                    }
-                                    input {
-                                        class: "form-control form-control-sm d-inline-block",
-                                        style: "width: 10rem;",
-                                        placeholder: "Highlight Team...",
-                                        value: "{highlight_team}",
-                                        oninput: move |e| highlight_team.set(e.value()),
-                                        onkeydown: move |ev: Event<KeyboardData>| ev.stop_propagation(),
+                                        input {
+                                            class: "form-control form-control-sm d-inline-block",
+                                            style: "width: 10rem;",
+                                            placeholder: "Highlight Team...",
+                                            value: "{highlight_team}",
+                                            oninput: move |e| highlight_team.set(e.value()),
+                                            onkeydown: move |ev: Event<KeyboardData>| ev.stop_propagation(),
+                                        }
+                                    } else {
+                                        {
+                                            let selected = focus_team_id();
+                                            let selected_in_options = data.team_options.iter().any(|t| t.id == selected);
+                                            rsx! {
+                                                select {
+                                                    class: "form-select form-select-sm d-inline-block w-auto",
+                                                    // Controlled value + per-option selected so default team shows correctly.
+                                                    value: "{selected}",
+                                                    onchange: {
+                                                        let u = url.clone();
+                                                        move |e| {
+                                                            let v = e.value();
+                                                            focus_team_id.set(v.clone());
+                                                            ls_set(&focus_team_storage_key(&u), &v);
+                                                        }
+                                                    },
+                                                    option {
+                                                        value: "",
+                                                        selected: selected.is_empty(),
+                                                        "Choose your team…"
+                                                    }
+                                                    // If the resolved team isn't in team_options yet, still show it selected.
+                                                    if !selected.is_empty() && !selected_in_options {
+                                                        option {
+                                                            value: "{selected}",
+                                                            selected: true,
+                                                            "{selected}"
+                                                        }
+                                                    }
+                                                    for t in &data.team_options {
+                                                        option {
+                                                            value: "{t.id}",
+                                                            selected: t.id == selected,
+                                                            {
+                                                                t.pseudonym
+                                                                    .as_deref()
+                                                                    .unwrap_or(t.id.as_str())
+                                                                    .to_string()
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                     div { class: "btn-group btn-group-sm",
-                                        button {
-                                            class: if view_mode() == "timeline" { "btn btn-primary" } else { "btn btn-outline-primary" },
-                                            onclick: move |_| view_mode.set("timeline".to_string()),
-                                            "Timeline"
+                                        if !edit_mode() {
+                                            button {
+                                                class: if view_mode() == "team" { "btn btn-primary" } else { "btn btn-outline-primary" },
+                                                onclick: move |_| view_mode.set("team".to_string()),
+                                                "By team"
+                                            }
+                                            button {
+                                                class: if view_mode() == "field" { "btn btn-primary" } else { "btn btn-outline-primary" },
+                                                onclick: move |_| view_mode.set("field".to_string()),
+                                                "By field"
+                                            }
                                         }
-                                        button {
-                                            class: if view_mode() == "table" { "btn btn-primary" } else { "btn btn-outline-primary" },
-                                            onclick: move |_| view_mode.set("table".to_string()),
-                                            "Table"
+                                        if is_to {
+                                            button {
+                                                class: if view_mode() == "timeline" { "btn btn-primary" } else { "btn btn-outline-primary" },
+                                                onclick: move |_| view_mode.set("timeline".to_string()),
+                                                "All fields"
+                                            }
+                                            button {
+                                                class: if view_mode() == "table" { "btn btn-primary" } else { "btn btn-outline-primary" },
+                                                onclick: move |_| view_mode.set("table".to_string()),
+                                                "Table"
+                                            }
                                         }
                                     }
                                 }
@@ -518,6 +1084,27 @@ pub fn Schedule(url: String) -> Element {
                                                 onclick: move |_| active_modal.set("schedule_warnings".to_string()),
                                                 "⚠ Warnings"
                                             }
+                                            div {
+                                                class: "form-check form-switch mb-0 ms-1",
+                                                title: "Place blocks at exact real times (confirmed/completed, falling back to estimates) instead of the planned-or-earlier rule.",
+                                                input {
+                                                    class: "form-check-input",
+                                                    r#type: "checkbox",
+                                                    role: "switch",
+                                                    id: "showAsHappenedSwitch",
+                                                    checked: "{show_as_happened}",
+                                                    onchange: move |e| {
+                                                        let on = e.value() == "true";
+                                                        show_as_happened.set(on);
+                                                        ls_set(EDIT_SHOW_AS_HAPPENED_KEY, if on { "1" } else { "0" });
+                                                    }
+                                                }
+                                                label {
+                                                    class: "form-check-label small",
+                                                    r#for: "showAsHappenedSwitch",
+                                                    "Show times as they happened"
+                                                }
+                                            }
                                         }
                                         div { class: "form-check form-switch mb-0 ms-1",
                                             input {
@@ -526,7 +1113,14 @@ pub fn Schedule(url: String) -> Element {
                                                 role: "switch",
                                                 id: "editModeSwitch",
                                                 checked: "{edit_mode}",
-                                                onchange: move |e| edit_mode.set(e.value() == "true")
+                                                onchange: move |e| {
+                                                    let on = e.value() == "true";
+                                                    edit_mode.set(on);
+                                                    // Team/field views are viewer-only; leave them when entering edit.
+                                                    if on && matches!(view_mode().as_str(), "team" | "field") {
+                                                        view_mode.set("timeline".to_string());
+                                                    }
+                                                }
                                             }
                                             label { class: "form-check-label small", "for": "editModeSwitch", "Edit" }
                                         }
@@ -536,12 +1130,35 @@ pub fn Schedule(url: String) -> Element {
                         }
                     }
 
-                    if view_mode() == "timeline" {
+                    if view_mode() == "team" && focus_team_id().is_empty() {
+                        div { class: "alert alert-info",
+                            "Choose your team above to see only the matches you play or ref."
+                        }
+                    } else if view_mode() != "table" {
                         ScheduleTimeline {
                             data: data.clone(),
-                            selected_field: selected_field(),
-                            highlight_team: highlight_team(),
-                            edit_mode: edit_mode(),
+                            // Team view spans all fields; "By field" reuses the grid
+                            // with a single concrete field (breaks/joins included).
+                            selected_field: if view_mode() == "team" {
+                                "all".to_string()
+                            } else {
+                                selected_field()
+                            },
+                            highlight_team: if view_mode() == "team" {
+                                String::new()
+                            } else {
+                                highlight_team()
+                            },
+                            edit_mode: edit_mode() && view_mode() == "timeline",
+                            // "As happened" placement is an edit-mode-only concept.
+                            show_as_happened: edit_mode() && show_as_happened(),
+                            vertical_scale: vertical_scale,
+                            // Empty = multi-field grid; non-empty = single-column team view.
+                            focus_team_id: if view_mode() == "team" {
+                                focus_team_id()
+                            } else {
+                                String::new()
+                            },
                             tournament_url: url.clone(),
                             on_edit_match: move |id: String| {
                                 selected_match_id.set(id);
@@ -557,6 +1174,7 @@ pub fn Schedule(url: String) -> Element {
                             highlight_team: highlight_team(),
                             edit_mode: edit_mode(),
                             debug_mode: debug_mode(),
+                            show_as_happened: edit_mode() && show_as_happened(),
                             tournament_url: url.clone(),
                             on_edit_match: move |id: String| {
                                 selected_match_id.set(id);
@@ -2154,6 +2772,7 @@ fn TableView(
     highlight_team: String,
     edit_mode: bool,
     #[props(default = false)] debug_mode: bool,
+    #[props(default = false)] show_as_happened: bool,
     tournament_url: String,
     on_edit_match: EventHandler<String>,
 ) -> Element {
@@ -2266,16 +2885,13 @@ fn TableView(
                         let t2_label = opt2.map(|o| short_or_truncate(o.pseudonym.as_deref().unwrap_or(o.id.as_str()), o.shortname.as_deref()))
                             .unwrap_or_else(|| m.team2_initial.as_deref().unwrap_or("").to_string());
                         let photo2 = opt2.and_then(|o| o.profile_photo.clone());
-                        // Refs column: only m.refs / m.refs_initial (comma-separated list).
-                        // Track both raw (for filter) and label (for display) per ref token.
-                        let refs_entries: Vec<(String, String, Option<String>)> = m.refs.as_deref().or(m.refs_initial.as_deref()).unwrap_or("")
-                            .split(',')
-                            .map(|s| s.trim())
-                            .filter(|s| !s.is_empty())
+                        // Refs column: per-slot resolved id else initial/tag (#197).
+                        let refs_entries: Vec<(String, String, Option<String>)> = refs_tokens(m)
+                            .into_iter()
                             .map(|token| {
                                 let opt = data.team_options.iter().find(|o| o.id == token);
-                                let raw = opt.and_then(|o| o.pseudonym.as_deref()).map(String::from).unwrap_or_else(|| token.to_string());
-                                let label = opt.map(|o| short_or_truncate(o.pseudonym.as_deref().unwrap_or(o.id.as_str()), o.shortname.as_deref())).unwrap_or_else(|| token.to_string());
+                                let raw = opt.and_then(|o| o.pseudonym.as_deref()).map(String::from).unwrap_or_else(|| token.clone());
+                                let label = opt.map(|o| short_or_truncate(o.pseudonym.as_deref().unwrap_or(o.id.as_str()), o.shortname.as_deref())).unwrap_or_else(|| token.clone());
                                 let photo = opt.and_then(|o| o.profile_photo.clone());
                                 (raw, label, photo)
                             })
@@ -2319,7 +2935,14 @@ fn TableView(
                             })
                             .collect();
                         let schedule_type_display = m.schedule_type.as_deref().unwrap_or("-");
-                        let (status_color, status_label) = if m.status.is_empty() { ("#e9ecef".to_string(), "-".to_string()) } else { status_color_and_label(&m.status) };
+                        let structural = is_structural_match(m);
+                        let (status_color, status_label) = if structural {
+                            ("#e9ecef".to_string(), "—".to_string())
+                        } else if m.status.is_empty() {
+                            ("#e9ecef".to_string(), "-".to_string())
+                        } else {
+                            status_color_and_label(&m.status)
+                        };
                         rsx! {
                             tr { key: "{m.uuid}", class: "{tr_row_class}",
                                 td {
@@ -2331,16 +2954,20 @@ fn TableView(
                                 }
                                 td { "{m.field.as_deref().unwrap_or(\"\")}" }
                                 td {
-                                    if let Some(t) = m.confirmed_start_time.as_ref().or(m.nominal_start_time.as_ref()) {
-                                        "{format_time_local(t, tz_offset)}"
+                                    if let Some((start_utc, _)) = display_interval_utc(m, show_as_happened) {
+                                        span { "{format_naive_utc_time_local(start_utc, tz_offset)}" }
                                     } else { "-" }
                                 }
                                 td { "{schedule_type_display}" }
                                 td { class: "align-middle",
-                                    span {
-                                        class: "schedule-timeline-status-tag",
-                                        style: "background-color: {status_color};",
-                                        "{status_label}"
+                                    if !structural {
+                                        span {
+                                            class: "schedule-timeline-status-tag",
+                                            style: "background-color: {status_color};",
+                                            "{status_label}"
+                                        }
+                                    } else {
+                                        span { class: "text-muted small", "—" }
                                     }
                                 }
                                 td { class: "align-middle",
@@ -2462,7 +3089,7 @@ struct SchedulerSection {
 
 // Internal types for timeline events
 #[allow(dead_code)]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct TimelineEvent {
     id: String,
     name: String,
@@ -2482,9 +3109,15 @@ struct TimelineEvent {
     schedule_type: Option<String>,
     lane_index: usize,
     num_lanes: usize,
-    highlight_playing: bool, // team is team1 or team2
-    highlight_ref: bool,     // team is one of refs (matched by pseudonym)
+    highlight_playing: bool, // all-teams highlight filter
+    highlight_ref: bool,     // all-teams highlight filter
     ribbon: bool,
+    /// Team-view role: "playing" | "reffing" | "".
+    team_role: String,
+    /// Team-view opponent full name (no shortname).
+    opponent_label: Option<String>,
+    opponent_photo: Option<String>,
+    opponent_kind: u8,
 }
 
 #[derive(Clone, Debug)]
@@ -2495,17 +3128,265 @@ struct JoinGroup {
     field_matches: Vec<(u32, String)>,
 }
 
+
+/// One match block on the timeline (used by the overlay layer so events are never
+/// buried under later half-hour grid cells).
+#[component]
+fn TimelineEventCard(
+    event: TimelineEvent,
+    event_style: String,
+    team_view: bool,
+    edit_mode: bool,
+    tournament_url: String,
+    base_url: String,
+    on_edit_match: EventHandler<String>,
+) -> Element {
+    let navigator = use_navigator();
+    let event_id_clone = event.id.clone();
+    let (_, status_label) = status_color_and_label(&event.status);
+    let is_break = event.schedule_type.as_deref() == Some("BREAK");
+    let is_structural = is_structural_type(event.schedule_type.as_deref());
+    let event_title = if is_break {
+        event.name.clone()
+    } else if team_view {
+        if let Some(opp) = event.opponent_label.as_ref() {
+            format!("{} — vs {}", event.name, opp)
+        } else {
+            format!("{} — reffing", event.name)
+        }
+    } else {
+        format!("{} - {} vs {}", event.name, event.team1, event.team2)
+    };
+    let url_clone = tournament_url.clone();
+    let event_class = format!(
+        "schedule-timeline-event{}{}{}",
+        if event.highlight_playing {
+            " schedule-timeline-event--highlight-playing"
+        } else {
+            ""
+        },
+        if event.highlight_ref {
+            " schedule-timeline-event--highlight-ref"
+        } else {
+            ""
+        },
+        if is_structural {
+            " schedule-timeline-event--structural"
+        } else {
+            ""
+        }
+    );
+    let (t1_kind, t1_label) = team_ref_display(&event.team1);
+    let (t2_kind, t2_label) = team_ref_display(&event.team2);
+    let event_refs: Vec<(String, Option<String>, u8, String)> = event
+        .refs_list
+        .iter()
+        .map(|(d, p)| {
+            let (k, l) = team_ref_display(d);
+            (d.clone(), p.clone(), k, l)
+        })
+        .collect();
+    let edit_locked = matches!(
+        event.status.as_str(),
+        "IN_PROGRESS" | "COMPLETED" | "SKIPPED"
+    );
+    let timeline_title = if edit_mode && edit_locked {
+        format!("{event_title} — match has started, editing disabled")
+    } else {
+        event_title.clone()
+    };
+    let role_badge = match event.team_role.as_str() {
+        "playing" => Some(("Playing", "schedule-role-badge schedule-role-badge--playing")),
+        "reffing" => Some(("Reffing", "schedule-role-badge schedule-role-badge--reffing")),
+        _ => None,
+    };
+    let opp_label = event.opponent_label.clone();
+    let opp_photo = event.opponent_photo.clone();
+    let opp_kind = event.opponent_kind;
+    let field_label = event.field_name.clone();
+    let start_time_label = event.start_time.format("%H:%M").to_string();
+
+    rsx! {
+        div {
+            class: "{event_class}",
+            style: "{event_style}",
+            title: "{timeline_title}",
+            cursor: if (is_break && !edit_mode) || (edit_mode && edit_locked) { "default" } else { "pointer" },
+            onclick: move |_| {
+                if is_break && !edit_mode {
+                } else if edit_mode {
+                    if !edit_locked {
+                        on_edit_match.call(event_id_clone.clone());
+                    }
+                } else {
+                    navigator.push(Route::MatchPageById {
+                        url: url_clone.clone(),
+                        match_id: event_id_clone.clone(),
+                    });
+                }
+            },
+            if !is_structural {
+                span {
+                    class: "schedule-timeline-status-tag schedule-timeline-status-tag--corner",
+                    style: "background-color: {event.color};",
+                    "{status_label}"
+                }
+            }
+            if team_view && !is_break {
+                div { class: "schedule-timeline-event-team-row",
+                    div { class: "schedule-timeline-event-main",
+                        div { class: "schedule-timeline-event-header d-flex align-items-center flex-wrap gap-1",
+                            div { class: "schedule-timeline-event-name", "{event.name}" }
+                            if let Some(opp) = opp_label.as_ref() {
+                                span { class: "schedule-timeline-event-teams schedule-timeline-inline-vs d-inline-flex align-items-center flex-wrap gap-1",
+                                    span { "vs" }
+                                    if opp_kind == 0 {
+                                        if let Some(ph) = &opp_photo {
+                                            img { class: "rounded-circle", style: "width: 1.25em; height: 1.25em; object-fit: cover; flex-shrink: 0;", src: "{base_url}/static/{ph}", alt: "" }
+                                        } else {
+                                            span { class: "team-token-avatar rounded-circle d-inline-flex align-items-center justify-content-center", style: "width: 1.25em; height: 1.25em; font-size: 0.7em; background: #6c757d; color: white; flex-shrink: 0;", "{opp.chars().next().unwrap_or('?')}" }
+                                        }
+                                    }
+                                    if opp_kind == 1 { img { class: "team-token-icon icon-primary-svg", src: "{base_url}/static/tag.svg", alt: "Tag" } }
+                                    if opp_kind == 2 { img { class: "team-token-icon icon-primary-svg", src: "{base_url}/static/reference.svg", alt: "Reference" } }
+                                    span { class: "schedule-opponent-full", "{opp}" }
+                                }
+                            }
+                            if let Some((role_text, role_class)) = role_badge {
+                                span { class: "{role_class}", "{role_text}" }
+                            }
+                        }
+                        if opp_label.is_none() {
+                            div { class: "schedule-timeline-event-teams schedule-timeline-event-teams--full d-flex align-items-center flex-wrap gap-1",
+                                span { class: "d-inline-flex align-items-center gap-1",
+                                    if let Some(ph) = &event.team1_photo {
+                                        img { class: "rounded-circle", style: "width: 1.25em; height: 1.25em; object-fit: cover; flex-shrink: 0;", src: "{base_url}/static/{ph}", alt: "" }
+                                    } else if !event.team1.is_empty() {
+                                        span { class: "team-token-avatar rounded-circle d-inline-flex align-items-center justify-content-center", style: "width: 1.25em; height: 1.25em; font-size: 0.7em; background: #6c757d; color: white; flex-shrink: 0;", "{event.team1.chars().next().unwrap_or('?')}" }
+                                    }
+                                    span { class: "schedule-opponent-full", "{event.team1}" }
+                                }
+                                span { "vs" }
+                                span { class: "d-inline-flex align-items-center gap-1",
+                                    if let Some(ph) = &event.team2_photo {
+                                        img { class: "rounded-circle", style: "width: 1.25em; height: 1.25em; object-fit: cover; flex-shrink: 0;", src: "{base_url}/static/{ph}", alt: "" }
+                                    } else if !event.team2.is_empty() {
+                                        span { class: "team-token-avatar rounded-circle d-inline-flex align-items-center justify-content-center", style: "width: 1.25em; height: 1.25em; font-size: 0.7em; background: #6c757d; color: white; flex-shrink: 0;", "{event.team2.chars().next().unwrap_or('?')}" }
+                                    }
+                                    span { class: "schedule-opponent-full", "{event.team2}" }
+                                }
+                            }
+                        }
+                        if !event.refs_list.is_empty() {
+                            div { class: "schedule-timeline-event-refs d-flex align-items-center flex-wrap gap-1 mt-1",
+                                span { class: "me-1", "Refs:" }
+                                for (ref_display, ref_photo, r_kind, r_label) in &event_refs {
+                                    span { class: "d-inline-flex align-items-center gap-1",
+                                        if *r_kind == 0 {
+                                            if let Some(ph) = ref_photo {
+                                                img { class: "rounded-circle", style: "width: 1.15em; height: 1.15em; object-fit: cover;", src: "{base_url}/static/{ph}", alt: "" }
+                                            } else {
+                                                span { class: "team-token-avatar rounded-circle d-inline-flex align-items-center justify-content-center", style: "width: 1.15em; height: 1.15em; font-size: 0.65em; background: #6c757d; color: white;", "{ref_display.chars().next().unwrap_or('?')}" }
+                                            }
+                                        }
+                                        if *r_kind == 1 { img { class: "team-token-icon icon-primary-svg", src: "{base_url}/static/tag.svg", alt: "Tag" } }
+                                        if *r_kind == 2 { img { class: "team-token-icon icon-primary-svg", src: "{base_url}/static/reference.svg", alt: "Reference" } }
+                                        span { "{r_label}" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    div { class: "schedule-timeline-event-meta",
+                        div { class: "schedule-timeline-event-field", "{field_label}" }
+                        div { class: "schedule-timeline-event-start", "{start_time_label}" }
+                    }
+                }
+            } else if !is_break {
+                div { class: "schedule-timeline-event-header d-flex align-items-center flex-wrap gap-1",
+                    div { class: "schedule-timeline-event-name", "{event.name}" }
+                }
+                div { class: "schedule-timeline-event-teams d-flex align-items-center flex-wrap gap-1",
+                    span { class: "d-inline-flex align-items-center gap-1",
+                        if t1_kind == 0 {
+                            if let Some(ph) = &event.team1_photo {
+                                img { class: "rounded-circle", style: "width: 1.25em; height: 1.25em; object-fit: cover;", src: "{base_url}/static/{ph}", alt: "" }
+                            } else {
+                                span { class: "team-token-avatar rounded-circle d-inline-flex align-items-center justify-content-center", style: "width: 1.25em; height: 1.25em; font-size: 0.7em; background: #6c757d; color: white;", "{event.team1.chars().next().unwrap_or('?')}" }
+                            }
+                        }
+                        if t1_kind == 1 { img { class: "team-token-icon icon-primary-svg", src: "{base_url}/static/tag.svg", alt: "Tag" } }
+                        if t1_kind == 2 { img { class: "team-token-icon icon-primary-svg", src: "{base_url}/static/reference.svg", alt: "Reference" } }
+                        span { "{t1_label}" }
+                    }
+                    span { " vs " }
+                    span { class: "d-inline-flex align-items-center gap-1",
+                        if t2_kind == 0 {
+                            if let Some(ph) = &event.team2_photo {
+                                img { class: "rounded-circle", style: "width: 1.25em; height: 1.25em; object-fit: cover;", src: "{base_url}/static/{ph}", alt: "" }
+                            } else {
+                                span { class: "team-token-avatar rounded-circle d-inline-flex align-items-center justify-content-center", style: "width: 1.25em; height: 1.25em; font-size: 0.7em; background: #6c757d; color: white;", "{event.team2.chars().next().unwrap_or('?')}" }
+                            }
+                        }
+                        if t2_kind == 1 { img { class: "team-token-icon icon-primary-svg", src: "{base_url}/static/tag.svg", alt: "Tag" } }
+                        if t2_kind == 2 { img { class: "team-token-icon icon-primary-svg", src: "{base_url}/static/reference.svg", alt: "Reference" } }
+                        span { "{t2_label}" }
+                    }
+                }
+                if !event.refs_list.is_empty() {
+                    div { class: "schedule-timeline-event-refs d-flex align-items-center flex-wrap gap-1 mt-1",
+                        span { class: "me-1", "Refs:" }
+                        for (ref_display, ref_photo, r_kind, r_label) in &event_refs {
+                            span { class: "d-inline-flex align-items-center gap-1",
+                                if *r_kind == 0 {
+                                    if let Some(ph) = ref_photo {
+                                        img { class: "rounded-circle", style: "width: 1.1em; height: 1.1em; object-fit: cover;", src: "{base_url}/static/{ph}", alt: "" }
+                                    } else {
+                                        span { class: "team-token-avatar rounded-circle d-inline-flex align-items-center justify-content-center", style: "width: 1.1em; height: 1.1em; font-size: 0.65em; background: #6c757d; color: white;", "{ref_display.chars().next().unwrap_or('?')}" }
+                                    }
+                                }
+                                if *r_kind == 1 { img { class: "team-token-icon icon-primary-svg", src: "{base_url}/static/tag.svg", alt: "Tag" } }
+                                if *r_kind == 2 { img { class: "team-token-icon icon-primary-svg", src: "{base_url}/static/reference.svg", alt: "Reference" } }
+                                span { "{r_label}" }
+                            }
+                        }
+                    }
+                }
+            } else {
+                div { class: "schedule-timeline-event-header",
+                    div { class: "schedule-timeline-event-name", "{event.name}" }
+                }
+            }
+            if event.ribbon {
+                span {
+                    class: "schedule-timeline-ribbon-icon",
+                    title: "This is a ribbon game",
+                    img { src: "{base_url}/static/ribbon.svg", alt: "Ribbon game" }
+                }
+            }
+        }
+    }
+}
+
 #[component]
 fn ScheduleTimeline(
     data: ScheduleSetupResponse,
     selected_field: String,
     highlight_team: String,
     edit_mode: bool,
+    /// Edit-mode-only: place blocks at exact real times instead of the
+    /// "planned or earlier" viewer rule (see `display_interval_utc`).
+    show_as_happened: bool,
+    vertical_scale: Signal<f64>,
+    /// When non-empty, single-column team view filtered to this team.
+    #[props(default)]
+    focus_team_id: String,
     tournament_url: String,
     on_edit_match: EventHandler<String>,
     key_nav: Signal<Option<String>>,
     on_key_nav_consumed: EventHandler<()>,
 ) -> Element {
+    let team_view = !focus_team_id.is_empty();
     use chrono::NaiveDateTime;
     use chrono::Timelike;
     let navigator = use_navigator();
@@ -2545,14 +3426,66 @@ fn ScheduleTimeline(
     }
 
     let tz_offset_minutes = get_tz_offset_minutes();
+    let scale = vertical_scale();
+    let slot_height_rem = BASE_SLOT_HEIGHT_REM * scale;
+    let scroll_el_id = if team_view {
+        "schedule-timeline-scroll-team"
+    } else {
+        "schedule-timeline-scroll"
+    };
+    // After a zoom, apply this scrollTop once layout has the new slot-height.
+    let mut pending_scroll_top = use_signal(|| None::<i32>);
+    {
+        let scroll_el_id = scroll_el_id;
+        use_effect(move || {
+            let _ = vertical_scale(); // re-run when scale changes
+            if let Some(st) = pending_scroll_top() {
+                pending_scroll_top.set(None);
+                let id = scroll_el_id.to_string();
+                #[cfg(target_arch = "wasm32")]
+                {
+                    // Double-rAF: wait until dioxus has committed the new --slot-height.
+                    wasm_bindgen_futures::spawn_local(async move {
+                        gloo_timers::future::TimeoutFuture::new(0).await;
+                        apply_scroll_top(&id, st);
+                    });
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let _ = (id, st);
+                }
+            }
+        });
+    }
+
+    // Tick so the now-line moves without a full schedule refetch.
+    let mut now_tick = use_signal(|| 0u32);
+    #[cfg(target_arch = "wasm32")]
+    let now_tick_interval = use_signal(|| None as Option<Interval>);
+    #[cfg(target_arch = "wasm32")]
+    {
+        let mut now_tick = now_tick;
+        let mut now_tick_interval = now_tick_interval;
+        use_effect(move || {
+            if now_tick_interval.read().is_some() {
+                return;
+            }
+            let handle = Interval::new(30_000, move || {
+                now_tick.set(now_tick().wrapping_add(1));
+            });
+            now_tick_interval.set(Some(handle));
+        });
+    }
+    let _ = now_tick();
 
     // All match dates in local time (unique, sorted) for prev/next navigation
+    // Use plan times for day navigation so the calendar of the day stays stable.
     let dates_with_matches: Vec<chrono::NaiveDate> = {
         let mut dates: Vec<chrono::NaiveDate> = data
             .matches
             .iter()
             .filter(|m| m.status != "SKIPPED")
-            .filter_map(|m| effective_start_str(m))
+            .filter_map(|m| plan_start_str(m).or_else(|| actual_start_str(m)))
             .filter_map(|s| parse_schedule_time_to_local(s, tz_offset_minutes))
             .map(|dt| dt.date())
             .collect();
@@ -2613,8 +3546,27 @@ fn ScheduleTimeline(
         }
     });
 
-    // Filter visible fields
-    let visible_fields: Vec<&FieldSetupData> = if selected_field == "all" {
+    // Team view uses one synthetic column; all-teams uses real fields.
+    const TEAM_VIEW_FIELD_ID: u32 = u32::MAX;
+    let team_view_field = FieldSetupData {
+        id: TEAM_VIEW_FIELD_ID,
+        name: data
+            .team_options
+            .iter()
+            .find(|o| o.id == focus_team_id)
+            .map(|o| team_full_label(o))
+            .unwrap_or_else(|| {
+                if focus_team_id.is_empty() {
+                    "Team".to_string()
+                } else {
+                    focus_team_id.clone()
+                }
+            }),
+        camera_urls: vec![],
+    };
+    let visible_fields: Vec<&FieldSetupData> = if team_view {
+        vec![&team_view_field]
+    } else if selected_field == "all" {
         data.fields.iter().collect()
     } else {
         data.fields
@@ -2637,40 +3589,44 @@ fn ScheduleTimeline(
     // Get current visible date value (reactive - will update when signal changes)
     let current_visible_date = visible_date_signal();
 
-    // Build timeline events (non-join matches)
-    // Use confirmed_start_time/completed_time when set; else nominal_start_time and start + nominal_length
+    // Build timeline events (non-join matches).
+    // Placement uses `display_interval_utc`: the "planned or earlier" viewer rule,
+    // or exact real times when the edit-mode "as happened" toggle is on.
     let mut timeline_events: Vec<TimelineEvent> = data
         .matches
         .iter()
         .filter(|m| m.status != "SKIPPED")
         .filter(|m| m.schedule_type.as_deref() != Some("JOIN"))
-        .filter_map(|m| {
-            let start_str = effective_start_str(m)?;
-            let start_dt = parse_schedule_time_to_local(start_str, tz_offset_minutes)?;
-            let (end_dt, length_min) = if let Some(end_str) = m.completed_time.as_ref() {
-                let end_dt = parse_schedule_time_to_local(end_str, tz_offset_minutes)?;
-                let len = (end_dt - start_dt).num_minutes().max(0);
-                (end_dt, len)
-            } else {
-                let length_min = m.nominal_length.unwrap_or(30) as i64;
-                (start_dt + chrono::Duration::minutes(length_min), length_min)
-            };
-            let field_name = m.field.as_ref()?;
-            let field = data.fields.iter().find(|f| &f.name == field_name)?;
-
-            // Check if field is visible
-            if selected_field != "all" && field.id.to_string() != selected_field {
-                return None;
+        .filter(|m| {
+            if !team_view {
+                return true;
             }
+            // Team view: only play/ref matches for the focus team (no bare breaks).
+            !is_structural_match(m)
+                && match_involves_team(m, &focus_team_id, &data.team_options)
+        })
+        .filter_map(|m| {
+            let (start_utc, end_utc) = display_interval_utc(m, show_as_happened)?;
+            let start_dt = start_utc + chrono::Duration::minutes(tz_offset_minutes);
+            let end_dt = end_utc + chrono::Duration::minutes(tz_offset_minutes);
+            let length_min = (end_dt - start_dt).num_minutes().max(1);
 
-            // Don't filter by date here - we'll filter when rendering based on current_visible_date
-            // This allows date navigation to work properly
+            let (field_id, field_name) = if team_view {
+                (
+                    TEAM_VIEW_FIELD_ID,
+                    m.field.clone().unwrap_or_else(|| "TBA".to_string()),
+                )
+            } else {
+                let field_name = m.field.as_ref()?;
+                let field = data.fields.iter().find(|f| &f.name == field_name)?;
+                // Check if field is visible
+                if selected_field != "all" && field.id.to_string() != selected_field {
+                    return None;
+                }
+                (field.id, field.name.clone())
+            };
 
-            // Display pseudonyms (from registration): prefer team_options pseudonym when team ID is set.
-            // We keep both a "raw" (full pseudonym) and a "label" (shortname/truncated) form:
-            // - label is what gets rendered in the timeline (limited horizontal space).
-            // - raw is what the highlight filter substring-matches against, so a user typing
-            //   the full team name still matches teams whose label was abbreviated.
+            // Display labels: all-teams uses shortnames for density; team view uses full names.
             let opt1 = m
                 .team1
                 .as_ref()
@@ -2679,14 +3635,18 @@ fn ScheduleTimeline(
                 .and_then(|o| o.pseudonym.as_deref())
                 .map(String::from)
                 .unwrap_or_else(|| m.team1_initial.as_deref().unwrap_or("").to_string());
-            let t1 = opt1
-                .map(|o| {
+            let t1 = if team_view {
+                opt1.map(team_full_label)
+                    .unwrap_or_else(|| m.team1_initial.as_deref().unwrap_or("").to_string())
+            } else {
+                opt1.map(|o| {
                     short_or_truncate(
                         o.pseudonym.as_deref().unwrap_or(o.id.as_str()),
                         o.shortname.as_deref(),
                     )
                 })
-                .unwrap_or_else(|| m.team1_initial.as_deref().unwrap_or("").to_string());
+                .unwrap_or_else(|| m.team1_initial.as_deref().unwrap_or("").to_string())
+            };
             let opt2 = m
                 .team2
                 .as_ref()
@@ -2695,42 +3655,43 @@ fn ScheduleTimeline(
                 .and_then(|o| o.pseudonym.as_deref())
                 .map(String::from)
                 .unwrap_or_else(|| m.team2_initial.as_deref().unwrap_or("").to_string());
-            let t2 = opt2
-                .map(|o| {
+            let t2 = if team_view {
+                opt2.map(team_full_label)
+                    .unwrap_or_else(|| m.team2_initial.as_deref().unwrap_or("").to_string())
+            } else {
+                opt2.map(|o| {
                     short_or_truncate(
                         o.pseudonym.as_deref().unwrap_or(o.id.as_str()),
                         o.shortname.as_deref(),
                     )
                 })
-                .unwrap_or_else(|| m.team2_initial.as_deref().unwrap_or("").to_string());
+                .unwrap_or_else(|| m.team2_initial.as_deref().unwrap_or("").to_string())
+            };
 
             // Team profile photos
             let team1_photo = opt1.and_then(|o| o.profile_photo.clone());
             let team2_photo = opt2.and_then(|o| o.profile_photo.clone());
-            // Refs as list of (display_name, profile_photo). Keep a raw form for filter matching.
-            let refs_tokens: Vec<&str> = m
-                .refs
-                .as_deref()
-                .or(m.refs_initial.as_deref())
-                .unwrap_or("")
-                .split(',')
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty())
-                .collect();
-            let refs_list: Vec<(String, Option<String>)> = refs_tokens
+            // Refs: per-slot resolved id else initial (#197).
+            let ref_toks = refs_tokens(m);
+            let refs_list: Vec<(String, Option<String>)> = ref_toks
                 .iter()
                 .map(|token| {
-                    let opt = data.team_options.iter().find(|o| &o.id == token);
-                    let display = opt
-                        .map(|o| {
-                            short_or_truncate(
-                                o.pseudonym.as_deref().unwrap_or(o.id.as_str()),
-                                o.shortname.as_deref(),
-                            )
-                        })
-                        .unwrap_or_else(|| token.to_string());
-                    let photo = opt.and_then(|o| o.profile_photo.clone());
-                    (display, photo)
+                    if team_view {
+                        let (label, photo, _) = resolve_team_display(token, &data.team_options);
+                        (label, photo)
+                    } else {
+                        let opt = data.team_options.iter().find(|o| &o.id == token);
+                        let display = opt
+                            .map(|o| {
+                                short_or_truncate(
+                                    o.pseudonym.as_deref().unwrap_or(o.id.as_str()),
+                                    o.shortname.as_deref(),
+                                )
+                            })
+                            .unwrap_or_else(|| token.clone());
+                        let photo = opt.and_then(|o| o.profile_photo.clone());
+                        (display, photo)
+                    }
                 })
                 .collect();
             let refs_display = refs_list
@@ -2738,23 +3699,27 @@ fn ScheduleTimeline(
                 .map(|(d, _)| d.as_str())
                 .collect::<Vec<_>>()
                 .join(", ");
-            let refs_display_raw = refs_tokens
+            let refs_display_raw = ref_toks
                 .iter()
                 .map(|token| {
                     let opt = data.team_options.iter().find(|o| &o.id == token);
                     opt.and_then(|o| o.pseudonym.as_deref())
                         .map(String::from)
-                        .unwrap_or_else(|| token.to_string())
+                        .unwrap_or_else(|| token.clone())
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
 
             // Status tag palette only (never overwritten for highlight; highlight is on the block)
-            let (color, _) = status_color_and_label(&m.status);
+            let (color, _) = if is_structural_match(m) {
+                ("#e9ecef".to_string(), "—".to_string())
+            } else {
+                status_color_and_label(&m.status)
+            };
 
             // Highlight: match against the raw (untruncated) pseudonyms so the user's full-name
             // query still matches teams whose rendered label was shortened.
-            let (highlight_playing, highlight_ref) = if highlight_team.is_empty() {
+            let (highlight_playing, highlight_ref) = if team_view || highlight_team.is_empty() {
                 (false, false)
             } else {
                 let ht = highlight_team.to_lowercase();
@@ -2762,6 +3727,24 @@ fn ScheduleTimeline(
                     t1_raw.to_lowercase().contains(&ht) || t2_raw.to_lowercase().contains(&ht);
                 let reffing = !playing && refs_display_raw.to_lowercase().contains(&ht);
                 (playing, reffing)
+            };
+
+            let playing = team_view && team_is_playing(m, &focus_team_id);
+            let reffing =
+                team_view && team_is_reffing(m, &focus_team_id, &data.team_options);
+            let team_role = if playing {
+                "playing".to_string()
+            } else if reffing {
+                "reffing".to_string()
+            } else {
+                String::new()
+            };
+            let (opponent_label, opponent_photo, opponent_kind) = if playing {
+                opponent_for_focus(m, &focus_team_id, &data.team_options)
+                    .map(|(l, p, k)| (Some(l), p, k))
+                    .unwrap_or((None, None, 0))
+            } else {
+                (None, None, 0)
             };
 
             Some(TimelineEvent {
@@ -2776,8 +3759,8 @@ fn ScheduleTimeline(
                 start_time: start_dt,
                 end_time: end_dt,
                 length_min,
-                field_id: field.id,
-                field_name: field.name.clone(),
+                field_id,
+                field_name,
                 color: color.to_string(),
                 status: m.status.clone(),
                 schedule_type: m.schedule_type.clone(),
@@ -2786,6 +3769,10 @@ fn ScheduleTimeline(
                 highlight_playing,
                 highlight_ref,
                 ribbon: m.ribbon,
+                team_role,
+                opponent_label,
+                opponent_photo,
+                opponent_kind,
             })
         })
         .collect();
@@ -2877,8 +3864,10 @@ fn ScheduleTimeline(
         }
     }
 
-    // Build join groups
-    let join_groups: Vec<JoinGroup> = {
+    // Build join groups (all-teams view only)
+    let join_groups: Vec<JoinGroup> = if team_view {
+        Vec::new()
+    } else {
         use std::collections::HashMap;
         let mut groups: HashMap<String, Vec<&MatchSetupData>> = HashMap::new();
 
@@ -2901,9 +3890,9 @@ fn ScheduleTimeline(
                     return None;
                 }
 
-                // Get time from first match (effective start in local time)
-                let time_str = effective_start_str(matches[0])?;
-                let time_dt = parse_schedule_time_to_local(time_str, tz_offset_minutes)?;
+                // Get time from first match (same display rule as match blocks)
+                let (start_utc, _) = display_interval_utc(matches[0], show_as_happened)?;
+                let time_dt = start_utc + chrono::Duration::minutes(tz_offset_minutes);
 
                 // Build per-field join matches (field_id -> match_uuid)
                 let field_matches: Vec<(u32, String)> = matches
@@ -3032,9 +4021,15 @@ fn ScheduleTimeline(
     };
 
     // Auto-scroll only the timeline body to target row (do not scroll the page)
+    let scroll_el_id = if team_view {
+        "schedule-timeline-scroll-team"
+    } else {
+        "schedule-timeline-scroll"
+    };
     use_effect(move || {
         let _ = visible_date_signal(); // re-run effect when date changes
         let slot = target_slot;
+        let scroll_el_id = scroll_el_id;
         #[cfg(target_arch = "wasm32")]
         {
             let id = format!("schedule-timeline-slot-{}", slot);
@@ -3042,10 +4037,12 @@ fn ScheduleTimeline(
                 gloo_timers::future::TimeoutFuture::new(100).await;
                 if let Some(window) = web_sys::window() {
                     if let Some(doc) = window.document() {
-                        if let (Some(scroll_el), Some(target_el)) = (
-                            doc.get_element_by_id("schedule-timeline-scroll"),
-                            doc.get_element_by_id(&id),
-                        ) {
+                        let scroll_el = doc
+                            .get_element_by_id(scroll_el_id)
+                            .or_else(|| doc.get_element_by_id("schedule-timeline-scroll"));
+                        if let (Some(scroll_el), Some(target_el)) =
+                            (scroll_el, doc.get_element_by_id(&id))
+                        {
                             let scroll_rect = scroll_el.get_bounding_client_rect();
                             let target_rect = target_el.get_bounding_client_rect();
                             let delta = target_rect.top() - scroll_rect.top();
@@ -3058,12 +4055,26 @@ fn ScheduleTimeline(
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let _ = slot;
+            let _ = (slot, scroll_el_id);
         }
     });
 
     const TIME_COL_WIDTH_PX: u32 = 80;
     let base_url = api::base_url();
+
+    // Now-line: slot index + fraction within the slot when viewing today.
+    let now_line_style: Option<String> = if current_visible_date == today_local {
+        let now_local = chrono::Utc::now() + chrono::Duration::minutes(tz_offset_minutes);
+        let total_minutes =
+            (now_local.hour().saturating_sub(FIRST_HOUR) as i64) * 60 + (now_local.minute() as i64);
+        let slots_f = total_minutes as f64 / SLOT_MINUTES as f64;
+        Some(format!(
+            "top: calc(var(--header-height) + var(--slot-height) * {:.4});",
+            slots_f.clamp(0.0, slots_per_day as f64)
+        ))
+    } else {
+        None
+    };
 
     rsx! {
         div { class: "schedule-timeline-wrapper", id: "schedule-timeline-wrapper",
@@ -3120,14 +4131,153 @@ fn ScheduleTimeline(
                         span { class: "schedule-timeline-date",
                             " {visible_date_signal().format(\"%A, %B %d\")}"
                         }
+                        span {
+                            class: "ms-auto small text-muted",
+                            title: "Pinch on mobile, or Shift+scroll on desktop, to zoom the time axis",
+                            if (scale - 1.0).abs() > 0.02 {
+                                "{(scale * 100.0) as i32}%"
+                            } else {
+                                ""
+                            }
+                        }
                     }
                 }
             }
-            div { class: "schedule-timeline-scroll", id: "schedule-timeline-scroll",
+            {
+                let scroll_id = scroll_el_id;
+                rsx! {
+            div {
+                class: "schedule-timeline-scroll",
+                id: "{scroll_id}",
+                // Shift+scroll zooms vertical time scale, centered on viewport middle.
+                onwheel: move |ev: Event<WheelData>| {
+                    let mods = ev.modifiers();
+                    if mods.shift() {
+                        ev.prevent_default();
+                        let dy = ev.delta().strip_units().y;
+                        // Shift+wheel often reports horizontal delta on trackpads; accept either.
+                        let dx = ev.delta().strip_units().x;
+                        let delta = if dy.abs() >= dx.abs() { dy } else { dx };
+                        let factor = if delta < 0.0 {
+                            1.08
+                        } else if delta > 0.0 {
+                            1.0 / 1.08
+                        } else {
+                            return;
+                        };
+                        let old = vertical_scale();
+                        let next = (old * factor).clamp(MIN_VERTICAL_SCALE, MAX_VERTICAL_SCALE);
+                        if (next - old).abs() < 1e-6 {
+                            return;
+                        }
+                        let ratio = next / old;
+                        if let Some(st) = scroll_top_after_centered_zoom(scroll_el_id, ratio) {
+                            pending_scroll_top.set(Some(st));
+                        }
+                        vertical_scale.set(next);
+                        ls_set(VERTICAL_SCALE_KEY, &format!("{next:.3}"));
+                    }
+                },
+                // Pinch-to-zoom via two-finger touch distance, centered on viewport middle.
+                onmounted: {
+                    let scroll_id = scroll_id.to_string();
+                    move |_cx| {
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        use wasm_bindgen::closure::Closure;
+                        use wasm_bindgen::JsCast;
+                        if let Some(window) = web_sys::window() {
+                            if let Some(doc) = window.document() {
+                                if let Some(scroll_el) = doc.get_element_by_id(&scroll_id) {
+                                    if scroll_el.get_attribute("data-pinch-zoom").as_deref() == Some("1") {
+                                        return;
+                                    }
+                                    let _ = scroll_el.set_attribute("data-pinch-zoom", "1");
+                                    let last_dist = Rc::new(RefCell::new(None::<f64>));
+                                    let last_dist_move = last_dist.clone();
+                                    let last_dist_end = last_dist.clone();
+                                    let mut scale_sig = vertical_scale;
+                                    let mut pending = pending_scroll_top;
+                                    let scroll_id_move = scroll_id.clone();
+
+                                    let on_touch_start = Closure::wrap(Box::new(move |e: web_sys::TouchEvent| {
+                                        if e.touches().length() == 2 {
+                                            let t0 = e.touches().get(0).unwrap();
+                                            let t1 = e.touches().get(1).unwrap();
+                                            let dx = t0.client_x() as f64 - t1.client_x() as f64;
+                                            let dy = t0.client_y() as f64 - t1.client_y() as f64;
+                                            *last_dist.borrow_mut() = Some((dx * dx + dy * dy).sqrt());
+                                        }
+                                    }) as Box<dyn FnMut(_)>);
+
+                                    let on_touch_move = Closure::wrap(Box::new(move |e: web_sys::TouchEvent| {
+                                        if e.touches().length() == 2 {
+                                            let t0 = e.touches().get(0).unwrap();
+                                            let t1 = e.touches().get(1).unwrap();
+                                            let dx = t0.client_x() as f64 - t1.client_x() as f64;
+                                            let dy = t0.client_y() as f64 - t1.client_y() as f64;
+                                            let dist = (dx * dx + dy * dy).sqrt();
+                                            if let Some(prev) = *last_dist_move.borrow() {
+                                                if prev > 1.0 {
+                                                    e.prevent_default();
+                                                    let ratio = (dist / prev).clamp(0.92, 1.08);
+                                                    let old = scale_sig();
+                                                    let next = (old * ratio)
+                                                        .clamp(MIN_VERTICAL_SCALE, MAX_VERTICAL_SCALE);
+                                                    if (next - old).abs() >= 1e-6 {
+                                                        let scale_ratio = next / old;
+                                                        if let Some(st) = scroll_top_after_centered_zoom(
+                                                            &scroll_id_move,
+                                                            scale_ratio,
+                                                        ) {
+                                                            pending.set(Some(st));
+                                                        }
+                                                        scale_sig.set(next);
+                                                        ls_set(VERTICAL_SCALE_KEY, &format!("{next:.3}"));
+                                                    }
+                                                }
+                                            }
+                                            *last_dist_move.borrow_mut() = Some(dist);
+                                        }
+                                    }) as Box<dyn FnMut(_)>);
+
+                                    let on_touch_end = Closure::wrap(Box::new(move |_e: web_sys::TouchEvent| {
+                                        *last_dist_end.borrow_mut() = None;
+                                    }) as Box<dyn FnMut(_)>);
+
+                                    let _ = scroll_el.add_event_listener_with_callback(
+                                        "touchstart",
+                                        on_touch_start.as_ref().unchecked_ref(),
+                                    );
+                                    let _ = scroll_el.add_event_listener_with_callback(
+                                        "touchmove",
+                                        on_touch_move.as_ref().unchecked_ref(),
+                                    );
+                                    let _ = scroll_el.add_event_listener_with_callback(
+                                        "touchend",
+                                        on_touch_end.as_ref().unchecked_ref(),
+                                    );
+                                    on_touch_start.forget();
+                                    on_touch_move.forget();
+                                    on_touch_end.forget();
+                                }
+                            }
+                        }
+                    }
+                    }
+                },
                 div {
-                    class: "schedule-timeline",
+                    class: if team_view { "schedule-timeline schedule-timeline--team-view" } else { "schedule-timeline" },
                     // Important: this is the positioning container for join overlays.
-                    style: "position: relative; --num-fields: {visible_fields.len()}; --time-col-width: {TIME_COL_WIDTH_PX}px;",
+                    style: "position: relative; --num-fields: {visible_fields.len()}; --time-col-width: {TIME_COL_WIDTH_PX}px; --slot-height: {slot_height_rem}rem;",
+                    // Now line across the grid when viewing today (#196)
+                    if let Some(style) = now_line_style.clone() {
+                        div {
+                            class: "schedule-now-line",
+                            style: "{style}",
+                            span { class: "schedule-now-line-label", "Now" }
+                        }
+                    }
                     div { class: "schedule-timeline-header",
                     div { class: "schedule-timeline-time-col", "Time" }
                     for field in &visible_fields {
@@ -3140,192 +4290,32 @@ fn ScheduleTimeline(
                             let row_id = format!("schedule-timeline-slot-{}", slot);
                             rsx! {
                                 div { class: "schedule-timeline-row", key: "{slot}",
-                            div { class: "schedule-timeline-time-col", id: "{row_id}", "{time_str}" }
-                            for (col_idx, field) in visible_fields.iter().enumerate() {
-                                div {
-                                    class: "schedule-timeline-cell",
-                                    key: "{field.id}-{slot}",
-                                    {
-                                        // Render events that start in this slot
-                                        let events_in_slot: Vec<&TimelineEvent> = timeline_events.iter()
-                                            .filter(|e| {
-                                                if e.field_id != field.id {
-                                                    return false;
-                                                }
-                                                let date = e.start_time.date();
-                                                if date != current_visible_date {
-                                                    return false;
-                                                }
-                                                let hour = e.start_time.hour();
-                                                let minute = e.start_time.minute();
-                                                if hour < FIRST_HOUR || hour >= LAST_HOUR {
-                                                    return false;
-                                                }
-                                                let total_minutes = (hour - FIRST_HOUR) * 60 + minute;
-                                                let event_slot = (total_minutes as i64 / SLOT_MINUTES) as usize;
-                                                event_slot == slot
-                                            })
-                                            .collect();
-
-                                        // Pre-compute event rendering data: exact-to-the-minute top and height (fraction of slot)
-                                        let event_render_data_opt = if !events_in_slot.is_empty() {
-                                            let max_lanes = events_in_slot.first().map(|e| e.num_lanes).unwrap_or(1);
-                                            Some(events_in_slot.iter().map(|event| {
-                                                let start_min = (event.start_time.hour() - FIRST_HOUR) * 60 + event.start_time.minute();
-                                                let minutes_within_slot = (start_min as i64) % SLOT_MINUTES;
-                                                let top_fraction = (minutes_within_slot as f64) / (SLOT_MINUTES as f64);
-                                                let duration_min = (event.end_time - event.start_time).num_minutes().max(1);
-                                                let duration_slots_fraction = (duration_min as f64) / (SLOT_MINUTES as f64);
-                                                let width_pct = 100.0 / max_lanes as f64;
-                                                let left_pct = (event.lane_index as f64) * width_pct;
-                                                (event.id.clone(), width_pct, left_pct, top_fraction, duration_slots_fraction)
-                                            }).collect::<Vec<_>>())
-                                        } else {
-                                            None
-                                        };
-
-                                        // Join at this (slot, col_idx): horizontal line in cell; label in edit mode (positioned to-the-minute)
-                                        let join_in_cell = join_lines_data.iter().find_map(|jl| {
-                                            if jl.slot != slot { return None; }
-                                            jl.field_items.iter()
-                                                .find(|(c, _)| *c == col_idx)
-                                                .map(|(_, mid)| (jl.join.name.clone(), mid.clone(), jl.top_fraction))
-                                        });
-
-                                        rsx! {
-                                            if let Some(event_render_data) = event_render_data_opt {
-                                                div {
-                                                    class: "schedule-timeline-event-container",
-                                                    for (idx, event) in events_in_slot.iter().enumerate() {
-                                                        {
-                                                            let (event_id, width_pct, left_pct, top_fraction, duration_slots_fraction) = &event_render_data[idx];
-                                                            let event_id_clone = event_id.clone();
-                                                            let (_, status_label) = status_color_and_label(&event.status);
-
-                                                            let is_break = event.schedule_type.as_deref() == Some("BREAK");
-                                                            let event_style = format!("background-color: #ffffff; width: {}%; left: {}%; top: calc(var(--slot-height) * {}); height: calc(var(--slot-height) * {}); position: absolute;", width_pct, left_pct, top_fraction, duration_slots_fraction);
-                                                            let event_title = if is_break { event.name.clone() } else { format!("{} - {} vs {}", event.name, event.team1, event.team2) };
-                                                            let url_clone = tournament_url.clone();
-                                                            let nav = navigator.clone();
-                                                            let event_class = format!(
-                                                                "schedule-timeline-event{}{}",
-                                                                if event.highlight_playing { " schedule-timeline-event--highlight-playing" } else { "" },
-                                                                if event.highlight_ref { " schedule-timeline-event--highlight-ref" } else { "" }
-                                                            );
-                                                            let (t1_kind, t1_label) = team_ref_display(&event.team1);
-                                                            let (t2_kind, t2_label) = team_ref_display(&event.team2);
-                                                            let event_refs: Vec<(String, Option<String>, u8, String)> = event.refs_list
-                                                                .iter()
-                                                                .map(|(d, p)| {
-                                                                    let (k, l) = team_ref_display(d);
-                                                                    (d.clone(), p.clone(), k, l)
-                                                                })
-                                                                .collect();
-                                                            let edit_locked = matches!(event.status.as_str(), "IN_PROGRESS" | "COMPLETED" | "SKIPPED");
-                                                            let timeline_title = if edit_mode && edit_locked {
-                                                                format!("{event_title} — match has started, editing disabled")
-                                                            } else {
-                                                                event_title.clone()
-                                                            };
-                                                            rsx! {
+                                    div { class: "schedule-timeline-time-col", id: "{row_id}", "{time_str}" }
+                                    for (col_idx, field) in visible_fields.iter().enumerate() {
+                                        div {
+                                            class: "schedule-timeline-cell",
+                                            key: "{field.id}-{slot}",
+                                            {
+                                                // Joins only in-cell; match blocks live in the overlay layer.
+                                                let join_in_cell = join_lines_data.iter().find_map(|jl| {
+                                                    if jl.slot != slot { return None; }
+                                                    jl.field_items.iter()
+                                                        .find(|(c, _)| *c == col_idx)
+                                                        .map(|(_, mid)| (jl.join.name.clone(), mid.clone(), jl.top_fraction))
+                                                });
+                                                rsx! {
+                                                    if let Some((join_name, match_id, join_top_fraction)) = join_in_cell {
+                                                        div {
+                                                            class: "schedule-timeline-join-in-cell",
+                                                            style: format!("top: calc(var(--slot-height) * {});", join_top_fraction),
+                                                            div { class: "schedule-timeline-join-line-in-cell" }
+                                                            if edit_mode {
                                                                 div {
-                                                                    class: "{event_class}",
-                                                                    style: "{event_style}",
-                                                                    title: "{timeline_title}",
-                                                                    cursor: if (is_break && !edit_mode) || (edit_mode && edit_locked) { "default" } else { "pointer" },
-                                                                    onclick: move |_| {
-                                                                        if is_break && !edit_mode {
-                                                                            // Break matches don't link anywhere
-                                                                        } else if edit_mode {
-                                                                            if !edit_locked {
-                                                                                on_edit_match.call(event_id_clone.clone());
-                                                                            }
-                                                                        } else {
-                                                                            nav.push(Route::MatchPageById { url: url_clone.clone(), match_id: event_id_clone.clone() });
-                                                                        }
-                                                                    },
-                                                                    span {
-                                                                        class: "schedule-timeline-status-tag schedule-timeline-status-tag--corner",
-                                                                        style: "background-color: {event.color};",
-                                                                        "{status_label}"
-                                                                    }
-                                                                    div { class: "schedule-timeline-event-header",
-                                                                        div { class: "schedule-timeline-event-name", "{event.name}" }
-                                                                    }
-                                                                    if !is_break {
-                                                                        div { class: "schedule-timeline-event-teams d-flex align-items-center flex-wrap gap-1",
-                                                                            span { class: "d-inline-flex align-items-center gap-1",
-                                                                                if t1_kind == 0 {
-                                                                                    if let Some(ph) = &event.team1_photo {
-                                                                                        img { class: "rounded-circle", style: "width: 1.25em; height: 1.25em; object-fit: cover;", src: "{base_url}/static/{ph}", alt: "" }
-                                                                                    } else {
-                                                                                        span { class: "team-token-avatar rounded-circle d-inline-flex align-items-center justify-content-center", style: "width: 1.25em; height: 1.25em; font-size: 0.7em; background: #6c757d; color: white;", "{event.team1.chars().next().unwrap_or('?')}" }
-                                                                                    }
-                                                                                }
-                                                                                if t1_kind == 1 { img { class: "team-token-icon icon-primary-svg", src: "{base_url}/static/tag.svg", alt: "Tag" } }
-                                                                                if t1_kind == 2 { img { class: "team-token-icon icon-primary-svg", src: "{base_url}/static/reference.svg", alt: "Reference" } }
-                                                                                span { "{t1_label}" }
-                                                                            }
-                                                                            span { " vs " }
-                                                                            span { class: "d-inline-flex align-items-center gap-1",
-                                                                                if t2_kind == 0 {
-                                                                                    if let Some(ph) = &event.team2_photo {
-                                                                                        img { class: "rounded-circle", style: "width: 1.25em; height: 1.25em; object-fit: cover;", src: "{base_url}/static/{ph}", alt: "" }
-                                                                                    } else {
-                                                                                        span { class: "team-token-avatar rounded-circle d-inline-flex align-items-center justify-content-center", style: "width: 1.25em; height: 1.25em; font-size: 0.7em; background: #6c757d; color: white;", "{event.team2.chars().next().unwrap_or('?')}" }
-                                                                                    }
-                                                                                }
-                                                                                if t2_kind == 1 { img { class: "team-token-icon icon-primary-svg", src: "{base_url}/static/tag.svg", alt: "Tag" } }
-                                                                                if t2_kind == 2 { img { class: "team-token-icon icon-primary-svg", src: "{base_url}/static/reference.svg", alt: "Reference" } }
-                                                                                span { "{t2_label}" }
-                                                                            }
-                                                                        }
-                                                                        if !event.refs_list.is_empty() {
-                                                                            div { class: "schedule-timeline-event-refs d-flex align-items-center flex-wrap gap-1 mt-1",
-                                                                                span { class: "me-1", "Refs:" }
-                                                                                for (ref_display, ref_photo, r_kind, r_label) in &event_refs {
-                                                                                    span { class: "d-inline-flex align-items-center gap-1",
-                                                                                        if *r_kind == 0 {
-                                                                                            if let Some(ph) = ref_photo {
-                                                                                                img { class: "rounded-circle", style: "width: 1.1em; height: 1.1em; object-fit: cover;", src: "{base_url}/static/{ph}", alt: "" }
-                                                                                            } else {
-                                                                                                span { class: "team-token-avatar rounded-circle d-inline-flex align-items-center justify-content-center", style: "width: 1.1em; height: 1.1em; font-size: 0.65em; background: #6c757d; color: white;", "{ref_display.chars().next().unwrap_or('?')}" }
-                                                                                            }
-                                                                                        }
-                                                                                        if *r_kind == 1 { img { class: "team-token-icon icon-primary-svg", src: "{base_url}/static/tag.svg", alt: "Tag" } }
-                                                                                        if *r_kind == 2 { img { class: "team-token-icon icon-primary-svg", src: "{base_url}/static/reference.svg", alt: "Reference" } }
-                                                                                        span { "{r_label}" }
-                                                                                    }
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                    if event.ribbon {
-                                                                        span {
-                                                                            class: "schedule-timeline-ribbon-icon",
-                                                                            title: "This is a ribbon game",
-                                                                            img { src: "{base_url}/static/ribbon.svg", alt: "Ribbon game" }
-                                                                        }
-                                                                    }
+                                                                    class: "schedule-timeline-join-label",
+                                                                    onclick: move |_| on_edit_match.call(match_id.clone()),
+                                                                    "{join_name}"
                                                                 }
                                                             }
-                                                        }
-                                                }
-                                            }
-                                            }
-                                            else {
-                                                div {}
-                                            }
-                                            if let Some((join_name, match_id, join_top_fraction)) = join_in_cell {
-                                                div {
-                                                    class: "schedule-timeline-join-in-cell",
-                                                    style: format!("top: calc(var(--slot-height) * {});", join_top_fraction),
-                                                    div { class: "schedule-timeline-join-line-in-cell" }
-                                                    if edit_mode {
-                                                        div {
-                                                            class: "schedule-timeline-join-label",
-                                                            onclick: move |_| on_edit_match.call(match_id.clone()),
-                                                            "{join_name}"
                                                         }
                                                     }
                                                 }
@@ -3337,11 +4327,82 @@ fn ScheduleTimeline(
                         }
                     }
                 }
-                }
-                }
-                }
-            }
-        }
+                // Match blocks: single overlay above the grid so multi-slot events are never
+                // covered by later half-hour cell backgrounds (CSS grid paint order).
+                {
+                    let num_fields = visible_fields.len().max(1);
+                    let field_index: std::collections::HashMap<u32, usize> = visible_fields
+                        .iter()
+                        .enumerate()
+                        .map(|(i, f)| (f.id, i))
+                        .collect();
+                    let overlay_events: Vec<(TimelineEvent, String)> = timeline_events
+                        .iter()
+                        .filter(|e| e.start_time.date() == current_visible_date)
+                        .filter(|e| e.schedule_type.as_deref() != Some("JOIN"))
+                        .filter(|e| e.status != "SKIPPED")
+                        .filter_map(|e| {
+                            let col = *field_index.get(&e.field_id)?;
+                            let hour = e.start_time.hour();
+                            let minute = e.start_time.minute();
+                            if hour < FIRST_HOUR || hour >= LAST_HOUR {
+                                return None;
+                            }
+                            let start_min = (hour - FIRST_HOUR) * 60 + minute;
+                            let start_slots = start_min as f64 / SLOT_MINUTES as f64;
+                            let duration_min = (e.end_time - e.start_time).num_minutes().max(1) as f64;
+                            let duration_slots = duration_min / SLOT_MINUTES as f64;
+                            let lane_w = 100.0 / e.num_lanes.max(1) as f64;
+                            let lane_l = e.lane_index as f64 * lane_w;
+                            // Position within the fields area (overlay excludes the time column).
+                            let col_w = 100.0 / num_fields as f64;
+                            let left = col as f64 * col_w + (lane_l / 100.0) * col_w;
+                            let width = (lane_w / 100.0) * col_w;
+                            let is_structural = is_structural_type(e.schedule_type.as_deref());
+                            let bg = if is_structural { "#f1f3f5" } else { "#ffffff" };
+                            let style = format!(
+                                "background-color: {bg}; position: absolute; box-sizing: border-box; \
+                                 left: calc({left}% + 1px); width: calc({width}% - 2px); \
+                                 top: calc(var(--slot-height) * {start_slots}); \
+                                 height: calc(var(--slot-height) * {duration_slots}); z-index: 5;"
+                            );
+                            Some((e.clone(), style))
+                        })
+                        .collect();
+                    let base_url = base_url.clone();
+                    let tournament_url = tournament_url.clone();
+                    rsx! {
+                        div {
+                            class: "schedule-timeline-events-layer",
+                            style: format!(
+                                "position: absolute; left: var(--time-col-width); right: 0; \
+                                 top: var(--header-height); \
+                                 height: calc(var(--slot-height) * {}); \
+                                 pointer-events: none; z-index: 12;",
+                                slots_per_day
+                            ),
+                            for (ev, style) in overlay_events {
+                                div {
+                                    style: "pointer-events: auto;",
+                                    TimelineEventCard {
+                                        event: ev,
+                                        event_style: style,
+                                        team_view: team_view,
+                                        edit_mode: edit_mode,
+                                        tournament_url: tournament_url.clone(),
+                                        base_url: base_url.clone(),
+                                        on_edit_match: on_edit_match,
+                                    }
+                                }
+                            }
+                        }
+                    } // overlay block
+                } // schedule-timeline
+            } // schedule-timeline-scroll
+                } // inner rsx! for scroll_id
+            } // scroll_id block
+        } // wrapper
+    } // outer rsx!
     }
 }
 

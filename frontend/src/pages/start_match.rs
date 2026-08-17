@@ -87,6 +87,9 @@ pub fn StartMatch(url: String, match_id: String) -> Element {
                                     Link {
                                         to: Route::Schedule {
                                             url: schedule_url.clone(),
+                                            view: String::new(),
+                                            team: String::new(),
+                                            field: String::new(),
                                         },
                                         "Schedule"
                                     }

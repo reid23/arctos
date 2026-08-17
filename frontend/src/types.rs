@@ -696,6 +696,9 @@ pub struct MatchDetailData {
     pub team1_initial: Option<String>,
     pub team2_initial: Option<String>,
     pub status: String,
+    /// Stable planned start (does not move when the live schedule slips).
+    #[serde(default)]
+    pub scheduled_start_time: Option<String>,
     pub nominal_start_time: Option<String>,
     pub confirmed_start_time: Option<String>,
     pub completed_time: Option<String>,

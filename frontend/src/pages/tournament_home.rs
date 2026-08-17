@@ -376,9 +376,9 @@ fn TournamentHomeContent(url: String, initial_tab: Option<String>) -> Element {
             div { class: "row mb-3",
                 div { class: "col-12 d-flex flex-wrap gap-2",
                     if d.tournament.schedule_published {
-                        Link { to: Route::Schedule { url: url.clone() }, class: "btn btn-primary", "Schedule" }
+                        Link { to: Route::Schedule { url: url.clone(), view: String::new(), team: String::new(), field: String::new() }, class: "btn btn-primary", "Schedule" }
                     } else {
-                        Link { to: Route::Schedule { url: url.clone() }, class: "btn btn-outline-secondary", "Schedule (Not Published)" }
+                        Link { to: Route::Schedule { url: url.clone(), view: String::new(), team: String::new(), field: String::new() }, class: "btn btn-outline-secondary", "Schedule (Not Published)" }
                     }
                     Link { to: Route::Results { url: url.clone() }, class: "btn btn-outline-primary", "Results" }
                     if d.tournament.bracket_published {
