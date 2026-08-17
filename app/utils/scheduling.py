@@ -232,12 +232,50 @@ def _procedure_with_match(
         # BREAK's for time purposes.
         return
 
-    if node.status in (
+    # Real-world facts are never recomputed: a started/finished/skipped match
+    # stays that way. BREAK/JOIN are exempt from the COMPLETED early-return —
+    # their COMPLETED is solver-derived (nothing else can set it on structural
+    # rows), so it must be re-earned each pass like any other solver status.
+    if node.schedule_type not in (ScheduleType.BREAK, ScheduleType.JOIN) and node.status in (
         MatchStatus.COMPLETED,
         MatchStatus.IN_PROGRESS,
         MatchStatus.SKIPPED,
     ):
         return
+
+    # --- Downgrade pass -----------------------------------------------------
+    # Solver-earned statuses must be re-earned on every solve: schedule edits
+    # (reordering, retargeted previous-match links, new dependencies, tag
+    # unassignment) can invalidate a previously-correct TIME_FINALIZED /
+    # READY_TO_START / structural COMPLETED. Reset such nodes to their type's
+    # floor here; the earn logic below re-grants whatever still holds. This
+    # runs before the time computation so a downgraded SAFE/FAST node (now
+    # NOT_STARTED again) also gets its nominal recomputed this pass.
+    # Dependencies were already processed (topological order), so their
+    # downgraded statuses are visible and downgrades cascade down chains.
+    deps_started = _all_schedule_deps_in(node, (MatchStatus.IN_PROGRESS, MatchStatus.COMPLETED, MatchStatus.SKIPPED))
+    deps_complete = _all_schedule_deps_in(node, (MatchStatus.COMPLETED, MatchStatus.SKIPPED))
+    if node.status == MatchStatus.READY_TO_START:
+        ready_still_valid = deps_complete and _all_participating_teams_resolved(
+            name_to_match[node.name], tournament_url, name_to_match, tag_by_name
+        )
+        if not ready_still_valid:
+            if node.schedule_type == ScheduleType.STATIC:
+                # A STATIC match's time is finalized by definition.
+                node.status = MatchStatus.TIME_FINALIZED
+            elif node.schedule_type == ScheduleType.SAFE and deps_started:
+                node.status = MatchStatus.TIME_FINALIZED
+            else:
+                node.status = MatchStatus.NOT_STARTED
+    elif node.status == MatchStatus.TIME_FINALIZED:
+        if node.schedule_type == ScheduleType.SAFE and not deps_started:
+            node.status = MatchStatus.NOT_STARTED
+        # STATIC TIME_FINALIZED is the floor; FAST never earns TIME_FINALIZED.
+    elif node.status == MatchStatus.COMPLETED:
+        # Only reachable for BREAK/JOIN (see early-return above).
+        if not deps_complete:
+            node.status = MatchStatus.NOT_STARTED
+    # -------------------------------------------------------------------------
 
     nominal_start_if_skipped: Optional[datetime] = None
 

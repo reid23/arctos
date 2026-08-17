@@ -3439,6 +3439,33 @@ pub async fn create_break_group(
     response_json(r).await
 }
 
+pub async fn bulk_match_length(
+    tournament_url: &str,
+    req: &BulkMatchLengthRequest,
+) -> Result<BulkMatchLengthResponse, String> {
+    let c = client();
+    let r = with_credentials(
+        c.post(format!(
+            "{}/_api/tournaments/{}/matches/bulk-length",
+            base(),
+            tournament_url
+        ))
+        .json(req),
+    )
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let data: BulkMatchLengthResponse = response_json(r).await?;
+    if data.success {
+        Ok(data)
+    } else {
+        Err(data
+            .error
+            .unwrap_or_else(|| "Failed to update match lengths".to_string()))
+    }
+}
+
 /// Edit every same-name break row at once (length / start_time / fields).
 pub async fn update_break_group(
     tournament_url: &str,
@@ -3629,29 +3656,6 @@ pub async fn delete_tag(tournament_url: &str, tag_id: u32) -> Result<(), String>
         .and_then(|v| v.as_str().map(String::from))
         .unwrap_or_else(|| format!("Delete failed: {}", truncate_error_body(&text, 200)));
     Err(err_msg)
-}
-
-pub async fn recompute_schedule(tournament_url: &str) -> Result<(), String> {
-    let c = client();
-    let r = with_credentials(c.post(format!(
-        "{}/_api/tournaments/{}/recompute-schedule",
-        base(),
-        tournament_url
-    )))
-    .send()
-    .await
-    .map_err(|e| e.to_string())?;
-
-    let data: Value = response_json(r).await?;
-    if data.get("success").and_then(|v| v.as_bool()) == Some(true) {
-        Ok(())
-    } else {
-        Err(data
-            .get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Unknown error")
-            .to_string())
-    }
 }
 
 #[allow(dead_code)]

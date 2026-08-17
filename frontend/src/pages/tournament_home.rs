@@ -676,6 +676,7 @@ fn TournamentHomeContent(url: String, initial_tab: Option<String>) -> Element {
                                             div { class: "card-body",
                                                 div { class: "d-grid gap-2",
                                                     Link { to: Route::TournamentSettings { url: url.clone() }, class: "btn btn-outline-secondary", "Settings" }
+                                                    Link { to: Route::ScheduleEdit { url: url.clone() }, class: "btn btn-outline-primary", "Edit Schedule" }
                                                     if let Some(ref l) = d.tournament.league {
                                                         Link { to: Route::LeagueManage { league_url: l.league_url.clone() }, class: "btn btn-outline-warning", "Registration Management" }
                                                     } else {
