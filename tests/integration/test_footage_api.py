@@ -11,6 +11,10 @@ from app.domain.enums import MatchStatus, ScheduleType
 from app.services.dual_write import get_camera_timepoint_arrays
 from tests.utils import make_registrable_config, login_as
 
+YT_ID = "dQw4w9WgXcQ"
+YT_URL = f"https://www.youtube.com/watch?v={YT_ID}"
+YT_SHORT = f"https://youtu.be/{YT_ID}"
+
 
 @pytest.fixture
 def footage_setup(test_db):
@@ -61,15 +65,24 @@ def test_footage_link_creates_success_camera(client, footage_setup):
     login_as(client, footage_setup["to"])
     resp = client.post(
         _link_url(footage_setup),
-        json={"youtube_link": "https://youtu.be/abc123", "camera_name": "Main"},
+        json={"youtube_link": YT_SHORT, "camera_name": "Main"},
     )
     assert resp.status_code == 200
     uuid = resp.get_json()["camera_uuid"]
     cam = Camera.query.filter_by(uuid=uuid).first()
     assert cam.status == "SUCCESS"
-    assert cam.link == "https://youtu.be/abc123"
+    assert cam.link == YT_URL
     assert cam.source_type == "user_upload"
     assert get_camera_timepoint_arrays(cam) == ([], [])
+
+
+def test_footage_link_rejects_non_youtube(client, footage_setup):
+    login_as(client, footage_setup["to"])
+    resp = client.post(
+        _link_url(footage_setup),
+        json={"youtube_link": "https://example.com/watch?v=abcdefghijk", "camera_name": "Main"},
+    )
+    assert resp.status_code == 400
 
 
 def test_footage_link_world_time_anchors_sorted(client, footage_setup):
@@ -77,7 +90,7 @@ def test_footage_link_world_time_anchors_sorted(client, footage_setup):
     resp = client.post(
         _link_url(footage_setup),
         json={
-            "youtube_link": "https://youtu.be/x",
+            "youtube_link": YT_SHORT,
             "camera_name": "Cam",
             "anchors": [
                 {"world_time": "2026-01-01T00:00:10Z", "video_offset": 10.0},
@@ -92,12 +105,25 @@ def test_footage_link_world_time_anchors_sorted(client, footage_setup):
     assert worlds == ["2026-01-01T00:00:00Z", "2026-01-01T00:00:10Z"]
 
 
+def test_footage_link_rejects_nonfinite_offset(client, footage_setup):
+    login_as(client, footage_setup["to"])
+    resp = client.post(
+        _link_url(footage_setup),
+        json={
+            "youtube_link": YT_SHORT,
+            "camera_name": "Cam",
+            "anchors": [{"world_time": "2026-01-01T00:00:00Z", "video_offset": "nan"}],
+        },
+    )
+    assert resp.status_code == 400
+
+
 def test_footage_link_point_index_anchor_resolved_to_stamp(client, footage_setup):
     login_as(client, footage_setup["to"])
     resp = client.post(
         _link_url(footage_setup),
         json={
-            "youtube_link": "https://youtu.be/x",
+            "youtube_link": YT_SHORT,
             "camera_name": "Cam",
             "anchors": [{"point_index": 1, "video_offset": 5.0}],
         },
@@ -115,7 +141,7 @@ def test_footage_link_point_index_out_of_range_is_400(client, footage_setup):
     resp = client.post(
         _link_url(footage_setup),
         json={
-            "youtube_link": "https://youtu.be/x",
+            "youtube_link": YT_SHORT,
             "camera_name": "Cam",
             "anchors": [{"point_index": 99, "video_offset": 1.0}],
         },
@@ -126,13 +152,13 @@ def test_footage_link_point_index_out_of_range_is_400(client, footage_setup):
 def test_footage_link_requires_youtube_link_and_name(client, footage_setup):
     login_as(client, footage_setup["to"])
     assert client.post(_link_url(footage_setup), json={"camera_name": "Cam"}).status_code == 400
-    assert client.post(_link_url(footage_setup), json={"youtube_link": "https://y/x"}).status_code == 400
+    assert client.post(_link_url(footage_setup), json={"youtube_link": YT_SHORT}).status_code == 400
 
 
 def test_footage_requires_to(client, footage_setup):
     resp = client.post(
         _link_url(footage_setup),
-        json={"youtube_link": "https://youtu.be/x", "camera_name": "Cam"},
+        json={"youtube_link": YT_SHORT, "camera_name": "Cam"},
     )
     assert resp.status_code in (401, 403)
 
@@ -174,11 +200,36 @@ def test_footage_chunked_upload_creates_uploading_camera_and_spawns_youtube(clie
     assert videos == [2.0]
 
 
+def test_footage_upload_rejects_bad_extension_and_chunk_cap(client, footage_setup):
+    login_as(client, footage_setup["to"])
+    base = f"/_api/tournaments/{footage_setup['url']}/matches/{footage_setup['match_id']}/footage/upload"
+    bad_ext = client.post(
+        base + "/init",
+        json={
+            "camera_name": "Cam",
+            "filename": "clip.mov",
+            "content_type": "video/quicktime",
+            "total_chunks": 1,
+        },
+    )
+    assert bad_ext.status_code == 400
+    too_many = client.post(
+        base + "/init",
+        json={
+            "camera_name": "Cam",
+            "filename": "clip.mp4",
+            "content_type": "video/mp4",
+            "total_chunks": 10_000,
+        },
+    )
+    assert too_many.status_code == 400
+
+
 def test_footage_list_and_delete(client, footage_setup):
     login_as(client, footage_setup["to"])
     created = client.post(
         _link_url(footage_setup),
-        json={"youtube_link": "https://youtu.be/x", "camera_name": "Cam"},
+        json={"youtube_link": YT_SHORT, "camera_name": "Cam"},
     ).get_json()["camera_uuid"]
 
     event_list = client.get(f"/_api/tournaments/{footage_setup['url']}/footage").get_json()
@@ -200,7 +251,7 @@ def test_match_detail_serializes_camera_timepoints(client, footage_setup):
     client.post(
         _link_url(footage_setup),
         json={
-            "youtube_link": "https://youtu.be/x",
+            "youtube_link": YT_SHORT,
             "camera_name": "Cam",
             "anchors": [{"world_time": "2026-01-01T00:00:00Z", "video_offset": 0.0}],
         },
@@ -211,4 +262,4 @@ def test_match_detail_serializes_camera_timepoints(client, footage_setup):
     cam = next(c for c in cams if c.get("source_type") == "user_upload")
     assert cam["time_world"] == ["2026-01-01T00:00:00Z"]
     assert cam["time_video"] == [0.0]
-    assert cam["url"] == "https://youtu.be/x"
+    assert cam["url"] == YT_URL

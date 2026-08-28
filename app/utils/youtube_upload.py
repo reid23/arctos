@@ -11,18 +11,20 @@ Environment variables:
 - YOUTUBE_UPLOAD_PRIVACY_STATUS (optional; default: unlisted)
 - YOUTUBE_UPLOAD_CATEGORY_ID (optional; default: 22)
 
-Local recording artifacts are always deleted after the upload attempt,
-whether it succeeds or fails.
+Local source files are deleted only after a successful upload. On failure
+the file is retained so a retry (or manual recovery) remains possible.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 from dataclasses import dataclass
 from os import path
 from typing import Optional
+from urllib.parse import parse_qs, urlparse
 
 import requests
 
@@ -35,6 +37,59 @@ from models import Camera, Field, Match, Team, Tournament, db
 
 YOUTUBE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 YOUTUBE_UPLOAD_INIT_URL = "https://www.googleapis.com/upload/youtube/v3/videos"
+
+_YT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+_YT_HOSTS = {
+    "youtube.com",
+    "www.youtube.com",
+    "m.youtube.com",
+    "music.youtube.com",
+    "youtu.be",
+    "www.youtu.be",
+    "youtube-nocookie.com",
+    "www.youtube-nocookie.com",
+}
+
+
+def parse_youtube_video_id(raw: str) -> str:
+    """Extract an 11-character YouTube video ID from a URL or bare ID.
+
+    Accepts ``https`` YouTube hosts (watch, embed, shorts, youtu.be) or a bare
+    video ID. Raises ``ValueError`` for empty input, non-HTTPS URLs, or
+    unsupported hosts.
+    """
+    s = (raw or "").strip()
+    if not s:
+        raise ValueError("youtube_link is required")
+    if _YT_ID_RE.fullmatch(s):
+        return s
+
+    parsed = urlparse(s)
+    if parsed.scheme.lower() != "https":
+        raise ValueError("youtube_link must be an https YouTube URL")
+    host = (parsed.hostname or "").lower()
+    if host not in _YT_HOSTS:
+        raise ValueError("youtube_link must be a YouTube URL")
+
+    video_id = None
+    if host in {"youtu.be", "www.youtu.be"}:
+        video_id = (parsed.path or "/").lstrip("/").split("/")[0] or None
+    else:
+        parts = [p for p in (parsed.path or "").split("/") if p]
+        if parts and parts[0] in {"embed", "shorts", "v", "live"} and len(parts) >= 2:
+            video_id = parts[1]
+        else:
+            qs = parse_qs(parsed.query)
+            video_id = (qs.get("v") or [None])[0]
+
+    if not video_id or not _YT_ID_RE.fullmatch(video_id):
+        raise ValueError("youtube_link does not contain a valid video ID")
+    return video_id
+
+
+def canonical_youtube_watch_url(raw: str) -> str:
+    """Normalize a YouTube URL or bare ID to ``https://www.youtube.com/watch?v=...``."""
+    return f"https://www.youtube.com/watch?v={parse_youtube_video_id(raw)}"
 
 
 @dataclass(frozen=True)
@@ -265,9 +320,8 @@ def upload_camera_to_youtube(camera_uuid: str) -> None:
     """
     Worker: transitions camera.status UPLOADING -> SUCCESS/FAILED.
 
-    Local recording artifacts are always deleted afterwards, on SUCCESS and
-    on FAILURE alike; on FAILURE ``camera.file`` is cleared so nothing is
-    left dangling.
+    Local source files are deleted only after SUCCESS. On FAILURE the file
+    and ``camera.file`` are retained so a later retry can reuse them.
     """
     cfg = _get_config()
     camera: Camera = Camera.query.filter_by(uuid=camera_uuid).first()
@@ -280,8 +334,6 @@ def upload_camera_to_youtube(camera_uuid: str) -> None:
 
     if not cfg:
         camera.status = "FAILED"
-        _delete_local_recording_artifacts(camera)
-        camera.file = None
         db.session.commit()
         current_app.logger.warning(
             "youtube_upload: missing YouTube upload config (YOUTUBE_UPLOAD_REFRESH_TOKEN/clients); camera uuid=%s",
@@ -289,10 +341,16 @@ def upload_camera_to_youtube(camera_uuid: str) -> None:
         )
         return
 
-    file_path_abs = _video_file_abs_path(camera)
+    try:
+        file_path_abs = _video_file_abs_path(camera)
+    except RuntimeError:
+        camera.status = "FAILED"
+        db.session.commit()
+        current_app.logger.error("youtube_upload: camera missing file path uuid=%s", camera_uuid)
+        return
+
     if not path.exists(file_path_abs):
         camera.status = "FAILED"
-        camera.file = None
         db.session.commit()
         current_app.logger.error(
             "youtube_upload: local file missing abs=%s camera uuid=%s",
@@ -303,12 +361,21 @@ def upload_camera_to_youtube(camera_uuid: str) -> None:
 
     file_size = path.getsize(file_path_abs)
 
-    # Recording pipeline now uploads the concatenated final.{mp4|webm} directly.
-    # Use extension-derived content type so YouTube gets the right upload headers.
+    # Uploads are mp4/webm only; derive content type from the stored extension.
     ext = path.splitext(camera.file or "")[1].lower()
-    content_type = "video/webm"
     if ext == ".mp4":
         content_type = "video/mp4"
+    elif ext == ".webm":
+        content_type = "video/webm"
+    else:
+        camera.status = "FAILED"
+        db.session.commit()
+        current_app.logger.error(
+            "youtube_upload: unsupported extension %s camera uuid=%s",
+            ext,
+            camera_uuid,
+        )
+        return
 
     title = _build_camera_title(camera)
 
@@ -334,14 +401,6 @@ def upload_camera_to_youtube(camera_uuid: str) -> None:
     except Exception:
         camera.status = "FAILED"
         try:
-            _delete_local_recording_artifacts(camera)
-        except OSError:
-            current_app.logger.warning(
-                "youtube_upload: could not clean local recording artifacts after failure camera uuid=%s",
-                camera_uuid,
-            )
-        camera.file = None
-        try:
             db.session.commit()
         except Exception:
             db.session.rollback()
@@ -350,12 +409,14 @@ def upload_camera_to_youtube(camera_uuid: str) -> None:
         return
 
     # SUCCESS
-    camera.link = video_id
+    camera.link = canonical_youtube_watch_url(video_id)
     camera.status = "SUCCESS"
     db.session.commit()
 
     try:
         _delete_local_recording_artifacts(camera)
+        camera.file = None
+        db.session.commit()
     except OSError:
         current_app.logger.warning(
             "youtube_upload: could not clean local recording artifacts camera uuid=%s path=%s",

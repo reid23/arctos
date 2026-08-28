@@ -1,9 +1,9 @@
-"""Round-trip test for migration 0011 (video descope column drops).
+"""Round-trip test for migration 0012 (video descope column drops).
 
 The repo's Alembic chain assumes tables already exist (baseline 0001 layers
 on top of ``db.create_all()``), so running the whole chain from an empty DB
 is not how migrations execute here. Instead we build a minimal schema that
-matches the pre-0011 shape and exercise the migration's ``upgrade`` /
+matches the pre-0012 shape and exercise the migration's ``upgrade`` /
 ``downgrade`` directly with a batch-aware Operations context.
 """
 
@@ -14,11 +14,11 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from sqlalchemy import create_engine, text
 
-MIGRATION_PATH = Path(__file__).resolve().parents[2] / "migrations" / "versions" / "0011_video_descope.py"
+MIGRATION_PATH = Path(__file__).resolve().parents[2] / "migrations" / "versions" / "0012_video_descope.py"
 
 
 def _load_migration():
-    spec = importlib.util.spec_from_file_location("mig_0011", MIGRATION_PATH)
+    spec = importlib.util.spec_from_file_location("mig_0012", MIGRATION_PATH)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -28,7 +28,7 @@ def _columns(conn, table):
     return [row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info({table})")]
 
 
-def test_0011_upgrade_downgrade_round_trip(tmp_path):
+def test_0012_upgrade_downgrade_round_trip(tmp_path):
     module = _load_migration()
     engine = create_engine(f"sqlite:///{tmp_path / 'mig.db'}")
     with engine.begin() as conn:

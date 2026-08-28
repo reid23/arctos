@@ -12,7 +12,7 @@ The directory is also the parent of two app-managed subtrees that are
 - `static/uploads/...` - user-uploaded profile photos, waivers, etc.
   Created at runtime, served back with cache headers (see
   `app/__init__.py::add_cache_headers`).
-- `static/uploads/videos/...` - recording artefacts during finalisation.
+- `static/uploads/videos/...` - temporary footage upload artefacts.
   Excluded from the docs build (`docs/conf.py::exclude_patterns`).
 
 ## How files here get served

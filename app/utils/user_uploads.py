@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import re
 import shutil
@@ -57,6 +58,8 @@ def normalize_anchors(match_uuid: str, tournament_url: str, anchors) -> tuple[li
             offset = float(element["video_offset"])
         except (TypeError, ValueError) as exc:
             raise ValueError("video_offset must be a number") from exc
+        if not math.isfinite(offset):
+            raise ValueError("video_offset must be a finite number")
         if offset < 0:
             raise ValueError("video_offset must be >= 0")
 
@@ -132,18 +135,14 @@ def create_direct_user_upload_camera(
         display_name = display_name[:200]
 
     ext = path.splitext(path.basename(saved_abs_path))[1].lower() or ".webm"
+    if ext not in {".mp4", ".webm"}:
+        raise ValueError("uploaded file must be .mp4 or .webm")
     camera_fs_name = _camera_fs_dir_name(upload_key, display_name)
-    match_out_dir = path.join(
-        current_app.root_path,
-        "..",
-        "static",
-        "uploads",
-        "videos",
-        tournament_url,
-        match_obj.field,
-        match_uuid,
-        camera_fs_name,
-    )
+    field_seg = str(field_obj.id)
+    videos_root = path.realpath(path.join(current_app.root_path, "..", "static", "uploads", "videos"))
+    match_out_dir = path.realpath(path.join(videos_root, tournament_url, field_seg, match_uuid, camera_fs_name))
+    if match_out_dir != videos_root and not match_out_dir.startswith(videos_root + os.sep):
+        raise ValueError("Invalid upload path")
     os.makedirs(match_out_dir, exist_ok=True)
 
     final_abs_path = path.join(match_out_dir, f"source{ext}")
@@ -165,7 +164,7 @@ def create_direct_user_upload_camera(
         "uploads",
         "videos",
         tournament_url,
-        match_obj.field,
+        field_seg,
         match_uuid,
         camera_fs_name,
         f"source{ext}",

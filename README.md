@@ -48,8 +48,8 @@ their code.
   JSON, exclusively under the `/_api/` prefix. `/api/` (no underscore)
   is reserved for a future public API and is not used.
 - **Database.** A single SQLite file (`tournament.db`). WAL mode is
-  enabled so the finalize-recording worker and HTTP handlers can share
-  the file without blocking each other. Foreign keys are enforced via
+  enabled so background workers and HTTP handlers can share the file
+  without blocking each other. Foreign keys are enforced via
   `PRAGMA foreign_keys = ON` on every new connection - without that
   pragma SQLite ignores `FOREIGN KEY` declarations entirely.
 - **Schema migrations.** Managed by [Alembic]. See

@@ -11,6 +11,8 @@ from flask_login import current_user
 import json
 import os
 import re
+import shutil
+import time
 import uuid
 from os import path
 
@@ -22,25 +24,89 @@ from app.utils.user_uploads import (
     normalize_anchors,
     create_direct_user_upload_camera,
 )
+from app.utils.youtube_upload import canonical_youtube_watch_url
 
 from . import bp
 
 UPLOAD_ID_RE = re.compile(r"[A-Za-z0-9_-]{6,80}")
 
+MAX_UPLOAD_CHUNKS = 512
+MAX_CHUNK_BYTES = 16 * 1024 * 1024
+MAX_UPLOAD_BYTES = 4 * 1024 * 1024 * 1024
+INCOMING_TTL_SECONDS = 24 * 60 * 60
+ALLOWED_EXTENSIONS = {".mp4", ".webm"}
+ALLOWED_CONTENT_TYPES = {"video/mp4", "video/webm"}
 
-def _incoming_dir(tournament_url: str, field_name: str, upload_id: str) -> str:
-    return path.join(
-        current_app.root_path,
-        "..",
-        "static",
-        "uploads",
-        "videos",
-        tournament_url,
-        field_name,
-        "user_uploads",
-        "_incoming",
-        upload_id,
+
+def _videos_root() -> str:
+    return path.realpath(path.join(current_app.root_path, "..", "static", "uploads", "videos"))
+
+
+def _ensure_under_videos_root(candidate: str) -> str:
+    root = _videos_root()
+    resolved = path.realpath(candidate)
+    if resolved != root and not resolved.startswith(root + os.sep):
+        raise ValueError("path escapes uploads root")
+    return resolved
+
+
+def _incoming_dir(tournament_url: str, field_id: int | str, upload_id: str) -> str:
+    return _ensure_under_videos_root(
+        path.join(
+            _videos_root(),
+            tournament_url,
+            str(field_id),
+            "user_uploads",
+            "_incoming",
+            upload_id,
+        )
     )
+
+
+def _incoming_parent(tournament_url: str, field_id: int | str) -> str:
+    return _ensure_under_videos_root(
+        path.join(_videos_root(), tournament_url, str(field_id), "user_uploads", "_incoming")
+    )
+
+
+def _cleanup_stale_incoming(tournament_url: str, field_id: int | str) -> None:
+    try:
+        parent = _incoming_parent(tournament_url, field_id)
+    except ValueError:
+        return
+    if not path.isdir(parent):
+        return
+    cutoff = time.time() - INCOMING_TTL_SECONDS
+    for name in os.listdir(parent):
+        candidate = path.join(parent, name)
+        try:
+            if not path.isdir(candidate):
+                continue
+            if path.getmtime(candidate) < cutoff:
+                shutil.rmtree(candidate, ignore_errors=True)
+        except OSError:
+            continue
+
+
+def _normalize_upload_filename(filename: str, content_type: str) -> tuple[str, str, str]:
+    """Return ``(safe_filename, extension, content_type)`` or raise ``ValueError``."""
+    base = path.basename((filename or "").strip()) or "source.mp4"
+    base = base.replace("\x00", "")
+    ext = path.splitext(base)[1].lower()
+    ctype = (content_type or "").strip().lower()
+
+    if ext not in ALLOWED_EXTENSIONS:
+        raise ValueError("filename must end in .mp4 or .webm")
+    if ctype and ctype not in ALLOWED_CONTENT_TYPES:
+        raise ValueError("content_type must be video/mp4 or video/webm")
+    if not ctype:
+        ctype = "video/mp4" if ext == ".mp4" else "video/webm"
+    elif (ext == ".mp4" and ctype != "video/mp4") or (ext == ".webm" and ctype != "video/webm"):
+        raise ValueError("content_type does not match filename extension")
+
+    stem = path.splitext(base)[0] or "source"
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", stem)[:80] or "source"
+    return f"{stem}{ext}", ext, ctype
 
 
 def _resolve_match_field(tournament_url: str, match_id: str):
@@ -64,12 +130,17 @@ def footage_link(tournament_url: str, match_id: str):
         return err
 
     payload = request.get_json(silent=True) or {}
-    youtube_link = (payload.get("youtube_link") or "").strip()
+    youtube_raw = (payload.get("youtube_link") or "").strip()
     camera_name = (payload.get("camera_name") or "").strip()
-    if not youtube_link:
+    if not youtube_raw:
         return jsonify({"error": "youtube_link is required"}), 400
     if not camera_name:
         return jsonify({"error": "camera_name is required"}), 400
+
+    try:
+        youtube_link = canonical_youtube_watch_url(youtube_raw)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
     try:
         worlds, videos = normalize_anchors(match_id, tournament_url, payload.get("anchors"))
@@ -113,28 +184,41 @@ def footage_upload_init(tournament_url: str, match_id: str):
         return jsonify({"error": "total_chunks must be an integer"}), 400
     if total_chunks <= 0:
         return jsonify({"error": "total_chunks must be > 0"}), 400
+    if total_chunks > MAX_UPLOAD_CHUNKS:
+        return jsonify({"error": f"total_chunks must be <= {MAX_UPLOAD_CHUNKS}"}), 400
     if not camera_name:
         return jsonify({"error": "camera_name is required"}), 400
+
+    try:
+        safe_filename, _ext, normalized_ctype = _normalize_upload_filename(filename, content_type)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
     try:
         normalize_anchors(match_id, tournament_url, payload.get("anchors"))
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
 
+    _cleanup_stale_incoming(tournament_url, field_obj.id)
+
     upload_id = uuid.uuid4().hex
-    incoming = _incoming_dir(tournament_url, match_obj.field, upload_id)
+    try:
+        incoming = _incoming_dir(tournament_url, field_obj.id, upload_id)
+    except ValueError:
+        return jsonify({"error": "Invalid upload path"}), 400
     os.makedirs(incoming, exist_ok=True)
     meta = {
         "upload_id": upload_id,
         "match_uuid": match_id,
-        "field_name": match_obj.field,
+        "field_id": field_obj.id,
         "camera_name": camera_name,
-        "filename": filename,
-        "content_type": content_type,
+        "filename": safe_filename,
+        "content_type": normalized_ctype,
         "total_chunks": total_chunks,
         "anchors": payload.get("anchors"),
         "uploaded_by_user_id": str(current_user.id),
         "uploaded_by_user_type": current_user_type(),
+        "created_at": time.time(),
     }
     with open(path.join(incoming, "meta.json"), "w") as handle:
         json.dump(meta, handle)
@@ -153,10 +237,13 @@ def footage_upload_chunk(tournament_url: str, match_id: str):
     if chunk_file is None:
         return jsonify({"error": "chunk is required"}), 400
 
-    match_obj = Match.query.filter_by(uuid=match_id, event=tournament_url).first()
-    if not match_obj or not match_obj.field:
-        return jsonify({"error": "Match not found"}), 404
-    incoming = _incoming_dir(tournament_url, match_obj.field, upload_id)
+    match_obj, field_obj, err = _resolve_match_field(tournament_url, match_id)
+    if err:
+        return err
+    try:
+        incoming = _incoming_dir(tournament_url, field_obj.id, upload_id)
+    except ValueError:
+        return jsonify({"error": "Invalid upload path"}), 400
     meta_path = path.join(incoming, "meta.json")
     if not path.exists(meta_path):
         return jsonify({"error": "Upload not found"}), 404
@@ -170,7 +257,39 @@ def footage_upload_chunk(tournament_url: str, match_id: str):
     if chunk_index < 0 or chunk_index >= int(meta["total_chunks"]):
         return jsonify({"error": "chunk_index out of range"}), 400
 
-    chunk_file.save(path.join(incoming, f"chunk_{chunk_index:06d}.part"))
+    # Stream to disk with a hard per-chunk and aggregate size cap.
+    part_path = path.join(incoming, f"chunk_{chunk_index:06d}.part")
+    written = 0
+    total_existing = 0
+    for name in os.listdir(incoming):
+        if name.startswith("chunk_") and name.endswith(".part") and name != path.basename(part_path):
+            try:
+                total_existing += path.getsize(path.join(incoming, name))
+            except OSError:
+                pass
+
+    with open(part_path, "wb") as out:
+        while True:
+            buf = chunk_file.stream.read(1024 * 1024)
+            if not buf:
+                break
+            written += len(buf)
+            if written > MAX_CHUNK_BYTES:
+                out.close()
+                try:
+                    os.remove(part_path)
+                except OSError:
+                    pass
+                return jsonify({"error": f"chunk exceeds {MAX_CHUNK_BYTES} bytes"}), 400
+            if total_existing + written > MAX_UPLOAD_BYTES:
+                out.close()
+                try:
+                    os.remove(part_path)
+                except OSError:
+                    pass
+                return jsonify({"error": f"upload exceeds {MAX_UPLOAD_BYTES} bytes"}), 400
+            out.write(buf)
+
     return jsonify({"success": True})
 
 
@@ -183,10 +302,13 @@ def footage_upload_complete(tournament_url: str, match_id: str):
     if not upload_id or not UPLOAD_ID_RE.fullmatch(upload_id):
         return jsonify({"error": "Invalid upload_id"}), 400
 
-    match_obj = Match.query.filter_by(uuid=match_id, event=tournament_url).first()
-    if not match_obj or not match_obj.field:
-        return jsonify({"error": "Match not found"}), 404
-    incoming = _incoming_dir(tournament_url, match_obj.field, upload_id)
+    match_obj, field_obj, err = _resolve_match_field(tournament_url, match_id)
+    if err:
+        return err
+    try:
+        incoming = _incoming_dir(tournament_url, field_obj.id, upload_id)
+    except ValueError:
+        return jsonify({"error": "Invalid upload path"}), 400
     meta_path = path.join(incoming, "meta.json")
     if not path.exists(meta_path):
         return jsonify({"error": "Upload not found"}), 404
@@ -197,8 +319,14 @@ def footage_upload_complete(tournament_url: str, match_id: str):
         return jsonify({"error": "You cannot complete another user's upload"}), 403
 
     total_chunks = int(meta["total_chunks"])
+    if total_chunks > MAX_UPLOAD_CHUNKS:
+        return jsonify({"error": "Upload exceeds chunk limit"}), 400
+
     ext = path.splitext(path.basename(meta.get("filename") or "source.mp4"))[1].lower() or ".mp4"
+    if ext not in ALLOWED_EXTENSIONS:
+        return jsonify({"error": "Unsupported media type"}), 400
     source_path = path.join(incoming, f"source{ext}")
+    assembled = 0
     with open(source_path, "wb") as out:
         for i in range(total_chunks):
             part = path.join(incoming, f"chunk_{i:06d}.part")
@@ -209,6 +337,9 @@ def footage_upload_complete(tournament_url: str, match_id: str):
                     buf = inp.read(1024 * 1024)
                     if not buf:
                         break
+                    assembled += len(buf)
+                    if assembled > MAX_UPLOAD_BYTES:
+                        return jsonify({"error": f"upload exceeds {MAX_UPLOAD_BYTES} bytes"}), 400
                     out.write(buf)
 
     app_obj = current_app._get_current_object()  # type: ignore[attr-defined]

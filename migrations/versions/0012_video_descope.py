@@ -6,8 +6,13 @@ wrote. Existing footage playback does not depend on these: match-scoped
 cameras and their ``camera_timepoints`` anchors, ``matches.camera_stream_starts``,
 and ``points.footage`` are all retained.
 
-Revision ID: 0011_video_descope
-Revises: 0010_normalize_match_names
+**Data loss (intentional):** upgrade drops any values stored in
+``fields.camera``, ``points.camera_index``, and ``points.stream_timestamp``.
+Downgrade recreates those columns as empty nullables; the dropped values
+cannot be restored.
+
+Revision ID: 0012_video_descope
+Revises: 0011_bracket_placements
 Create Date: 2026-07-13
 """
 
@@ -19,8 +24,8 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision: str = "0011_video_descope"
-down_revision: Union[str, Sequence[str], None] = "0010_normalize_match_names"
+revision: str = "0012_video_descope"
+down_revision: Union[str, Sequence[str], None] = "0011_bracket_placements"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

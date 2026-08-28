@@ -3,6 +3,16 @@ use crate::types::FootageCameraRow;
 use crate::Route;
 use dioxus::prelude::*;
 
+/// Prefer a full YouTube watch URL; tolerate legacy bare video IDs.
+fn youtube_href(link: &str) -> String {
+    let trimmed = link.trim();
+    if trimmed.starts_with("https://") || trimmed.starts_with("http://") {
+        trimmed.to_string()
+    } else {
+        format!("https://www.youtube.com/watch?v={trimmed}")
+    }
+}
+
 #[component]
 pub fn ManageFootage(url: String) -> Element {
     let mut query = use_signal(|| String::new());
@@ -96,7 +106,8 @@ pub fn ManageFootage(url: String) -> Element {
                                                 td { "{cam.world_start_timestamp.clone().unwrap_or_else(|| \"-\".to_string())}" }
                                                 td {
                                                     if let Some(link) = &cam.link {
-                                                        a { href: "{link}", target: "_blank", rel: "noopener noreferrer", "Open" }
+                                                        let href = youtube_href(link);
+                                                        a { href: "{href}", target: "_blank", rel: "noopener noreferrer", "Open" }
                                                     } else {
                                                         span { class: "text-muted", "-" }
                                                     }

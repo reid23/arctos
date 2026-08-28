@@ -16,8 +16,8 @@ application code lives under `src/`:
 - `types.rs` - serde structs mirroring API responses.
 - `pages/` - one file per route (mirrors the SPA's URL structure).
 - `components/` - shared widget library.
-- `record_idb.rs`, `time_format.rs`, `stones_filter.rs` - smaller
-  cross-cutting modules; see each file's top comment.
+- `time_format.rs`, `stones_filter.rs` - smaller cross-cutting modules;
+  see each file's top comment.
 
 ## Running
 
@@ -96,12 +96,13 @@ Two important details:
 When you add or change a backend response shape, update the matching
 struct here. Shapes only used in one page can live in that page's file.
 
-## Recording
+## Footage
 
-The video-recorder code (`src/record_idb.rs`, parts of
-`src/pages/record.rs`) uses IndexedDB to buffer chunks before upload,
-because the upload can take longer than a single tab session. This is
-the most platform-specific code in the SPA and is gated to `wasm32`.
+Tournament organizers attach match footage via the Manage Footage page
+(`src/pages/manage_footage.rs`) and the backend footage API
+(`app/routes/tournaments/footage.py`): either a YouTube link or a chunked
+file upload that the server pushes to YouTube. Jump-to-point uses
+`camera_timepoints` on the match page iframe player.
 
 ## Conventions
 
