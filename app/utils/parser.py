@@ -1,63 +1,46 @@
 """
-this is a lisp based language with the following simple options:
+Arctos Schedule Script (ASS) — a small sandboxed Lisp for skip conditions
+and tag-auto-update / standings expressions.
 
-(wins TEAM) -> INT
-(losses TEAM) -> INT
-(winner MATCH) -> TEAM
-(loser MATCH) -> TEAM
-(points-won TEAM MATCH) -> INT
-(points-lost TEAM MATCH) -> INT
-(points-won TEAM) -> INT
-(points-lost TEAM) -> INT
-(is-skipped MATCH) -> BOOL
+Team/match ops:
+  (wins TEAM) / (wins TEAM MATCHLIST) -> INT
+  (losses TEAM) / (losses TEAM MATCHLIST) -> INT
+  (winner MATCH) -> TEAM
+  (loser MATCH) -> TEAM
+  (points-won TEAM) / (points-won TEAM MATCH|MATCHLIST) -> INT
+  (points-lost TEAM) / (points-lost TEAM MATCH|MATCHLIST) -> INT
+  (won? TEAM MATCH) -> BOOL
+  (is-skipped MATCH) -> BOOL
 
-(+ INT INT) -> INT
-(- INT INT) -> INT
-(* INT INT) -> INT
-(/ INT INT) -> INT
-(> INT INT) -> BOOL
-(< INT INT) -> BOOL
-(>= INT INT) -> BOOL
-(<= INT INT) -> BOOL
-(== ANY ANY) -> BOOL
-(or BOOL BOOL) -> BOOL
-(and BOOL BOOL) -> BOOL
-(not BOOL) -> BOOL
+Arithmetic / logic:
+  (+ - * /) ( > < >= <= ) (==) (and *BOOL) (or *BOOL) (not BOOL)
 
-(if COND IF_TRUE IF_FALSE)
+Special forms:
+  (if COND THEN ELSE)
+  (let ((name expr) ...) BODY)   ; sequential bindings
+  (cond (PRED EXPR) ...)         ; first true pred wins; else nil
+  (quote EXPR) / 'EXPR
+  (lambda (params) BODY)
 
-(quote EXPR) -> the literal expression, unevaluated
-'EXPR        -> shorthand for (quote EXPR), as in normal Lisp
-(car LIST)
-(cdr LIST)
-(get INDEX LIST) -> gets val at index or NIL
-(or-default VAL DEFAULT) -> returns VAL if VAL is not NIL else DEFAULT
-(len LIST) -> INT
-(map LIST FUNC)
-(reduce LIST FUNC)
+Lists:
+  (list *ARGS) (cons X LIST) (append LIST LIST)
+  (car LIST) (cdr LIST) (get INDEX LIST) (len LIST)
+  (empty? LIST) (member? X LIST)
+  (map LIST FUNC) (map-indexed LIST FUNC)
+  (filter LIST PREDFN)
+  (reduce LIST FUNC) / (reduce LIST INIT FUNC)
+  (sort-by LIST *KEYFNS)         ; descending keys, stable
+  (range N)                      ; (0 .. N-1), N capped
+  (max/min LIST) (max-by/min-by LIST FUNC)
+  (or-default VAL DEFAULT)
 
-(lambda (*args) (output))
+Curly braces = matches `{name}`; square braces = teams `[name]`.
 
-(max LIST) -> element
-(min LIST) -> element
-
-(max_by LIST FUNC) -> element
-(min_by LIST FUNC) -> element
-
-
-curly braces denote matches. (ie, `{literal match}`)
-square braces denote teams. (ie, `[literal team name]`)
-
-data types:
-- INT
-- NIL
-- BOOL
-- MATCH
-- TEAM
-- LIST
-- FUNC
-
+Types: INT, NIL, BOOL, MATCH, TEAM, LIST, FUNC
 """
+
+# Max N accepted by (range N) — standings lists are tiny; this is a safety rail.
+RANGE_MAX = 10_000
 
 import difflib
 
@@ -265,6 +248,9 @@ _ANY = frozenset({"INT", "BOOL", "TEAM", "MATCH", "LIST", "FUNC", "NIL"})
 # return type when statically known; functions whose return depends on the args
 # (`if`, `or-default`, `car`, `get`, `reduce`, `max`/`min`, `max-by`/`min-by`) are
 # omitted from the return-type lookup and computed in `_infer_types`.
+# MATCH or LIST — used for points-won/points-lost second-arg overload.
+_MATCH_OR_LIST = frozenset({"MATCH", "LIST"})
+
 _SIGNATURES: dict[str, dict] = {
     "+": {"args": (_INT, _INT), "return": _INT},
     "-": {"args": (_INT, _INT), "return": _INT},
@@ -275,28 +261,39 @@ _SIGNATURES: dict[str, dict] = {
     ">=": {"args": (_INT, _INT), "return": _BOOL},
     "<=": {"args": (_INT, _INT), "return": _BOOL},
     "==": {"args": (_ANY, _ANY), "return": _BOOL},
-    "or": {"args": (_BOOL, _BOOL), "return": _BOOL},
-    "and": {"args": (_BOOL, _BOOL), "return": _BOOL},
+    "or": {"args": (_BOOL,), "min_args": 0, "max_args": None, "return": _BOOL},
+    "and": {"args": (_BOOL,), "min_args": 0, "max_args": None, "return": _BOOL},
     "not": {"args": (_BOOL,), "return": _BOOL},
-    "wins": {"args": (_TEAM,), "return": _INT},
-    "losses": {"args": (_TEAM,), "return": _INT},
+    "wins": {"args": (_TEAM, _LIST), "min_args": 1, "max_args": 2, "return": _INT},
+    "losses": {"args": (_TEAM, _LIST), "min_args": 1, "max_args": 2, "return": _INT},
     "winner": {"args": (_MATCH,), "return": _TEAM},
     "loser": {"args": (_MATCH,), "return": _TEAM},
     "is-skipped": {"args": (_MATCH,), "return": _BOOL},
-    "points-won": {"args": (_TEAM, _MATCH), "min_args": 1, "return": _INT},
-    "points-lost": {"args": (_TEAM, _MATCH), "min_args": 1, "return": _INT},
+    "won?": {"args": (_TEAM, _MATCH), "return": _BOOL},
+    "points-won": {"args": (_TEAM, _MATCH_OR_LIST), "min_args": 1, "max_args": 2, "return": _INT},
+    "points-lost": {"args": (_TEAM, _MATCH_OR_LIST), "min_args": 1, "max_args": 2, "return": _INT},
+    "list": {"args": (_ANY,), "min_args": 0, "max_args": None, "return": _LIST},
+    "cons": {"args": (_ANY, _LIST), "return": _LIST},
+    "append": {"args": (_LIST, _LIST), "return": _LIST},
     "car": {"args": (_LIST,)},
     "cdr": {"args": (_LIST,), "return": _LIST},
     "get": {"args": (_INT, _LIST)},
     "or-default": {"args": (_ANY, _ANY)},
     "len": {"args": (_LIST,), "return": _INT},
+    "empty?": {"args": (_LIST,), "return": _BOOL},
+    "member?": {"args": (_ANY, _LIST), "return": _BOOL},
     "map": {"args": (_LIST, _FUNC), "return": _LIST},
-    "reduce": {"args": (_LIST, _FUNC)},
+    "map-indexed": {"args": (_LIST, _FUNC), "return": _LIST},
+    "filter": {"args": (_LIST, _FUNC), "return": _LIST},
+    # reduce: 2-arg (LIST FUNC) or 3-arg (LIST INIT FUNC) — validated specially.
+    "reduce": {"args": (_LIST,), "min_args": 2, "max_args": 3},
+    "sort-by": {"args": (_LIST, _FUNC), "min_args": 2, "max_args": None, "return": _LIST},
+    "range": {"args": (_INT,), "return": _LIST},
     "max": {"args": (_LIST,)},
     "min": {"args": (_LIST,)},
     "max-by": {"args": (_LIST, _FUNC)},
     "min-by": {"args": (_LIST, _FUNC)},
-    # `if` and `lambda` are handled as special forms, not validated through the table.
+    # `if`, `lambda`, `quote`, `let`, `cond` are special forms (not table-validated).
 }
 
 
@@ -385,8 +382,24 @@ def _infer_types(value) -> frozenset[str]:
                 return frozenset({"UNKNOWN"})
             if head == "reduce":
                 return frozenset({"UNKNOWN"})
-            if head in ("max", "min", "max-by", "min-by"):
+            if head in ("max", "min", "max-by", "min-by", "sort-by"):
+                # Element type of the source list when visible.
+                if len(args) >= 1:
+                    return _infer_list_element_types(args[0]) | frozenset({"UNKNOWN"})
                 return frozenset({"UNKNOWN"})
+            if head == "let":
+                # (let bindings body) — type is body's type when we can see it.
+                if len(args) >= 2:
+                    return _infer_types(args[1])
+                return frozenset({"UNKNOWN"})
+            if head == "cond":
+                # Union of all clause expression types (odd positions after head packaging).
+                # Preserved form is (cond (pred expr) ...) — args are clause lists.
+                types: frozenset[str] = frozenset()
+                for clause in args:
+                    if isinstance(clause, list) and len(clause) >= 2:
+                        types |= _infer_types(clause[1])
+                return types if types else frozenset({"UNKNOWN", "NIL"})
         return frozenset({"UNKNOWN"})
     if isinstance(value, list):
         # Plain data list (a quoted literal).
@@ -588,7 +601,7 @@ class Simplifier:
     """Evaluates DSL expressions by executing code and resolving symbols."""
 
     # Built-in function names that are valid identifiers
-    BUILTINS = set(_SIGNATURES.keys()) | {"if", "lambda", "quote"}
+    BUILTINS = set(_SIGNATURES.keys()) | {"if", "lambda", "quote", "let", "cond"}
 
     def __init__(self, parse_team_literal, parse_match_literal, env=None):
         self.parse_team_literal = parse_team_literal
@@ -710,6 +723,17 @@ class Simplifier:
         max_args = sig.get("max_args", fixed_count)
         min_args = sig.get("min_args", fixed_count)
         self._validate_arity(head, args, min_args, max_args)
+
+        # reduce: (LIST FUNC) or (LIST INIT FUNC) — middle arg is not FUNC in the 3-arg form.
+        if head == "reduce":
+            self._validate_arg_types(head, args[:1], (_LIST,))
+            if len(args) == 2:
+                self._validate_arg_types(head, args[1:], (_FUNC,))
+            else:
+                # arg1 = INIT (ANY), arg2 = FUNC
+                self._validate_arg_types(head, args[2:], (_FUNC,))
+            return
+
         self._validate_arg_types(head, args, expected_types)
 
     # Interpreter methods - top-down traversal with explicit control
@@ -859,6 +883,14 @@ class Simplifier:
                 if_false = self.visit(tree.children[3])
                 return Preserved([head, cond, if_true, if_false])
 
+        # Handle let special form — sequential bindings, then body.
+        if isinstance(head, str) and head == "let":
+            return self._evaluate_let(tree)
+
+        # Handle cond special form — first matching clause wins.
+        if isinstance(head, str) and head == "cond":
+            return self._evaluate_cond(tree)
+
         # Regular function call - evaluate all arguments
         args = [self.visit(child) for child in tree.children[1:]]
 
@@ -885,10 +917,28 @@ class Simplifier:
                 return self._evaluate_or_default(head, args)
             elif head == "len":
                 return self._evaluate_len(head, args)
+            elif head == "empty?":
+                return self._evaluate_empty(head, args)
+            elif head == "member?":
+                return self._evaluate_member(head, args)
+            elif head == "list":
+                return self._evaluate_list(head, args)
+            elif head == "cons":
+                return self._evaluate_cons(head, args)
+            elif head == "append":
+                return self._evaluate_append(head, args)
             elif head == "map":
                 return self._evaluate_map(head, args)
+            elif head == "map-indexed":
+                return self._evaluate_map_indexed(head, args)
+            elif head == "filter":
+                return self._evaluate_filter(head, args)
             elif head == "reduce":
                 return self._evaluate_reduce(head, args)
+            elif head == "sort-by":
+                return self._evaluate_sort_by(head, args)
+            elif head == "range":
+                return self._evaluate_range(head, args)
             elif head == "max":
                 return self._evaluate_max(head, args)
             elif head == "min":
@@ -917,6 +967,8 @@ class Simplifier:
                 return self._evaluate_points_won(head, args)
             elif head == "points-lost":
                 return self._evaluate_points_lost(head, args)
+            elif head == "won?":
+                return self._evaluate_won(head, args)
             elif head == "is-skipped":
                 return self._evaluate_is_skipped(head, args)
             else:
@@ -1066,6 +1118,38 @@ class Simplifier:
         elif op == "<=":
             return a <= b
 
+    def _definite_equal(self, a, b):
+        """Equality used by member?/won?/stat filters.
+
+        Returns True, False, or None when the comparison is still symbolic.
+        """
+        if isinstance(a, (SymbolicTeam, SymbolicMatch)) or isinstance(b, (SymbolicTeam, SymbolicMatch)):
+            return None
+        if self._is_preserved_expression(a) or self._is_preserved_expression(b):
+            return None
+        if self._is_unresolved_identifier(a) or self._is_unresolved_identifier(b):
+            return None
+        # bool before int (bool is a subclass of int)
+        if isinstance(a, bool) and isinstance(b, bool):
+            return a == b
+        if type(a) is int and type(b) is int:
+            return a == b
+        if isinstance(a, Nil) and isinstance(b, Nil):
+            return True
+        if isinstance(a, (int, bool, Nil)) and isinstance(b, (int, bool, Nil)):
+            # Mixed nil/int/bool that aren't both nil — concrete inequality when both concrete.
+            if isinstance(a, Nil) or isinstance(b, Nil):
+                return False
+            if isinstance(a, bool) or isinstance(b, bool):
+                return None  # don't coerce bool vs int
+            return a == b
+        if isinstance(a, Team) and isinstance(b, Team):
+            return a.obj.id == b.obj.id
+        if isinstance(a, Match) and isinstance(b, Match):
+            return a.obj.uuid == b.obj.uuid
+        # Different concrete types — not equal (member? treats as miss, not preserve).
+        return False
+
     def _evaluate_equality(self, op, args):
         """Evaluate (== ANY ANY) — preserves on unresolved, else delegates to value equality."""
         if self._has_unresolved(args):
@@ -1081,36 +1165,182 @@ class Simplifier:
         return Preserved([op, a, b])
 
     def _evaluate_logical_op(self, op, args):
-        """Evaluate logical operations."""
+        """Evaluate logical operations. `and`/`or` are variadic (evaluate-all)."""
+        if op == "not":
+            if self._has_unresolved(args):
+                return Preserved([op, *args])
+            (a,) = args
+            if not isinstance(a, bool):
+                # Allow only concrete bools; otherwise preserve.
+                return Preserved([op, *args])
+            return not a
+
+        # Variadic and/or — evaluate-all; preserve if any arg unresolved and no
+        # decisive concrete result would still require that arg... Spec says
+        # evaluate-all and preserve if unresolved remains material. Simpler rule:
+        # if any unresolved → Preserved; else fold.
         if self._has_unresolved(args):
             return Preserved([op, *args])
 
-        if op == "not":
-            (a,) = args
-            return not bool(a)
-
-        a, b = args
-        a_bool = bool(a)
-        b_bool = bool(b)
+        if op == "and":
+            if not args:
+                return True
+            for a in args:
+                if not isinstance(a, bool):
+                    return Preserved([op, *args])
+                if a is False:
+                    return False
+            return True
 
         if op == "or":
-            return a_bool or b_bool
-        elif op == "and":
-            return a_bool and b_bool
+            if not args:
+                return False
+            for a in args:
+                if not isinstance(a, bool):
+                    return Preserved([op, *args])
+                if a is True:
+                    return True
+            return False
+
+    def _unwrap_tree(self, tree):
+        """Unwrap expression/atom wrappers down to the meaningful node."""
+        while isinstance(tree, Tree) and tree.data in {"expression", "atom"} and tree.children:
+            tree = tree.children[0]
+        return tree
+
+    def _extract_identifier_name(self, tree):
+        """Get a raw identifier name from a parse tree without env resolution."""
+        tree = self._unwrap_tree(tree)
+        if isinstance(tree, Tree) and tree.data == "identifier_atom" and tree.children:
+            return tree.children[0].value
+        raise DSLValidationError("let binding name must be an identifier")
+
+    def _evaluate_let(self, tree):
+        """Evaluate (let ((name expr) ...) BODY) with sequential bindings."""
+        if len(tree.children) != 3:
+            raise DSLValidationError("let expects 2 arguments: bindings and body")
+
+        bindings_node = self._unwrap_tree(tree.children[1])
+        body_tree = tree.children[2]
+
+        if not isinstance(bindings_node, Tree) or bindings_node.data != "list":
+            raise DSLValidationError("let bindings must be a list of (name expr) pairs")
+
+        new_env = self.env.copy()
+        seen: set[str] = set()
+        for binding in bindings_node.children:
+            b = self._unwrap_tree(binding)
+            if not isinstance(b, Tree) or b.data != "list" or len(b.children) != 2:
+                raise DSLValidationError("let binding must be (name expr)")
+            name = self._extract_identifier_name(b.children[0])
+            if name in seen:
+                raise DSLValidationError(f"Duplicate let binding name '{name}'")
+            if name in self.BUILTINS:
+                raise DSLValidationError(f"Cannot bind builtin name '{name}' in let")
+            seen.add(name)
+            # Evaluate binding expr in env so far (sequential / let* semantics).
+            simplifier = Simplifier(self.parse_team_literal, self.parse_match_literal, env=new_env)
+            val = simplifier.visit(b.children[1])
+            new_env[name] = val
+
+        body_simplifier = Simplifier(self.parse_team_literal, self.parse_match_literal, env=new_env)
+        return body_simplifier.visit(body_tree)
+
+    def _evaluate_cond(self, tree):
+        """Evaluate (cond (PRED EXPR) ...) — first true pred wins; else nil."""
+        clause_nodes = list(tree.children[1:])
+        for idx, clause_tree in enumerate(clause_nodes):
+            clause = self._unwrap_tree(clause_tree)
+            if not isinstance(clause, Tree) or clause.data != "list" or len(clause.children) != 2:
+                raise DSLValidationError("cond clause must be (pred expr)")
+            pred_tree, expr_tree = clause.children
+            pred = self.visit(pred_tree)
+            pred = self._resolve_identifier(pred)
+            pred_types = _infer_types(pred)
+            if "UNKNOWN" not in pred_types and not (pred_types & _BOOL):
+                raise DSLValidationError(f"cond predicate must be BOOL, got {_human_type_name(pred_types)}")
+            if isinstance(pred, bool):
+                if pred:
+                    return self.visit(expr_tree)
+                continue
+            # Symbolic predicate — preserve entire remaining cond.
+            clauses_preserved = []
+            expr_val = self.visit(expr_tree)
+            clauses_preserved.append(List([pred, expr_val]))
+            for rest in clause_nodes[idx + 1 :]:
+                r = self._unwrap_tree(rest)
+                if not isinstance(r, Tree) or r.data != "list" or len(r.children) != 2:
+                    raise DSLValidationError("cond clause must be (pred expr)")
+                p = self._resolve_identifier(self.visit(r.children[0]))
+                e = self.visit(r.children[1])
+                clauses_preserved.append(List([p, e]))
+            return Preserved(["cond", *clauses_preserved])
+        return NIL
+
+    def _require_match_list(self, head, matchlist):
+        """Validate MATCHLIST arg; return list of Match or raise / signal preserve."""
+        if self._is_preserved_expression(matchlist):
+            return None  # caller should preserve
+        if not isinstance(matchlist, list):
+            raise DSLValidationError(
+                f"Argument 2 of ({head} ...) must be LIST, got {_human_type_name(_infer_types(matchlist))}"
+            )
+        for m in matchlist:
+            if isinstance(m, SymbolicMatch) or self._is_preserved_expression(m):
+                return None
+            if not isinstance(m, Match):
+                raise DSLValidationError(f"({head} ...) match list elements must be matches")
+        return matchlist
+
+    def _count_outcomes_over_matches(self, head, team, matchlist, side: str):
+        """Count wins or losses for team over matchlist. side is 'winner' or 'loser'."""
+        count = 0
+        for m in matchlist:
+            outcome = m.winner() if side == "winner" else m.loser()
+            eq = self._definite_equal(outcome, team)
+            if eq is None:
+                return Preserved([head, team, matchlist])
+            if eq:
+                count += 1
+        return count
+
+    def _sum_points_over_matches(self, head, team, matchlist, won: bool):
+        total = 0
+        for m in matchlist:
+            if isinstance(m, SymbolicMatch) or self._is_preserved_expression(m):
+                return Preserved([head, team, matchlist])
+            if not isinstance(m, Match):
+                raise DSLValidationError(f"({head} ...) match list elements must be matches")
+            total += team.points_won(m) if won else team.points_lost(m)
+        return total
 
     def _evaluate_wins(self, head, args):
-        """Evaluate (wins TEAM) expression."""
-        if self._has_unresolved(args):
+        """Evaluate (wins TEAM) or (wins TEAM MATCHLIST)."""
+        if self._has_unresolved(args[:1]):
             return Preserved([head, *args])
         team = args[0]
-        return team.wins()
+        if len(args) == 1:
+            if self._has_unresolved(args):
+                return Preserved([head, *args])
+            return team.wins()
+        matchlist = self._require_match_list(head, args[1])
+        if matchlist is None:
+            return Preserved([head, *args])
+        return self._count_outcomes_over_matches(head, team, matchlist, "winner")
 
     def _evaluate_losses(self, head, args):
-        """Evaluate (losses TEAM) expression."""
-        if self._has_unresolved(args):
+        """Evaluate (losses TEAM) or (losses TEAM MATCHLIST)."""
+        if self._has_unresolved(args[:1]):
             return Preserved([head, *args])
         team = args[0]
-        return team.losses()
+        if len(args) == 1:
+            if self._has_unresolved(args):
+                return Preserved([head, *args])
+            return team.losses()
+        matchlist = self._require_match_list(head, args[1])
+        if matchlist is None:
+            return Preserved([head, *args])
+        return self._count_outcomes_over_matches(head, team, matchlist, "loser")
 
     def _evaluate_winner(self, head, args):
         """Evaluate (winner MATCH) expression."""
@@ -1127,22 +1357,55 @@ class Simplifier:
         return match.loser()
 
     def _evaluate_points_won(self, head, args):
-        """Evaluate (points-won TEAM MATCH?) expression."""
+        """Evaluate (points-won TEAM) / (points-won TEAM MATCH|MATCHLIST)."""
+        if self._has_unresolved(args[:1]):
+            return Preserved([head, *args])
+        team = args[0]
+        if len(args) == 1:
+            return team.points_won()
+        second = args[1]
+        if isinstance(second, list) or self._is_preserved_expression(second):
+            if self._is_preserved_expression(second):
+                return Preserved([head, *args])
+            return self._sum_points_over_matches(head, team, second, won=True)
         if self._has_unresolved(args):
             return Preserved([head, *args])
-        if len(args) == 1:
-            return args[0].points_won()
-        team, match = args
-        return team.points_won(match)
+        if not isinstance(second, Match):
+            raise DSLValidationError(
+                f"Argument 2 of (points-won ...) must be MATCH or LIST, got {_human_type_name(_infer_types(second))}"
+            )
+        return team.points_won(second)
 
     def _evaluate_points_lost(self, head, args):
-        """Evaluate (points-lost TEAM MATCH?) expression."""
+        """Evaluate (points-lost TEAM) / (points-lost TEAM MATCH|MATCHLIST)."""
+        if self._has_unresolved(args[:1]):
+            return Preserved([head, *args])
+        team = args[0]
+        if len(args) == 1:
+            return team.points_lost()
+        second = args[1]
+        if isinstance(second, list) or self._is_preserved_expression(second):
+            if self._is_preserved_expression(second):
+                return Preserved([head, *args])
+            return self._sum_points_over_matches(head, team, second, won=False)
         if self._has_unresolved(args):
             return Preserved([head, *args])
-        if len(args) == 1:
-            return args[0].points_lost()
+        if not isinstance(second, Match):
+            raise DSLValidationError(
+                f"Argument 2 of (points-lost ...) must be MATCH or LIST, got {_human_type_name(_infer_types(second))}"
+            )
+        return team.points_lost(second)
+
+    def _evaluate_won(self, head, args):
+        """Evaluate (won? TEAM MATCH) -> BOOL."""
+        if self._has_unresolved(args):
+            return Preserved([head, *args])
         team, match = args
-        return team.points_lost(match)
+        outcome = match.winner()
+        eq = self._definite_equal(outcome, team)
+        if eq is None:
+            return Preserved([head, team, match])
+        return eq
 
     def _evaluate_is_skipped(self, head, args):
         """Evaluate (is-skipped MATCH) expression.
@@ -1168,6 +1431,30 @@ class Simplifier:
             return False
         # NOT_STARTED, TIME_FINALIZED, READY_TO_START: stay symbolic
         return Preserved([head, match])
+
+    def _evaluate_list(self, head, args):
+        """Evaluate (list *ARGS) -> LIST."""
+        if self._has_unresolved(args):
+            return Preserved([head, *args])
+        return List(args)
+
+    def _evaluate_cons(self, head, args):
+        """Evaluate (cons X LIST) -> LIST (prepend)."""
+        x, lst = args
+        if self._is_preserved_expression(lst) or self._has_unresolved([x]):
+            return Preserved([head, *args])
+        if not isinstance(lst, list):
+            raise DSLValidationError("cons expects a list as second argument")
+        return List([x, *lst])
+
+    def _evaluate_append(self, head, args):
+        """Evaluate (append LIST1 LIST2) -> LIST."""
+        a, b = args
+        if self._is_preserved_expression(a) or self._is_preserved_expression(b):
+            return Preserved([head, *args])
+        if not isinstance(a, list) or not isinstance(b, list):
+            raise DSLValidationError("append expects two lists")
+        return List([*a, *b])
 
     def _evaluate_car(self, head, args):
         """Evaluate (car LIST) expression."""
@@ -1213,6 +1500,37 @@ class Simplifier:
             return Preserved([head, lst])
         return len(lst)
 
+    def _evaluate_empty(self, head, args):
+        """Evaluate (empty? LIST) -> BOOL."""
+        lst = args[0]
+        if self._is_preserved_expression(lst):
+            return Preserved([head, lst])
+        return len(lst) == 0
+
+    def _evaluate_member(self, head, args):
+        """Evaluate (member? X LIST) -> BOOL.
+
+        True if any element definitely equals X; Preserved if no hit but some
+        comparison was symbolic; False if all concrete misses.
+        """
+        x, lst = args
+        if self._is_preserved_expression(lst):
+            return Preserved([head, *args])
+        if not isinstance(lst, list):
+            raise DSLValidationError("member? expects a list as second argument")
+        saw_symbolic = False
+        if self._has_unresolved([x]):
+            saw_symbolic = True
+        for e in lst:
+            eq = self._definite_equal(x, e)
+            if eq is True:
+                return True
+            if eq is None:
+                saw_symbolic = True
+        if saw_symbolic:
+            return Preserved([head, *args])
+        return False
+
     def _evaluate_max(self, head, args):
         """Evaluate (max LIST) expression."""
         lst = args[0]
@@ -1245,17 +1563,98 @@ class Simplifier:
             result.append(self._call_lambda(func, [item]))
         return result
 
-    def _evaluate_reduce(self, head, args):
-        """Evaluate (reduce LIST FUNC) expression."""
+    def _evaluate_map_indexed(self, head, args):
+        """Evaluate (map-indexed LIST FUNC) where FUNC is (lambda (i x) ...)."""
         lst, func = args
         if self._is_preserved_expression(lst):
             return Preserved([head, lst, func])
-        if not lst:
-            raise DSLValidationError("Cannot reduce empty list")
-        accumulator = lst[0]
-        for item in lst[1:]:
+        result = List()
+        for i, item in enumerate(lst):
+            result.append(self._call_lambda(func, [i, item]))
+        return result
+
+    def _evaluate_filter(self, head, args):
+        """Evaluate (filter LIST PREDFN) -> LIST."""
+        lst, func = args
+        if self._is_preserved_expression(lst):
+            return Preserved([head, lst, func])
+        result = List()
+        for item in lst:
+            pred = self._call_lambda(func, [item])
+            if self._is_preserved_expression(pred) or self._has_unresolved([pred]):
+                return Preserved([head, lst, func])
+            if not isinstance(pred, bool):
+                raise DSLValidationError("filter predicate must return a boolean")
+            if pred:
+                result.append(item)
+        return result
+
+    def _evaluate_reduce(self, head, args):
+        """Evaluate (reduce LIST FUNC) or (reduce LIST INIT FUNC)."""
+        if len(args) == 2:
+            lst, func = args
+            init = None
+            has_init = False
+        else:
+            lst, init, func = args
+            has_init = True
+
+        if self._is_preserved_expression(lst):
+            return Preserved([head, *args])
+        if has_init and self._has_unresolved([init]):
+            return Preserved([head, *args])
+
+        if has_init:
+            accumulator = init
+            items = lst
+        else:
+            if not lst:
+                raise DSLValidationError("Cannot reduce empty list")
+            accumulator = lst[0]
+            items = lst[1:]
+
+        for item in items:
             accumulator = self._call_lambda(func, [accumulator, item])
         return accumulator
+
+    def _evaluate_sort_by(self, head, args):
+        """Evaluate (sort-by LIST *KEYFNS) — multi-key descending, stable."""
+        lst = args[0]
+        keyfns = args[1:]
+        if self._is_preserved_expression(lst):
+            return Preserved([head, *args])
+        for item in lst:
+            if isinstance(item, (SymbolicTeam, SymbolicMatch)):
+                return Preserved([head, *args])
+
+        decorated = []
+        for i, item in enumerate(lst):
+            keys = []
+            for kf in keyfns:
+                val = self._call_lambda(kf, [item])
+                if self._is_preserved_expression(val) or self._has_unresolved([val]):
+                    return Preserved([head, *args])
+                if not isinstance(val, int) or isinstance(val, bool):
+                    raise DSLValidationError("sort-by key function must return an integer")
+                keys.append(val)
+            # higher keys first; lower original index among ties (stable)
+            decorated.append((keys, i, item))
+
+        decorated.sort(key=lambda row: ([-k for k in row[0]], row[1]))
+        return List(row[2] for row in decorated)
+
+    def _evaluate_range(self, head, args):
+        """Evaluate (range N) -> (0 1 ... N-1)."""
+        if self._has_unresolved(args):
+            return Preserved([head, *args])
+        (n,) = args
+        if not isinstance(n, int) or isinstance(n, bool):
+            raise DSLValidationError("range expects an integer")
+        if n > RANGE_MAX:
+            raise DSLValidationError(f"range too large (max {RANGE_MAX})")
+        if n <= 0:
+            return List()
+        return List(range(n))
 
     def _evaluate_max_by(self, head, args):
         """Evaluate (max-by LIST FUNC) expression."""
@@ -1392,13 +1791,16 @@ def _check_references(text: str, event: str) -> list[str]:
     return warnings
 
 
-def get_parser(event: str, match_resolver=None):
+def get_parser(event: str, match_resolver=None, env=None):
     """
     Create a parser for the given event (tournament URL).
 
     If match_resolver is provided, it is used to resolve match names when
     parsing (e.g. for skip_condition). It should be a callable(name) -> Match
     or SymbolicMatch. This avoids DB reads when matches are already in memory.
+
+    ``env`` is an optional dict of pre-bound identifiers (e.g. future
+    per-tournament globals like ``teamlist`` / ``matchlist``).
     """
     import os
 
@@ -1407,6 +1809,7 @@ def get_parser(event: str, match_resolver=None):
         parser = Lark(g, parser="lalr")
 
         parse_match = match_resolver if match_resolver is not None else (lambda x: parse_match_literal(x, event))
+        base_env = dict(env) if env is not None else {}
 
         def parse(text):
             # Cheap structural check first — gives clean position-aware errors before Lark tries.
@@ -1434,6 +1837,7 @@ def get_parser(event: str, match_resolver=None):
             interpreter = Simplifier(
                 lambda x: parse_team_literal(x, event),
                 parse_match,
+                env=dict(base_env),
             )
             return interpreter.visit(tree)
 

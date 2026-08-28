@@ -1172,7 +1172,7 @@ pub async fn decline_invitation(tournament_url: &str, invitation_id: u32) -> Res
     Ok(())
 }
 
-pub async fn tournament_bracket(tournament_url: &str) -> Result<BracketResponse, String> {
+pub async fn tournament_bracket(tournament_url: &str) -> Result<BracketLayoutResponse, String> {
     let c = client();
     let r = with_credentials(c.get(format!(
         "{}/_api/tournaments/{}/bracket",
@@ -1182,6 +1182,319 @@ pub async fn tournament_bracket(tournament_url: &str) -> Result<BracketResponse,
     .send()
     .await
     .map_err(|e| e.to_string())?;
+    if r.status().as_u16() == 403 {
+        return Err("Bracket is not available".to_string());
+    }
+    if r.status().as_u16() == 404 {
+        return Err("Not found".to_string());
+    }
+    response_json(r).await
+}
+
+/// Playable matches (+ TO pickers) for the bracket diagram.
+pub async fn tournament_bracket_matches(
+    tournament_url: &str,
+) -> Result<BracketMatchesResponse, String> {
+    let c = client();
+    let r = with_credentials(c.get(format!(
+        "{}/_api/tournaments/{}/bracket-matches",
+        base(),
+        tournament_url
+    )))
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    if r.status().as_u16() == 403 {
+        return Err("Bracket is not available".to_string());
+    }
+    if r.status().as_u16() == 404 {
+        return Err("Not found".to_string());
+    }
+    response_json(r).await
+}
+
+/// Delete one legacy image-bracket by index (TO only). Returns updated bracket payload.
+pub async fn delete_legacy_bracket(
+    tournament_url: &str,
+    index: usize,
+) -> Result<BracketLayoutResponse, String> {
+    let c = client();
+    let r = with_credentials(c.delete(format!(
+        "{}/_api/tournaments/{}/legacy-brackets/{}",
+        base(),
+        tournament_url,
+        index
+    )))
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    if !r.status().is_success() {
+        let msg = r
+            .text()
+            .await
+            .unwrap_or_else(|_| "Failed to delete legacy bracket".to_string());
+        return Err(msg);
+    }
+    response_json(r).await
+}
+
+/// Delete all legacy image-brackets for a tournament (TO only).
+pub async fn clear_legacy_brackets(tournament_url: &str) -> Result<BracketLayoutResponse, String> {
+    let c = client();
+    let r = with_credentials(c.delete(format!(
+        "{}/_api/tournaments/{}/legacy-brackets",
+        base(),
+        tournament_url
+    )))
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    if !r.status().is_success() {
+        let msg = r
+            .text()
+            .await
+            .unwrap_or_else(|_| "Failed to clear legacy brackets".to_string());
+        return Err(msg);
+    }
+    response_json(r).await
+}
+
+/// Set whether the bracket is visible to non-TOs (TO only).
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct SetBracketPublishedResponse {
+    pub success: bool,
+    pub bracket_published: bool,
+}
+
+pub async fn set_bracket_published(
+    tournament_url: &str,
+    published: bool,
+) -> Result<SetBracketPublishedResponse, String> {
+    let c = client();
+    let body = serde_json::json!({ "published": published });
+    let r = with_credentials(
+        c.put(format!(
+            "{}/_api/tournaments/{}/bracket-published",
+            base(),
+            tournament_url
+        ))
+        .json(&body),
+    )
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    if !r.status().is_success() {
+        let msg = r
+            .text()
+            .await
+            .unwrap_or_else(|_| "Failed to update bracket published state".to_string());
+        return Err(msg);
+    }
+    response_json(r).await
+}
+
+
+/// Persist bracket canvas state (match placements + annotations) for a tournament (TO only).
+pub async fn save_bracket_placements(
+    tournament_url: &str,
+    placements: &[serde_json::Value],
+    texts: &[serde_json::Value],
+    labeled_teams: &[serde_json::Value],
+    images: &[serde_json::Value],
+    clear_missing: bool,
+) -> Result<BracketLayoutResponse, String> {
+    let c = client();
+    let body = serde_json::json!({
+        "placements": placements,
+        "texts": texts,
+        "labeled_teams": labeled_teams,
+        "images": images,
+        "clear_missing": clear_missing,
+    });
+    let r = with_credentials(c.put(format!(
+        "{}/_api/tournaments/{}/bracket-placements",
+        base(),
+        tournament_url
+    )))
+    .json(&body)
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    if !r.status().is_success() {
+        let msg = r
+            .text()
+            .await
+            .unwrap_or_else(|_| "Failed to save bracket placements".to_string());
+        return Err(msg);
+    }
+    response_json(r).await
+}
+
+pub async fn add_bracket_text(
+    tournament_url: &str,
+    x_pos: f64,
+    y_pos: f64,
+) -> Result<BracketLayoutResponse, String> {
+    let c = client();
+    let body = serde_json::json!({ "text": "Text", "x_pos": x_pos, "y_pos": y_pos, "size": 18.0 });
+    let r = with_credentials(c.post(format!(
+        "{}/_api/tournaments/{}/bracket-elements/text",
+        base(),
+        tournament_url
+    )))
+    .json(&body)
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    if !r.status().is_success() {
+        return Err(r.text().await.unwrap_or_else(|_| "Failed to add text".into()));
+    }
+    response_json(r).await
+}
+
+pub async fn add_bracket_labeled_team(
+    tournament_url: &str,
+    x_pos: f64,
+    y_pos: f64,
+) -> Result<BracketLayoutResponse, String> {
+    let c = client();
+    let body = serde_json::json!({
+        "label": "Label",
+        "team": "",
+        "kind": "LABEL",
+        "x_pos": x_pos,
+        "y_pos": y_pos
+    });
+    let r = with_credentials(c.post(format!(
+        "{}/_api/tournaments/{}/bracket-elements/labeled-team",
+        base(),
+        tournament_url
+    )))
+    .json(&body)
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    if !r.status().is_success() {
+        return Err(r.text().await.unwrap_or_else(|_| "Failed to add team label".into()));
+    }
+    response_json(r).await
+}
+
+pub async fn add_bracket_image_element(
+    tournament_url: &str,
+    image_path: &str,
+    x_pos: f64,
+    y_pos: f64,
+    width: f64,
+    height: f64,
+) -> Result<BracketLayoutResponse, String> {
+    let c = client();
+    let body = serde_json::json!({
+        "image": image_path,
+        "x_pos": x_pos,
+        "y_pos": y_pos,
+        "width": width,
+        "height": height,
+    });
+    let r = with_credentials(c.post(format!(
+        "{}/_api/tournaments/{}/bracket-elements/image",
+        base(),
+        tournament_url
+    )))
+    .json(&body)
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    if !r.status().is_success() {
+        return Err(r.text().await.unwrap_or_else(|_| "Failed to add image".into()));
+    }
+    response_json(r).await
+}
+
+pub async fn convert_labeled_team_port(
+    tournament_url: &str,
+    element_id: &str,
+    mode: &str,
+) -> Result<BracketLayoutResponse, String> {
+    let c = client();
+    let body = serde_json::json!({ "mode": mode });
+    let r = with_credentials(c.post(format!(
+        "{}/_api/tournaments/{}/bracket-elements/labeled-team/{}/convert",
+        base(),
+        tournament_url,
+        element_id
+    )))
+    .json(&body)
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    if !r.status().is_success() {
+        return Err(r.text().await.unwrap_or_else(|_| "Failed to convert port".into()));
+    }
+    response_json(r).await
+}
+
+/// Place a single match on the bracket canvas (TO only).
+pub async fn add_bracket_placement(
+    tournament_url: &str,
+    match_uuid: &str,
+    x_pos: f64,
+    y_pos: f64,
+) -> Result<BracketLayoutResponse, String> {
+    let c = client();
+    let body = serde_json::json!({
+        "match": match_uuid,
+        "x_pos": x_pos,
+        "y_pos": y_pos,
+    });
+    let r = with_credentials(c.post(format!(
+        "{}/_api/tournaments/{}/bracket-placements/add",
+        base(),
+        tournament_url
+    )))
+    .json(&body)
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    if !r.status().is_success() {
+        let msg = r
+            .text()
+            .await
+            .unwrap_or_else(|_| "Failed to add match to bracket".to_string());
+        return Err(msg);
+    }
+    response_json(r).await
+}
+
+/// Toggle a bracket input between LABEL and NET (TO only).
+pub async fn convert_bracket_port(
+    tournament_url: &str,
+    match_uuid: &str,
+    side: &str,
+    mode: &str,
+) -> Result<BracketLayoutResponse, String> {
+    let c = client();
+    let body = serde_json::json!({
+        "match": match_uuid,
+        "side": side,
+        "mode": mode,
+    });
+    let r = with_credentials(c.post(format!(
+        "{}/_api/tournaments/{}/bracket-placements/convert-port",
+        base(),
+        tournament_url
+    )))
+    .json(&body)
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    if !r.status().is_success() {
+        let msg = r
+            .text()
+            .await
+            .unwrap_or_else(|_| "Failed to convert bracket port".to_string());
+        return Err(msg);
+    }
     response_json(r).await
 }
 
@@ -1349,18 +1662,6 @@ pub async fn server_time() -> Result<ServerTimeResponse, String> {
     response_json(r).await
 }
 
-pub async fn bracket_setup_data(url: &str) -> Result<BracketSetupResponse, String> {
-    let c = client();
-    let r = with_credentials(c.get(format!(
-        "{}/_api/tournaments/{}/bracket-setup-data",
-        base(),
-        url
-    )))
-    .send()
-    .await
-    .map_err(|e| e.to_string())?;
-    response_json(r).await
-}
 
 pub async fn scoreboard_state(
     tournament_url: &str,
@@ -1768,34 +2069,6 @@ pub async fn update_stones(
     Ok(data)
 }
 
-pub async fn save_bracket_setup(
-    tournament_url: &str,
-    brackets: &[crate::types::BracketConfig],
-) -> Result<(), String> {
-    let c = client();
-    let body = serde_json::json!({ "brackets": brackets });
-    let r = with_credentials(
-        c.post(format!(
-            "{}/_api/tournaments/{}/bracket-setup",
-            base(),
-            tournament_url
-        ))
-        .json(&body),
-    )
-    .send()
-    .await
-    .map_err(|e| e.to_string())?;
-    let v: serde_json::Value = response_json(r).await?;
-    if v.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
-        Ok(())
-    } else {
-        Err(v
-            .get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Failed to save bracket configuration")
-            .to_string())
-    }
-}
 
 /// Upload a single bracket image as raw bytes and return its relative static path.
 #[cfg(target_arch = "wasm32")]

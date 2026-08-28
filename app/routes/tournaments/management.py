@@ -289,6 +289,11 @@ def delete_tournament(tournament_url):
 
     SideComp.query.filter_by(event=tournament_url).delete(synchronize_session=False)
 
+    from app.services.bracket_cleanup_service import cleanup_tournament_bracket_assets
+
+    # Remove uploaded canvas/legacy bracket images from disk before rows go away.
+    cleanup_tournament_bracket_assets(tournament_url)
+
     match_uuids = [m.uuid for m in Match.query.filter_by(event=tournament_url).all()]
     delete_matches_with_children(match_uuids)
     # PenaltyType after MatchNote (notes reference penalty_type_id)
@@ -301,6 +306,12 @@ def delete_tournament(tournament_url):
     Field.query.filter_by(event=tournament_url).delete(synchronize_session=False)
     Tag.query.filter_by(event=tournament_url).delete(synchronize_session=False)
     TO.query.filter_by(event=tournament_url).delete(synchronize_session=False)
+    # Bracket canvas rows (placements already removed with matches).
+    from models import BracketImage, BracketLabeledTeam, BracketText
+
+    BracketText.query.filter_by(event=tournament_url).delete(synchronize_session=False)
+    BracketLabeledTeam.query.filter_by(event=tournament_url).delete(synchronize_session=False)
+    BracketImage.query.filter_by(event=tournament_url).delete(synchronize_session=False)
     rc_id = tournament.registrable_config_id if not tournament.league_id else None
     db.session.delete(tournament)
     if rc_id:
@@ -540,6 +551,10 @@ def delete_tag(tournament_url):
         return jsonify({"success": False, "error": "Tag ID is required"}), 400
 
     tag = Tag.query.get_or_404(tag_id)
+    from app.services.bracket_cleanup_service import scrub_deleted_tags
+
+    if tag.event:
+        scrub_deleted_tags(tag.event, [tag.name])
     db.session.delete(tag)
     db.session.commit()
     return jsonify({"success": True, "message": "Tag deleted successfully!"}), 200

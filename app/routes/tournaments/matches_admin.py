@@ -649,6 +649,10 @@ def delete_tag_api(tournament_url, tag_id):
             ),
             400,
         )
+    # Scrub any bracket/diagram soft refs (not covered by schedule usage check).
+    from app.services.bracket_cleanup_service import scrub_deleted_tags
+
+    scrub_deleted_tags(tournament_url, [tag.name])
     db.session.delete(tag)
     db.session.commit()
     return jsonify({"success": True})
