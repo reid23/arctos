@@ -8,8 +8,9 @@
 //! * a best-of-N, RTT-weighted probe loop that coasts when confident,
 //! * two persisted manual corrections — a **clock offset** (shifts this
 //!   device's whole notion of server time, affecting playback *and* the live
-//!   stone counters) and an **audio delay** (shifts only when sound leaves the
-//!   speaker), shared across tabs via `localStorage`,
+//!   stone counters) and an **audio offset** (signed timing correction that
+//!   shifts only when sound is scheduled: positive plays later, negative
+//!   earlier), shared across tabs via `localStorage`,
 //! * a corrected `server_now()` and a `quality()` readout for the UI and the
 //!   run-match staleness gate.
 //!
@@ -101,8 +102,9 @@ impl Calibration {
         raw_now_secs + (estimated_offset_ms + self.clock_offset_ms) / 1000.0
     }
 
-    /// Manual audio output delay in seconds (playback scheduling only; does
-    /// not affect `server_now_secs`).
+    /// Manual audio offset in seconds (playback scheduling only; does not
+    /// affect `server_now_secs`). Positive schedules later; negative earlier
+    /// (`audio_time = … + audio_delay_secs()`).
     pub fn audio_delay_secs(&self) -> f64 {
         self.audio_delay_ms / 1000.0
     }
@@ -150,7 +152,9 @@ impl TimeSync {
             .server_now_secs(raw, self.filter.read().get_mean_ms())
     }
 
-    /// Manual audio output delay in seconds (playback scheduling only).
+    /// Manual audio offset in seconds (playback scheduling only). Positive
+    /// schedules later; negative earlier — callers add this to the scheduled
+    /// audio time.
     pub fn audio_delay_secs(&self) -> f64 {
         self.calibration.read().audio_delay_secs()
     }
@@ -244,8 +248,11 @@ pub fn use_time_sync() -> TimeSync {
         });
 
         let calibration = calibration;
-        use_effect(move || {
-            install_storage_listener(calibration);
+        // Keep the listener in hook state so Drop removes it on unmount
+        // (avoids leaking a forgotten Closure + stale Signal per remount).
+        // Rc because use_hook's State must be Clone; the guard itself is not.
+        let _storage_listener = use_hook(|| {
+            std::rc::Rc::new(std::cell::RefCell::new(install_storage_listener(calibration)))
         });
     }
 
@@ -319,15 +326,14 @@ fn write_calibration(cal: &Calibration) {
 }
 
 /// Reload the calibration signal whenever another tab writes one of our
-/// calibration keys (cross-tab consistency).
+/// calibration keys (cross-tab consistency). Returns a guard that removes the
+/// listener when dropped — store it in hook state so remounts don't leak.
 #[cfg(target_arch = "wasm32")]
-fn install_storage_listener(mut calibration: Signal<Calibration>) {
+fn install_storage_listener(mut calibration: Signal<Calibration>) -> Option<StorageListenerGuard> {
     use wasm_bindgen::closure::Closure;
     use wasm_bindgen::JsCast;
 
-    let Some(window) = web_sys::window() else {
-        return;
-    };
+    let window = web_sys::window()?;
     let closure = Closure::wrap(Box::new(move |event: web_sys::StorageEvent| {
         let key = event.key();
         let touches_calibration = match key.as_deref() {
@@ -338,8 +344,29 @@ fn install_storage_listener(mut calibration: Signal<Calibration>) {
             calibration.set(load_calibration());
         }
     }) as Box<dyn FnMut(web_sys::StorageEvent)>);
-    let _ = window.add_event_listener_with_callback("storage", closure.as_ref().unchecked_ref());
-    closure.forget();
+    window
+        .add_event_listener_with_callback("storage", closure.as_ref().unchecked_ref())
+        .ok()?;
+    Some(StorageListenerGuard { closure })
+}
+
+/// Owns the `storage` event Closure and removes it on Drop.
+#[cfg(target_arch = "wasm32")]
+struct StorageListenerGuard {
+    closure: wasm_bindgen::closure::Closure<dyn FnMut(web_sys::StorageEvent)>,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Drop for StorageListenerGuard {
+    fn drop(&mut self) {
+        use wasm_bindgen::JsCast;
+        if let Some(window) = web_sys::window() {
+            let _ = window.remove_event_listener_with_callback(
+                "storage",
+                self.closure.as_ref().unchecked_ref(),
+            );
+        }
+    }
 }
 
 #[cfg(test)]

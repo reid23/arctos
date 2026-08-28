@@ -130,6 +130,7 @@ fn StonesPlayerWasm(stones_val: ReadSignal<Option<Result<StonesResponse, String>
                         }
                         let delay = next_server_beat - server_now;
                         if delay > 0.05 && delay < 60.0 {
+                            // Signed audio offset: positive schedules later, negative earlier.
                             let audio_time = audio_now + delay + audio_delay;
                             if schedule_sound_at(
                                 ctx.clone(),
@@ -307,6 +308,8 @@ fn StonesPlayerWasm(stones_val: ReadSignal<Option<Result<StonesResponse, String>
     };
     let clock_offset_val = format!("{:.0}", calibration.clock_offset_ms);
     let audio_delay_val = format!("{:.0}", calibration.audio_delay_ms);
+    // Mirrored so the range track matches endpoint labels (left=later, right=earlier).
+    let audio_slider_val = format!("{:.0}", -calibration.audio_delay_ms);
 
     #[cfg(target_arch = "wasm32")]
     fn ensure_media_destination(
@@ -575,7 +578,7 @@ fn StonesPlayerWasm(stones_val: ReadSignal<Option<Result<StonesResponse, String>
                     div { class: "modal-content",
                         div { class: "modal-header",
                             h5 { class: "modal-title",
-                                if calibration_step() == 1 { "Calibrate — Step 1 of 2: Audio delay" }
+                                if calibration_step() == 1 { "Calibrate — Step 1 of 2: Audio offset" }
                                 else { "Calibrate — Step 2 of 2: Clock offset" }
                             }
                             button { r#type: "button", class: "btn-close", onclick: on_calibration_cancel }
@@ -606,24 +609,32 @@ fn StonesPlayerWasm(stones_val: ReadSignal<Option<Result<StonesResponse, String>
                                     }
                                 }
                                 label { class: "form-label d-flex justify-content-between",
-                                    span { "Audio delay" }
+                                    span { "Audio offset" }
                                     strong { class: "ms-2", "{audio_delay_val} ms" }
                                 }
+                                // Slider is mirrored vs stored ms so left = later, right = earlier.
                                 input {
                                     r#type: "range",
                                     class: "form-range",
                                     min: "-750",
                                     max: "750",
                                     step: "10",
-                                    value: "{audio_delay_val}",
+                                    value: "{audio_slider_val}",
                                     onmounted: move |evt: Event<MountedData>| {
-                                        set_input_value_on_mount(&evt.data(), time_sync.calibration().audio_delay_ms);
+                                        set_input_value_on_mount(
+                                            &evt.data(),
+                                            -time_sync.calibration().audio_delay_ms,
+                                        );
                                     },
                                     oninput: move |evt| {
                                         if let Ok(v) = evt.value().parse::<f64>() {
-                                            time_sync.set_audio_delay_ms(v);
+                                            time_sync.set_audio_delay_ms(-v);
                                         }
                                     },
+                                }
+                                div { class: "d-flex justify-content-between form-text",
+                                    span { "play later" }
+                                    span { "play earlier" }
                                 }
                             } else {
                                 if step2_syncing() {

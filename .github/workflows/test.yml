@@ -35,3 +35,14 @@ jobs:
 
       - name: Run format checker
         run: uv run ruff format --check .
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache frontend Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: frontend
+
+      - name: Run frontend unit tests
+        run: just frontend-test

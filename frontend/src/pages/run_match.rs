@@ -475,9 +475,9 @@ fn team_short_label(shortname: Option<&str>, name: &str) -> String {
     }
 }
 
-/// Corrected-server-time millis for the moment a point starts, so its anchor
-/// lands on the same grid the stone counter uses.
-fn point_start_server_millis(time_sync: &crate::time_sync::TimeSync) -> u64 {
+/// Corrected-server-time millis "now", so point start/end stamps land on the
+/// same grid the stone counter uses (device/manual clock offsets included).
+fn server_now_millis(time_sync: &crate::time_sync::TimeSync) -> u64 {
     (time_sync.server_now_secs() * 1000.0).round() as u64
 }
 
@@ -902,7 +902,9 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                     let stones_val = stones_remaining();
                     if let Some(point_id) = point_opt {
                         // End current point — defer optimistic update and API to next tick to avoid RefCell re-entrancy in Dioxus.
-                        let end_iso = chrono::Utc::now().to_rfc3339();
+                        // Use the same corrected clock as point start so duration/stone count
+                        // stay consistent under device or manual clock offset.
+                        let end_iso = server_millis_to_rfc3339(server_now_millis(&time_sync));
                         let prev = state_signal().clone();
                         let point_id = point_id.clone();
                         let id_for_stones = id.clone();
@@ -967,7 +969,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                         // Start new point — optimistic: add pending point, set current_point.
                         // Anchor the point to corrected server time so it lands on the same
                         // 1.5s grid the stone counter measures against.
-                        let point_start_ms = point_start_server_millis(&time_sync);
+                        let point_start_ms = server_now_millis(&time_sync);
                         let pending_id = format!("pending-{}", point_start_ms);
                         let stamp_iso = server_millis_to_rfc3339(point_start_ms);
                         let new_point = serde_json::json!({
@@ -1062,7 +1064,8 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                     let default_set = default_set;
                     let stones_val = stones_remaining();
                     if let Some(point_id) = point_opt {
-                        let end_iso = chrono::Utc::now().to_rfc3339();
+                        // Same corrected clock as point start (see desktop handler above).
+                        let end_iso = server_millis_to_rfc3339(server_now_millis(&time_sync));
                         let prev = state_signal().clone();
                         let point_id = point_id.clone();
                         let id_for_stones = id.clone();
@@ -1124,7 +1127,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                             }
                         });
                     } else {
-                        let point_start_ms = point_start_server_millis(&time_sync);
+                        let point_start_ms = server_now_millis(&time_sync);
                         let pending_id = format!("pending-{}", point_start_ms);
                         let stamp_iso = server_millis_to_rfc3339(point_start_ms);
                         let new_point = serde_json::json!({
