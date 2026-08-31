@@ -8,6 +8,7 @@ conversion and with ``app.utils.toml_helpers`` for the parse / write.
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -27,28 +28,80 @@ if TYPE_CHECKING:  # pragma: no cover
     pass
 
 
-def _is_explicit_team_id(token: str) -> bool:
-    """Return ``True`` if *token* is a direct team ID rather than a reference.
+# TEAM atoms in the ASS grammar are "[" /[^\]]+/ "]" (see app/utils/grammar.lark),
+# so a bracketed run without "]" inside is exactly one team literal.
+_ASS_TEAM_LITERAL_RE = re.compile(r"\[([^\]]+)\]")
 
-    Returns ``False`` for:
 
-    * ``tag::<name>`` — tag references
-    * Strings containing ``::winner`` or ``::loser`` — match references
+def _known_team_tokens(tournament) -> set[str]:
+    """Return the set of tokens that resolve to a registered team.
+
+    Mirrors the registration lookups used by
+    :mod:`app.utils.match_ref_resolution` (team ID or pseudonym of a
+    registration for this tournament / league scope). Non-cancelled
+    registrations count, matching the previous import-time check.
+    """
+    from app.services.registration_resolver import team_registrations_for_tournament
+
+    known: set[str] = set()
+    for reg in team_registrations_for_tournament(tournament, exclude_cancelled=True):
+        if reg.team:
+            known.add(reg.team)
+        if reg.pseudonym:
+            known.add(reg.pseudonym)
+    return known
+
+
+def rewrite_unknown_team_token(token: str, known_teams: set[str]) -> tuple[str, str | None]:
+    """Rewrite a team slot token to a ``tag::`` reference when the team is unknown.
+
+    Tokens that are empty, already symbolic (``tag::<name>``, or containing
+    ``::winner`` / ``::loser``), or that resolve to a registered team are
+    returned unchanged.
 
     Args:
-        token: A team slot string from the schedule.
+        token: A ``team1_initial`` / ``team2_initial`` / refs slot token.
+        known_teams: Team IDs and pseudonyms registered for the tournament.
 
     Returns:
-        ``True`` when *token* is an explicit team ID.
+        ``(new_token, warning)`` where *warning* is ``None`` when the token
+        was left unchanged.
     """
-    if not token or not str(token).strip():
-        return False
-    t = str(token).strip()
-    if t.lower().startswith("tag::"):
-        return False
-    if "::winner" in t.lower() or "::loser" in t.lower():
-        return False
-    return True
+    tok = (token or "").strip()
+    if not tok:
+        return tok, None
+    low = tok.lower()
+    if low.startswith("tag::") or "::winner" in low or "::loser" in low:
+        return tok, None
+    if tok in known_teams:
+        return tok, None
+    new_tok = f"tag::{tok}"
+    return new_tok, f"Team '{tok}' not found; imported as tag reference '{new_tok}'"
+
+
+def _rewrite_skip_condition(expression: str, known_teams: set[str]) -> tuple[str, list[str], list[str]]:
+    """Rewrite unknown team literals ``[Foo]`` in an ASS expression to ``[tag::Foo]``.
+
+    Literals containing ``::`` (match ``[X::winner]`` / ``[X::loser]`` refs and
+    ``[tag::X]`` refs) are left untouched, as are literals naming a registered
+    team. Works textually so expressions referencing not-yet-imported matches
+    stay valid.
+
+    Returns:
+        ``(new_expression, warnings, rewritten_tokens)``.
+    """
+    warnings: list[str] = []
+    rewritten: list[str] = []
+
+    def _repl(m: re.Match) -> str:
+        inner = m.group(1).strip()
+        if not inner or "::" in inner or inner in known_teams:
+            return m.group(0)
+        rewritten.append(inner)
+        warnings.append(f"Team '{inner}' not found; imported as tag reference 'tag::{inner}'")
+        return f"[tag::{inner}]"
+
+    return _ASS_TEAM_LITERAL_RE.sub(_repl, expression), warnings, rewritten
 
 
 def _create_match_from_dict(match_dict: dict) -> "Match":
@@ -69,6 +122,11 @@ def _create_match_from_dict(match_dict: dict) -> "Match":
         k: v for k, v in match_dict.items() if k not in ("previous_match", "next_match", "refs", "refs_initial")
     }
     match = Match(**create_dict)
+    # Keep plan + live anchors aligned when the TOML only carried one of them.
+    if match.scheduled_start_time is None and match.nominal_start_time is not None:
+        match.scheduled_start_time = match.nominal_start_time
+    if match.nominal_start_time is None and match.scheduled_start_time is not None:
+        match.nominal_start_time = match.scheduled_start_time
     if not match.status:
         if match.schedule_type == ScheduleType.STATIC:
             match.status = MatchStatus.READY_TO_START
@@ -97,6 +155,8 @@ class ImportResult:
         matches_updated: Number of existing match records updated.
         errors: List of human-readable error strings encountered during
             import.  Non-empty indicates a partial or failed import.
+        warnings: List of human-readable, non-fatal warnings (e.g. unknown
+            team references rewritten to ``tag::`` references).
     """
 
     tags_created: int = 0
@@ -106,11 +166,14 @@ class ImportResult:
     matches_created: int = 0
     matches_updated: int = 0
     errors: list[str] = None
+    warnings: list[str] = None
 
     def __post_init__(self) -> None:
-        """Initialise the mutable *errors* list on a frozen dataclass."""
+        """Initialise the mutable list fields on a frozen dataclass."""
         if self.errors is None:
             object.__setattr__(self, "errors", [])
+        if self.warnings is None:
+            object.__setattr__(self, "warnings", [])
 
 
 @dataclass(frozen=True)
@@ -126,6 +189,7 @@ class ScheduleImportExportService:
         tags_data: list[dict],
         fields_data: list[dict],
         matches_data: list[dict],
+        extra_tag_names: set[str] | None = None,
     ) -> list[str]:
         """
         Perform higher-level semantic validation on the uploaded schedule.
@@ -147,7 +211,7 @@ class ScheduleImportExportService:
             if name:
                 field_names.add(name)
 
-        tag_names: set[str] = set()
+        tag_names: set[str] = set(extra_tag_names or ())
         for t in tags_data:
             name = str(t.get("name", "")).strip()
             if name:
@@ -240,62 +304,84 @@ class ScheduleImportExportService:
         return errors
 
     @staticmethod
-    def _validate_teams_registered(
-        tournament_url: str,
+    def _rewrite_unknown_team_refs(
+        tournament,
         tags_data: list[dict],
         matches_data: list[dict],
-    ) -> list[str]:
-        """
-        Ensure every team referenced by ID (in tags or matches) is registered for the tournament.
-        Returns a list of error messages; empty if all referenced teams are registered.
-        """
-        from models import Tournament
-        from app.services.registration_resolver import team_registrations_for_tournament
+    ) -> tuple[list[dict], list[dict], list[str], set[str]]:
+        """Rewrite references to unknown teams into ``tag::`` references.
 
-        # Collect all team IDs referenced by ID (not tag:: or match::winner/loser)
-        team_ids: set[str] = set()
+        Applies :func:`rewrite_unknown_team_token` to ``team1_initial`` /
+        ``team2_initial`` / ``refs_initial`` slots and
+        :func:`_rewrite_skip_condition` to ``skip_condition`` expressions.
+        Tag rows assigning an unknown team ID are imported unassigned instead
+        of failing. Only the uploaded data is rewritten — existing DB rows are
+        never touched here.
 
+        Returns:
+            ``(tags_data, matches_data, warnings, auto_tag_names)`` where
+            *warnings* is deduplicated (one per rewritten token) and
+            *auto_tag_names* lists tag names that must exist for the rewritten
+            references to resolve (created idempotently during import).
+        """
+        known_teams = _known_team_tokens(tournament)
+
+        warnings: dict[str, str] = {}  # token -> warning (dedup, insertion-ordered)
+        auto_tag_names: set[str] = set()
+
+        new_tags: list[dict] = []
         for tag in tags_data:
             team_val = str(tag.get("team", "")).strip()
-            if team_val:
-                team_ids.add(team_val)
+            if team_val and team_val not in known_teams:
+                tag = {**tag, "team": ""}
+                tag_name = str(tag.get("name", "")).strip() or "<unnamed tag>"
+                warnings.setdefault(
+                    f"tag-team::{team_val}",
+                    f"Team '{team_val}' not found; tag '{tag_name}' imported unassigned",
+                )
+            new_tags.append(tag)
 
+        new_matches: list[dict] = []
         for m in matches_data:
+            m = dict(m)
+
             for field_name in ("team1_initial", "team2_initial"):
                 tok = str(m.get(field_name, "")).strip()
-                if tok and _is_explicit_team_id(tok):
-                    team_ids.add(tok)
+                if not tok:
+                    continue
+                new_tok, warning = rewrite_unknown_team_token(tok, known_teams)
+                if warning:
+                    m[field_name] = new_tok
+                    warnings.setdefault(tok, warning)
+                    auto_tag_names.add(tok)
+
             refs_raw = str(m.get("refs_initial", "")).strip()
             if refs_raw:
+                new_slots: list[str] = []
+                changed = False
                 for part in refs_raw.split(","):
                     tok = part.strip()
-                    if tok and _is_explicit_team_id(tok):
-                        team_ids.add(tok)
+                    new_tok, warning = rewrite_unknown_team_token(tok, known_teams)
+                    if warning:
+                        changed = True
+                        warnings.setdefault(tok, warning)
+                        auto_tag_names.add(tok)
+                    new_slots.append(new_tok)
+                if changed:
+                    m["refs_initial"] = ",".join(new_slots)
 
-        if not team_ids:
-            return []
+            skip_raw = str(m.get("skip_condition", "")).strip()
+            if skip_raw:
+                new_expr, skip_warnings, rewritten = _rewrite_skip_condition(skip_raw, known_teams)
+                if rewritten:
+                    m["skip_condition"] = new_expr
+                    for tok, warning in zip(rewritten, skip_warnings):
+                        warnings.setdefault(tok, warning)
+                        auto_tag_names.add(tok)
 
-        tournament = Tournament.query.filter_by(url=tournament_url).first()
-        if tournament is None:
-            return [f"Tournament '{tournament_url}' not found"]
+            new_matches.append(m)
 
-        registered_team_ids: set[str] = {
-            reg.team
-            for reg in team_registrations_for_tournament(
-                tournament,
-                exclude_cancelled=True,
-            )
-            if reg.team
-        }
-
-        unregistered = team_ids - registered_team_ids
-        if not unregistered:
-            return []
-
-        errors: list[str] = []
-        for tid in sorted(unregistered):
-            errors.append(f"Team '{tid}' is not registered for this tournament.")
-        return errors
+        return new_tags, new_matches, list(warnings.values()), auto_tag_names
 
     @staticmethod
     @allow_Q
@@ -336,7 +422,6 @@ class ScheduleImportExportService:
         }
 
         toml_content = write_toml_schedule(
-            event=tournament_url,
             tags=tag_dicts,
             fields=field_dicts,
             matches=match_dicts,
@@ -379,7 +464,18 @@ class ScheduleImportExportService:
 
         tournament = get_tournament_or_err(tournament_url).Q()
 
-        is_same_tournament = source_event == tournament_url
+        # `event` in the file is legacy/optional: when absent, treat the file as
+        # belonging to this tournament (exports no longer carry an event key).
+        is_same_tournament = source_event is None or source_event == tournament_url
+
+        # Rewrite references to unknown teams into tag:: references (with
+        # per-token warnings) before validation and the create/update path.
+        (
+            tags_data,
+            matches_data,
+            warnings,
+            auto_tag_names,
+        ) = ScheduleImportExportService._rewrite_unknown_team_refs(tournament, tags_data, matches_data)
 
         tags_created = 0
         tags_updated = 0
@@ -390,8 +486,10 @@ class ScheduleImportExportService:
         errors: list[str] = []
 
         # Perform all validation before making any database changes
-        # 1. High-level semantic validation
-        semantic_errors = ScheduleImportExportService._validate_semantics(tags_data, fields_data, matches_data)
+        # 1. High-level semantic validation (auto-created tag names count as known)
+        semantic_errors = ScheduleImportExportService._validate_semantics(
+            tags_data, fields_data, matches_data, extra_tag_names=auto_tag_names
+        )
         errors.extend(semantic_errors)
 
         # 2. Validate all tags
@@ -411,9 +509,6 @@ class ScheduleImportExportService:
             res = MatchScheduleSerializer.match_from_dict(match_data, tournament_url)
             if isinstance(res, Err):
                 errors.append(f"Match validation error: {res.value.message}")
-
-        # 5. Ensure all teams referenced by ID (tags and matches) are registered
-        errors.extend(ScheduleImportExportService._validate_teams_registered(tournament_url, tags_data, matches_data))
 
         # If any validation errors, abort before making any changes
         if errors:
@@ -476,6 +571,18 @@ class ScheduleImportExportService:
                     create_dict = {k: v for k, v in tag_dict.items() if k != "id"}
                     tag = Tag(**create_dict)
                     db.session.add(tag)
+                    tags_created += 1
+
+            # Auto-create unassigned tags backing rewritten unknown-team
+            # references. Idempotent: unique per (event, name), and re-imports
+            # of a rewritten file hit the tag:: fast path so no tag::tag::X.
+            for auto_name in sorted(auto_tag_names):
+                if auto_name in kept_tag_names:
+                    continue
+                kept_tag_names.add(auto_name)
+                existing_tag = Tag.query.filter_by(event=tournament_url, name=auto_name).first()
+                if existing_tag is None:
+                    db.session.add(Tag(event=tournament_url, name=auto_name))
                     tags_created += 1
 
             # Import fields
@@ -568,6 +675,12 @@ class ScheduleImportExportService:
                             ):
                                 setattr(match, key, value)
 
+                        # Align plan/live anchors when the file only carried one of them.
+                        if match.scheduled_start_time is None and match.nominal_start_time is not None:
+                            match.scheduled_start_time = match.nominal_start_time
+                        if match.nominal_start_time is None and match.scheduled_start_time is not None:
+                            match.nominal_start_time = match.scheduled_start_time
+
                         # If _initial fields changed, refresh the corresponding resolved values.
                         if team1_initial_changed:
                             match.team1 = resolve_team_column(new_team1_initial, tournament_url)
@@ -590,6 +703,13 @@ class ScheduleImportExportService:
                         kept_match_uuids.add(match.uuid)
                         matches_updated += 1
                     else:
+                        # UUID not in this tournament. If it exists elsewhere
+                        # (e.g. an event-less export from another tournament),
+                        # mint a fresh UUID instead of colliding on the PK.
+                        if Match.query.filter_by(uuid=match_dict["uuid"]).first() is not None:
+                            new_uuid = str(uuid.uuid4())
+                            match_uuid_map[match_dict["uuid"]] = new_uuid
+                            match_dict = {**match_dict, "uuid": new_uuid}
                         match = _create_match_from_dict(match_dict)
                         match_name_to_uuid[match_name] = match.uuid
                         match_field = match.field or ""
@@ -619,7 +739,8 @@ class ScheduleImportExportService:
                 # Find the match we just created/updated
                 # Use field to disambiguate if duplicates exist
                 if is_same_tournament and old_uuid:
-                    match = Match.query.filter_by(uuid=old_uuid, event=tournament_url).first()
+                    lookup_uuid = match_uuid_map.get(old_uuid, old_uuid)
+                    match = Match.query.filter_by(uuid=lookup_uuid, event=tournament_url).first()
                 else:
                     # Different tournament: use new UUID from map
                     if old_uuid and old_uuid in match_uuid_map:
@@ -708,6 +829,7 @@ class ScheduleImportExportService:
                 matches_created=matches_created,
                 matches_updated=matches_updated,
                 errors=errors,
+                warnings=warnings,
             )
 
             return Ok(result)
