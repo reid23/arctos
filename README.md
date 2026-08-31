@@ -48,8 +48,8 @@ their code.
   JSON, exclusively under the `/_api/` prefix. `/api/` (no underscore)
   is reserved for a future public API and is not used.
 - **Database.** A single SQLite file (`tournament.db`). WAL mode is
-  enabled so the finalize-recording worker and HTTP handlers can share
-  the file without blocking each other. Foreign keys are enforced via
+  enabled so background workers and HTTP handlers can share the file
+  without blocking each other. Foreign keys are enforced via
   `PRAGMA foreign_keys = ON` on every new connection - without that
   pragma SQLite ignores `FOREIGN KEY` declarations entirely.
 - **Schema migrations.** Managed by [Alembic]. See
@@ -163,20 +163,13 @@ just certfile= keyfile= run          # if you handle SSL elsewhere
 just env_file=.env.prod run          # use a different env file
 ```
 
-#### Video storage
+#### Video footage
 
-To store finalized match recordings in an s3 compatible bucket (I use
-Backblaze B2) instead of local disk, set these environment variables
-in your `run` script:
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `S3_VIDEO_BUCKET` | Yes | bucket name (create a private bucket in the B2 dashboard). |
-| `S3_ENDPOINT_URL` | Yes (for B2) | B2 S3-compatible endpoint, e.g. `https://s3.us-west-002.backblazeb2.com`. Use the endpoint for the region where you created the bucket. |
-| `AWS_REGION` | Yes (for B2) | Must match the endpoint region, e.g. `us-west-002` or `us-east-005`. |
-| `AWS_ACCESS_KEY_ID` | Yes | Application Key ID. Needs R/W access. |
-| `AWS_SECRET_ACCESS_KEY` | Yes | corresponding secret key |
-| `S3_PRESIGNED_EXPIRY_SECONDS` | No | Presigned URL lifetime in seconds (default `3600`). |
+Match footage is attached through the footage API (a YouTube link or an
+uploaded video file plus optional point-timestamp anchors). Uploaded
+files are published to YouTube via the upload account configured by the
+`YOUTUBE_UPLOAD_*` variables (see [`docs/env-vars.md`](docs/env-vars.md));
+the local copy is deleted once the upload completes.
 
 ### Frontend
 
@@ -275,8 +268,8 @@ business logic lives in services; persistence lives in models.
   user-facing reference at `docs/arctos-schedule-script.md`.
 - *I want to deploy* -> `docs/DEPLOY.md`.
 - *I want to add a database column* -> `migrations/README.md`.
-- *I want to understand video upload / finalisation* ->
-  `app/utils/footage.py`, `app/utils/s3_video.py`,
+- *I want to understand video footage upload* ->
+  `app/routes/tournaments/footage.py`, `app/utils/user_uploads.py`,
   `app/utils/youtube_upload.py`.
 
 ## Help

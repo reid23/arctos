@@ -10,7 +10,7 @@ Workflow logic lives in ``app.services.match_service`` / ``match_actions_service
 just parse the request and convert the resulting ``Result`` to JSON.
 """
 
-from flask import Blueprint, request, jsonify, render_template, make_response
+from flask import Blueprint, request, jsonify, render_template
 from flask_login import login_required, current_user
 from datetime import datetime, timezone
 import json
@@ -19,7 +19,6 @@ from models import (
     Tournament,
     Point,
     Player,
-    Field,
     PenaltyType,
     db,
 )
@@ -33,223 +32,6 @@ from app.utils.result_helpers import json_from_result
 from app.domain.enums import RegistrationStatus, MatchStatus, ScheduleType
 
 bp = Blueprint("matches", __name__, url_prefix="/_api")
-
-
-@bp.route("/scoreboard")
-def scoreboard():
-    """Scoreboard page for OBS overlay. Public endpoint."""
-    tournament_url = request.args.get("tournament")
-    field_name = request.args.get("field")
-
-    if not tournament_url or not field_name:
-        return (
-            render_template("scoreboard.html", error="Tournament and field parameters required"),
-            400,
-        )
-
-    # Find the active match on this field (only IN_PROGRESS)
-    match = Match.query.filter_by(event=tournament_url, field=field_name, status=MatchStatus.IN_PROGRESS).first()
-
-    # Get team information helper
-    from models import Team, Tournament
-
-    def get_team_info(m):
-        if not m:
-            return None, None, None, None, None, None
-        team1_obj = Team.query.get(m.team1) if m.team1 else None
-        team2_obj = Team.query.get(m.team2) if m.team2 else None
-
-        # Get team names - prefer initial (for dynamic teams), then registration pseudonym, then team name
-        # Handle empty strings and missing registration (e.g. dynamic/unregistered team)
-        from app.services.registration_resolver import team_registration_for_tournament
-
-        tournament_obj = Tournament.query.get(tournament_url)
-        reg1 = team_registration_for_tournament(tournament_obj, m.team1) if (tournament_obj and m.team1) else None
-        team1_name = (
-            (reg1.pseudonym if reg1 and reg1.pseudonym else (team1_obj.name if team1_obj else m.team1_initial))
-            if m.team1
-            else m.team1_initial
-        )
-        reg2 = team_registration_for_tournament(tournament_obj, m.team2) if (tournament_obj and m.team2) else None
-        team2_name = (
-            (reg2.pseudonym if reg2 and reg2.pseudonym else (team2_obj.name if team2_obj else m.team2_initial))
-            if m.team2
-            else m.team2_initial
-        )
-
-        # Only include photos if there's an actual team object with a photo (not dynamic teams)
-        team1_photo = team1_obj.profile_photo if (team1_obj and team1_obj.profile_photo and m.team1) else None
-        team2_photo = team2_obj.profile_photo if (team2_obj and team2_obj.profile_photo and m.team2) else None
-        team1_shortname = reg1.shortname if (reg1 and reg1.shortname) else None
-        team2_shortname = reg2.shortname if (reg2 and reg2.shortname) else None
-        return team1_name, team2_name, team1_photo, team2_photo, team1_shortname, team2_shortname
-
-    # If there's an active match, show it
-    if match:
-        team1_name, team2_name, team1_photo, team2_photo, team1_shortname, team2_shortname = get_team_info(match)
-
-        # Get points and calculate scores by set
-        points = Point.query.filter_by(match=match.uuid).order_by(Point.stamp).all()
-
-        # Calculate scores by set
-        sets = sorted(set(p.set_number for p in points if p.set_number))
-        scores_by_set = {}
-        for set_num in sets:
-            set_points = [p for p in points if p.set_number == set_num and not p.rerolled]
-            scores_by_set[set_num] = {
-                "team1_score": sum(1 for p in set_points if p.winner == "TEAM1"),
-                "team2_score": sum(1 for p in set_points if p.winner == "TEAM2"),
-            }
-
-        # For STONES matches, get stones info
-        stones_info = None
-        if match.set_type == "STONES":
-            stones_info = {
-                "stones_per_set": match.stones_per_set or 100,
-                "stones_remaining": match.stones_remaining,
-            }
-
-        response = make_response(
-            render_template(
-                "scoreboard.html",
-                match=match,
-                team1_name=team1_name,
-                team2_name=team2_name,
-                team1_photo=team1_photo,
-                team2_photo=team2_photo,
-                team1_shortname=team1_shortname,
-                team2_shortname=team2_shortname,
-                scores_by_set=scores_by_set,
-                sets=sets,
-                stones_info=stones_info,
-                tournament_url=tournament_url,
-                field_name=field_name,
-                show_between_matches=False,
-            )
-        )
-        # Cache the HTML page for 1 second (short cache since it updates frequently)
-        response.cache_control.max_age = 1
-        return response
-
-    # No active match - find previous and next matches
-    # Get all matches on this field, ordered by time
-    all_field_matches = (
-        Match.query.filter_by(event=tournament_url, field=field_name)
-        .order_by(Match.nominal_start_time.asc(), Match.completed_time.asc())
-        .all()
-    )
-
-    # Find most recent completed or skipped match (previous) - skip BREAK/JOIN matches
-    prev_match = None
-    for m in reversed(all_field_matches):
-        if (
-            m.status in (MatchStatus.COMPLETED, MatchStatus.SKIPPED)
-            and m.completed_time
-            and m.schedule_type not in (ScheduleType.BREAK, ScheduleType.JOIN)
-        ):
-            prev_match = m
-            break
-
-    # Find next match (not started or ready to start) - skip BREAK/JOIN matches
-    next_match = None
-    for m in all_field_matches:
-        if m.schedule_type not in (ScheduleType.BREAK, ScheduleType.JOIN) and (
-            m.status in (MatchStatus.NOT_STARTED, MatchStatus.IN_PROGRESS)
-            or (m.status in (MatchStatus.COMPLETED, MatchStatus.SKIPPED) and not m.completed_time)
-        ):
-            next_match = m
-            break
-
-    # If no matches found at all
-    if not prev_match and not next_match:
-        response = make_response(
-            render_template(
-                "scoreboard.html",
-                error="No match found on this field",
-                tournament_url=tournament_url,
-                field_name=field_name,
-            ),
-            404,
-        )
-        response.cache_control.max_age = 1
-        return response
-
-    # Get team info for previous and next matches
-    if prev_match:
-        (
-            prev_team1_name,
-            prev_team2_name,
-            prev_team1_photo,
-            prev_team2_photo,
-            prev_team1_shortname,
-            prev_team2_shortname,
-        ) = get_team_info(prev_match)
-        # Ensure we always have names (fallback if somehow None)
-        prev_team1_name = prev_team1_name or "Team 1"
-        prev_team2_name = prev_team2_name or "Team 2"
-    else:
-        (
-            prev_team1_name,
-            prev_team2_name,
-            prev_team1_photo,
-            prev_team2_photo,
-            prev_team1_shortname,
-            prev_team2_shortname,
-        ) = (None, None, None, None, None, None)
-
-    if next_match:
-        (
-            next_team1_name,
-            next_team2_name,
-            next_team1_photo,
-            next_team2_photo,
-            next_team1_shortname,
-            next_team2_shortname,
-        ) = get_team_info(next_match)
-        # Ensure we always have names (fallback if somehow None)
-        next_team1_name = next_team1_name or "Team 1"
-        next_team2_name = next_team2_name or "Team 2"
-    else:
-        (
-            next_team1_name,
-            next_team2_name,
-            next_team1_photo,
-            next_team2_photo,
-            next_team1_shortname,
-            next_team2_shortname,
-        ) = (None, None, None, None, None, None)
-
-    # Determine winner for previous match
-    prev_winner = None
-    if prev_match and prev_match.match_winner:
-        prev_winner = prev_match.match_winner
-
-    response = make_response(
-        render_template(
-            "scoreboard.html",
-            match=None,
-            show_between_matches=True,
-            prev_match=prev_match,
-            prev_team1_name=prev_team1_name,
-            prev_team2_name=prev_team2_name,
-            prev_team1_photo=prev_team1_photo,
-            prev_team2_photo=prev_team2_photo,
-            prev_team1_shortname=prev_team1_shortname,
-            prev_team2_shortname=prev_team2_shortname,
-            prev_winner=prev_winner,
-            next_match=next_match,
-            next_team1_name=next_team1_name,
-            next_team2_name=next_team2_name,
-            next_team1_photo=next_team1_photo,
-            next_team2_photo=next_team2_photo,
-            next_team1_shortname=next_team1_shortname,
-            next_team2_shortname=next_team2_shortname,
-            tournament_url=tournament_url,
-            field_name=field_name,
-        )
-    )
-    response.cache_control.max_age = 1
-    return response
 
 
 @bp.route("/scoreboard-state")
@@ -590,16 +372,13 @@ def match_page(tournament_url: str):
     camera_url = None
     available_cameras = []  # List of dicts: {index, url, stream_start_time, type, video_path, camera_id, session_id}
 
-    from app.utils.camera_helpers import parse_camera_urls
     from datetime import datetime
-    import json
     import os
     from flask import current_app
 
     # Get stream start times and recorded videos from match (check even if no field cameras)
     stream_starts = {}
     recorded_videos = []  # List of recorded video sessions
-    camera_urls = []
 
     if match.camera_stream_starts:
         try:
@@ -616,47 +395,21 @@ def match_page(tournament_url: str):
                         video_path = recording.get("video_path", "")
 
                         if video_path:
-                            # S3: video_path is the object key; resolve to presigned URL
-                            if recording.get("storage") == "s3":
-                                bucket = current_app.config.get("S3_VIDEO_BUCKET")
-                                if bucket:
-                                    from app.utils.s3_video import get_presigned_url
-
-                                    region = current_app.config.get("AWS_REGION") or "us-east-1"
-                                    expiry = current_app.config.get("S3_PRESIGNED_EXPIRY_SECONDS", 3600)
-                                    endpoint_url = current_app.config.get("S3_ENDPOINT_URL")
-                                    playable_url = get_presigned_url(
-                                        bucket,
-                                        video_path,
-                                        region=region,
-                                        expiry_seconds=expiry,
-                                        endpoint_url=endpoint_url,
-                                    )
-                                    if playable_url:
-                                        recorded_videos.append(
-                                            {
-                                                "camera_id": camera_id,
-                                                "video_path": playable_url,
-                                                "point_timestamps": recording.get("point_timestamps"),
-                                                "type": "recorded",
-                                            }
-                                        )
+                            # Local: resolve to full path and check file exists
+                            if video_path.startswith("static/"):
+                                video_full_path = os.path.join(current_app.root_path, "..", video_path)
                             else:
-                                # Local: resolve to full path and check file exists
-                                if video_path.startswith("static/"):
-                                    video_full_path = os.path.join(current_app.root_path, "..", video_path)
-                                else:
-                                    video_full_path = os.path.join(current_app.root_path, "../static", video_path)
+                                video_full_path = os.path.join(current_app.root_path, "../static", video_path)
 
-                                if os.path.exists(video_full_path):
-                                    recorded_videos.append(
-                                        {
-                                            "camera_id": camera_id,
-                                            "video_path": video_path,  # Keep relative path for URL
-                                            "point_timestamps": recording.get("point_timestamps"),
-                                            "type": "recorded",
-                                        }
-                                    )
+                            if os.path.exists(video_full_path):
+                                recorded_videos.append(
+                                    {
+                                        "camera_id": camera_id,
+                                        "video_path": video_path,  # Keep relative path for URL
+                                        "point_timestamps": recording.get("point_timestamps"),
+                                        "type": "recorded",
+                                    }
+                                )
 
                     # Also handle old format (just stream start time string)
                     elif isinstance(recording, str) or (
@@ -673,37 +426,12 @@ def match_page(tournament_url: str):
             except:
                 stream_starts = {}
 
-    # Get YouTube cameras from field configuration (if field exists)
-    if match.field:
-        field_obj = Field.query.filter_by(event=tournament_url, name=match.field).first()
-        if field_obj and field_obj.camera:
-            camera_urls = parse_camera_urls(field_obj.camera)
-
-            # Include YouTube cameras from field configuration
-            if camera_urls:
-                for idx, url in enumerate(camera_urls):
-                    stream_start_str = stream_starts.get(str(idx))  # JSON keys are strings
-
-                    # For old format compatibility
-                    if not stream_start_str and isinstance(stream_starts, dict):
-                        stream_start_str = stream_starts.get(str(idx))
-
-                    available_cameras.append(
-                        {
-                            "index": idx,
-                            "url": url,
-                            "stream_start_time": (stream_start_str if stream_start_str else None),
-                            "type": "youtube",
-                        }
-                    )
-
     # Add recorded videos whenever we have them (match may be in progress, completed, or not yet started)
     if recorded_videos:
-        # Add recorded videos with unique indices (starting after YouTube cameras)
         for idx, recording in enumerate(recorded_videos):
             available_cameras.append(
                 {
-                    "index": len(camera_urls) + idx,  # Continue indexing after YouTube cameras
+                    "index": idx,
                     "url": None,  # No YouTube URL for recorded videos
                     "stream_start_time": recording.get("start_time")
                     or (
@@ -724,14 +452,6 @@ def match_page(tournament_url: str):
         first_cam = available_cameras[0]
         if first_cam.get("type") == "youtube":
             camera_url = first_cam["url"]
-
-    # Debug: log camera availability
-    if not available_cameras and match.field:
-        field_obj = Field.query.filter_by(event=tournament_url, name=match.field).first()
-        if field_obj and field_obj.camera:
-            print(
-                f"Warning: No cameras available for match {match.uuid} on field {match.field}. Field has {len(camera_urls)} camera(s). Match status: {match.status}"
-            )
 
     return render_template(
         "match_page.html",
@@ -1196,25 +916,6 @@ def finalize_match_post(tournament_url):
     match.match_winner = match_winner
     match.finalized_at = now_utc_naive()
 
-    # Refresh camera stream start times when match ends (in case streams started late)
-    if match.field:
-        field_obj = Field.query.filter_by(event=tournament_url, name=match.field).first()
-        if field_obj and field_obj.camera:
-            from app.utils.camera_helpers import get_all_camera_stream_starts
-
-            stream_starts = get_all_camera_stream_starts(field_obj)
-            if stream_starts:
-                # Merge with existing stream starts (don't overwrite if already set)
-                existing_starts = {}
-                if match.camera_stream_starts:
-                    try:
-                        existing_starts = json.loads(match.camera_stream_starts)
-                    except json.JSONDecodeError:
-                        pass
-                # Update with any new stream starts
-                existing_starts.update(stream_starts)
-                match.camera_stream_starts = json.dumps(existing_starts)
-
     team1_signature = request.form.get("team1_signature")
     team2_signature = request.form.get("team2_signature")
     if team1_signature:
@@ -1422,83 +1123,3 @@ def complete_match(tournament_url):
 
     res = MatchActionsService.complete_match(tournament_url, current_user.id, match_id=match_id)
     return json_from_result(res, ok_to_payload=lambda d: d)
-
-
-@bp.route("/youtube-stream-start")
-def youtube_stream_start():
-    """Get YouTube live stream start time."""
-    import re
-    import os
-    import requests
-
-    video_id = request.args.get("video_id")
-    if not video_id:
-        return jsonify({"error": "video_id required"}), 400
-
-    # Extract video ID if full URL provided
-    patterns = [
-        r"(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/|youtube\.com/v/)([^&\n?#]+)",
-        r"^([a-zA-Z0-9_-]{11})$",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, video_id)
-        if match:
-            video_id = match.group(1)
-            break
-
-    # Try to get stream start time from YouTube Data API v3
-    api_key = os.environ.get("YOUTUBE_API_KEY")
-    if not api_key:
-        # If no API key, return null (client will handle gracefully)
-        return jsonify({"start_time": None, "error": "YouTube API key not configured"})
-
-    try:
-        # Get video details from YouTube Data API v3
-        url = "https://www.googleapis.com/youtube/v3/videos"
-        params = {
-            "id": video_id,
-            "part": "liveStreamingDetails,snippet",
-            "key": api_key,
-        }
-        response = requests.get(url, params=params, timeout=5)
-        response.raise_for_status()
-        data = response.json()
-
-        if not data.get("items"):
-            return jsonify({"start_time": None, "error": "Video not found"})
-
-        video = data["items"][0]
-        live_details = video.get("liveStreamingDetails", {})
-
-        # Get actual start time if available
-        actual_start_time = live_details.get("actualStartTime")
-        if actual_start_time:
-            # YouTube API returns time in ISO 8601 format with 'Z' (UTC)
-            # Parse it and ensure it's timezone-aware
-            # (datetime and timezone are already imported at top of file)
-            start_dt = datetime.fromisoformat(actual_start_time.replace("Z", "+00:00"))
-            # Ensure it's UTC timezone-aware
-            if start_dt.tzinfo is None:
-                start_dt = start_dt.replace(tzinfo=timezone.utc)
-            # Return in ISO format with timezone info (ensures 'Z' suffix for UTC)
-            return jsonify(
-                {
-                    "start_time": start_dt.isoformat().replace("+00:00", "Z"),
-                    "video_id": video_id,
-                    "timezone": "UTC",
-                }
-            )
-
-        # Stream not started yet
-        return jsonify({"start_time": None, "error": "Stream has not started"})
-
-    except requests.exceptions.RequestException as e:
-        return (
-            jsonify({"start_time": None, "error": f"Error fetching stream info: {str(e)}"}),
-            500,
-        )
-    except Exception as e:
-        return (
-            jsonify({"start_time": None, "error": f"Unexpected error: {str(e)}"}),
-            500,
-        )

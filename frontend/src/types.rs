@@ -175,8 +175,6 @@ pub struct TournamentDetailResponse {
     pub is_current_player_registered: bool,
     #[serde(default)]
     pub penalty_types: Vec<PenaltyType>,
-    #[serde(default)]
-    pub manual_footage_uploads_enabled: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -784,63 +782,25 @@ pub struct CameraData {
     pub point_timestamps: Option<Vec<PointTimestamp>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct FieldOption {
-    pub id: u32,
-    pub name: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct UserUploadPlanningField {
-    pub id: u32,
-    pub name: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct UserUploadPlanningPoint {
-    pub uuid: String,
-    pub index: u32,
-    pub stamp: Option<String>,
-    pub end_stamp: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct UserUploadPlanningMatch {
-    pub uuid: String,
-    pub name: String,
-    pub field_name: String,
-    #[serde(default)]
-    pub points: Vec<UserUploadPlanningPoint>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct UserUploadPlanningResponse {
-    pub field: UserUploadPlanningField,
-    #[serde(default)]
-    pub matches: Vec<UserUploadPlanningMatch>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct UserUploadedCameraRow {
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct FootageCameraRow {
     pub uuid: String,
     pub match_uuid: String,
     pub match_name: String,
     pub field_name: String,
     pub camera_name: String,
     pub status: String,
+    #[serde(default)]
     pub user: Option<String>,
+    #[serde(default)]
     pub world_start_timestamp: Option<String>,
+    #[serde(default)]
     pub link: Option<String>,
-    pub file: Option<String>,
-    pub uploaded_by_user_id: Option<String>,
-    pub uploaded_by_user_type: Option<String>,
-    pub manifest_only: Option<bool>,
-    pub error: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct UserUploadedCamerasResponse {
-    pub cameras: Vec<UserUploadedCameraRow>,
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct FootageListResponse {
+    pub cameras: Vec<FootageCameraRow>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -907,8 +867,6 @@ pub struct MatchDetailResponse {
     pub match_notes: Vec<MatchNoteData>,
     pub point_notes_map: std::collections::HashMap<String, Vec<MatchNoteData>>,
     pub is_head_ref: bool,
-    #[serde(default)]
-    pub can_retry_finalization: bool,
     #[serde(default)]
     pub can_start: bool,
     #[serde(default)]
@@ -1347,10 +1305,6 @@ pub struct GoogleCompleteProfileRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UpdateFieldRequest {
     pub name: String,
-    pub camera_urls: Vec<String>,
-    /// Per-camera stream start times (ISO UTC). None = no change; Some(None) = clear; Some(Some(s)) = set.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stream_start_times: Option<Vec<Option<String>>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1482,7 +1436,6 @@ pub struct MatchSetupData {
 pub struct FieldSetupData {
     pub id: u32,
     pub name: String,
-    pub camera_urls: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -1549,7 +1502,6 @@ pub struct ValidateDslResponse {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreateFieldRequest {
     pub name: String,
-    pub camera_urls: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1589,28 +1541,6 @@ pub struct ExportScheduleResponse {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ImportScheduleRequest {
     pub toml: String,
-}
-
-// Record page API
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct RecordMatchStatusResponse {
-    pub hasActiveMatch: bool,
-    pub match_id: Option<String>,
-    pub match_name: Option<String>,
-    pub start_time: Option<String>,
-    pub status: Option<String>,
-    pub points: Option<Vec<RecordPointData>>,
-    pub reason: Option<String>,
-    /// True when a TO has requested preview for this field; record page should send preview frames.
-    #[serde(default)]
-    pub preview_requested: bool,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct RecordPointData {
-    pub uuid: String,
-    pub stamp: Option<String>,
-    pub end_stamp: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -103,7 +103,7 @@ def test_start_match_post_rejects_when_another_in_progress_on_same_field(
         login_as(client, ref)
 
         # Ensure field exists
-        field = Field(event=tournament_url, name="Field 1", camera=None)
+        field = Field(event=tournament_url, name="Field 1")
         db.session.add(field)
         db.session.flush()
 

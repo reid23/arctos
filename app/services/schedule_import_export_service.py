@@ -492,7 +492,6 @@ class ScheduleImportExportService:
                     field = Field.query.filter_by(id=field_dict["id"], event=tournament_url).first()
                     if field:
                         field.name = field_dict["name"]
-                        field.camera = field_dict["camera"]
                         fields_updated += 1
                     else:
                         # ID doesn't exist, create new (don't include id in creation)

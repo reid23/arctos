@@ -10,12 +10,8 @@ URL endpoint names are stable across moves:
   CRUD, fields, tags, TO membership.
 - :mod:`app.routes.tournaments.scheduling` - schedule editing, recompute,
   push-back, import/export, DSL validation.
-- :mod:`app.routes.tournaments.recordings` - cameras, recording/preview
-  endpoints, ffmpeg finalisation, user-upload pipeline.
-
-The :data:`executor` is a Flask-Executor used to run ffmpeg finalisation
-off the request thread; we only ever want one worker at a time because
-ffmpeg already parallelises internally.
+- :mod:`app.routes.tournaments.footage` - the footage API: TO-authenticated
+  video upload (YouTube link or chunked file) plus footage list/delete.
 """
 
 from flask import Blueprint
@@ -159,9 +155,9 @@ def delete_matches_with_children(match_uuids: list[str]) -> None:
 # when submodules import them via `from . import bp`.
 from app.routes.tournaments import (  # noqa: E402, F401
     brackets,
+    footage,
     management,
     matches_admin,
     read,
-    recordings,
     scheduling,
 )

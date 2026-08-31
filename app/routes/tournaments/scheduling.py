@@ -14,13 +14,11 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from datetime import datetime, timedelta, timezone
 import io
-import json
 
 from models import (
     Tournament,
     Match,
     MatchNote,
-    Field,
     Tag,
     Point,
     Injury,
@@ -1152,22 +1150,6 @@ def finalize_match_post_api(tournament_url):
     match.final_notes = data.get("final_notes") or ""
     match.match_winner = match_winner
     match.finalized_at = now_utc_naive()
-
-    if match.field:
-        field_obj = Field.query.filter_by(event=tournament_url, name=match.field).first()
-        if field_obj and field_obj.camera:
-            from app.utils.camera_helpers import get_all_camera_stream_starts
-
-            stream_starts = get_all_camera_stream_starts(field_obj)
-            if stream_starts:
-                existing_starts = {}
-                if match.camera_stream_starts:
-                    try:
-                        existing_starts = json.loads(match.camera_stream_starts)
-                    except json.JSONDecodeError:
-                        pass
-                existing_starts.update(stream_starts)
-                match.camera_stream_starts = json.dumps(existing_starts)
 
     team1_signature = data.get("team1_signature")
     team2_signature = data.get("team2_signature")

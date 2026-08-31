@@ -51,15 +51,13 @@ class MatchScheduleSerializer:
             field: The :class:`~app.models.tournament.Field` ORM instance.
 
         Returns:
-            Dict with up to three keys: ``id``, ``name``, ``camera``.
+            Dict with up to two keys: ``id``, ``name``.
         """
         result = {}
         if field.id is not None:
             result["id"] = field.id
         if field.name:
             result["name"] = field.name
-        if field.camera:
-            result["camera"] = field.camera
         return result
 
     @staticmethod
@@ -187,7 +185,6 @@ class MatchScheduleSerializer:
         result = {
             "event": tournament_url,
             "name": name,
-            "camera": str(data.get("camera", "")).strip() or None,
         }
 
         # Include id if present (for same-tournament updates)

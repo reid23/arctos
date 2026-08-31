@@ -132,8 +132,6 @@ class Field(db.Model):
         id: Auto-increment primary key.
         event: Tournament URL slug this field belongs to.
         name: Display name for the field (e.g. ``"Field A"``).
-        camera: JSON array of camera stream URLs, or a single URL string for
-            backwards compatibility.
     """
 
     __tablename__ = "fields"
@@ -141,7 +139,6 @@ class Field(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     event = db.Column(db.String(URL_SLUG_LEN), db.ForeignKey("tournaments.url"), nullable=False)
     name = db.Column(db.String(SHORT_NAME_LEN), nullable=False)
-    camera = db.Column(db.Text)  # JSON array of camera URLs (or single URL for backward compatibility)
 
 
 class Tag(db.Model):

@@ -965,16 +965,9 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
     let mut last_frame_step_time_ms = use_signal(|| 0.0f64);
     // When switching camera, seek to this time (secs) once the new video is ready.
     let mut pending_seek_time = use_signal(|| None::<f64>);
-    // Fetched YouTube stream start times per camera index (when API does not provide them).
-    let fetched_stream_starts = use_signal(|| Vec::<Option<String>>::new());
-    // Match UUID we have already triggered stream-start fetches for (so we only query once per load).
-    let stream_starts_fetched_for_match = use_signal(|| None::<String>);
     let mut penalty_desc_modal = use_signal(|| None::<String>);
     let mut why_modal_show = use_signal(|| false);
     let mut force_start_modal_show = use_signal(|| false);
-    let retry_finalization_pending = use_signal(|| false);
-    let retry_finalization_message = use_signal(|| None::<String>);
-    let retry_finalization_error = use_signal(|| None::<String>);
 
     // Reset per-page player/camera state when navigating to a different match.
     {
@@ -1020,62 +1013,6 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
         }
     });
 
-    // Fetch YouTube stream start for each camera that has a URL but no stream_start_time from API.
-    // Only runs once when the match page loads (keyed by match uuid).
-    #[cfg(target_arch = "wasm32")]
-    {
-        let val_fetch = val.clone();
-        let mut fetched_stream_starts = fetched_stream_starts;
-        let mut stream_starts_fetched_for_match = stream_starts_fetched_for_match;
-        use_effect(move || {
-            let match_uuid = val_fetch
-                .read()
-                .as_ref()
-                .and_then(|r| r.as_ref().ok())
-                .map(|d| d.match_data.uuid.clone());
-            let Some(match_uuid) = match_uuid else { return };
-            if stream_starts_fetched_for_match().as_deref() == Some(match_uuid.as_str()) {
-                return;
-            }
-            stream_starts_fetched_for_match.set(Some(match_uuid.clone()));
-            let cameras = val_fetch
-                .read()
-                .as_ref()
-                .and_then(|r| r.as_ref().ok())
-                .map(|d| d.available_cameras.clone());
-            let Some(cameras) = cameras else { return };
-            let n = cameras.len();
-            if n == 0 {
-                fetched_stream_starts.set(vec![]);
-                return;
-            }
-            let mut current = vec![None::<String>; n];
-            fetched_stream_starts.set(current.clone());
-            for (idx, cam) in cameras.iter().enumerate() {
-                let url = match &cam.url {
-                    Some(u) if !u.trim().is_empty() => u.clone(),
-                    _ => continue,
-                };
-                if cam.stream_start_time.is_some() {
-                    continue;
-                }
-                if cam.camera_type == "recorded" {
-                    continue;
-                }
-                let mut set_fetched = fetched_stream_starts;
-                spawn(async move {
-                    if let Ok(Some(iso)) = api::youtube_stream_start(&url).await {
-                        let mut v = set_fetched();
-                        if v.len() <= idx {
-                            v.resize(idx + 1, None);
-                        }
-                        v[idx] = Some(iso);
-                        set_fetched.set(v);
-                    }
-                });
-            }
-        });
-    }
 
     // When switching camera with pending same-time seek, poll video until ready then seek.
     #[cfg(target_arch = "wasm32")]
@@ -1214,7 +1151,6 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
         let val_live = val.clone();
         use_effect(move || {
             let _ = selected_camera_idx();
-            let _ = fetched_stream_starts();
             if let Some(Ok(d)) = val_live.read().as_ref() {
                 if d.match_data.status == "COMPLETED" {
                     return;
@@ -1226,8 +1162,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                 };
                 let stream_start = cam
                     .stream_start_time
-                    .clone()
-                    .or_else(|| fetched_stream_starts().get(idx).cloned().flatten());
+                    .clone();
                 let Some(stream_start) = stream_start else {
                     return;
                 };
@@ -1323,8 +1258,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                         let stamp = d.points.get(pi).and_then(|p| p.stamp.as_deref());
                         let stream_start_time: Option<String> = cam
                             .stream_start_time
-                            .clone()
-                            .or_else(|| fetched_stream_starts().get(idx).cloned().flatten());
+                            .clone();
                         if let Some(secs) = in_video_start_for_world_stamp_interpolated(
                             stamp,
                             cam.time_world.as_ref(),
@@ -1351,8 +1285,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                         let stamp = d.points.get(new_idx).and_then(|p| p.stamp.as_deref());
                         let stream_start_time: Option<String> = cam
                             .stream_start_time
-                            .clone()
-                            .or_else(|| fetched_stream_starts().get(idx).cloned().flatten());
+                            .clone();
                         if let Some(secs) = in_video_start_for_world_stamp_interpolated(
                             stamp,
                             cam.time_world.as_ref(),
@@ -1380,8 +1313,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                         let stamp = d.points.get(new_idx).and_then(|p| p.stamp.as_deref());
                         let stream_start_time: Option<String> = cam
                             .stream_start_time
-                            .clone()
-                            .or_else(|| fetched_stream_starts().get(idx).cloned().flatten());
+                            .clone();
                         if let Some(secs) = in_video_start_for_world_stamp_interpolated(
                             stamp,
                             cam.time_world.as_ref(),
@@ -1471,7 +1403,6 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                 let has_cameras = d.available_cameras.len() > 0 || d.camera_url.is_some();
                 let cameras = d.available_cameras.clone();
                 let points_for_footage: Vec<PointData> = live_points_signal().clone().unwrap_or_else(|| d.points.clone());
-                let base_url_footage = base_url.clone();
                 let footage_section = has_cameras.then(move || {
                     let points = points_for_footage.clone();
                     let points_go = points.clone();
@@ -1483,8 +1414,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                         .and_then(|c| c.status.clone())
                         .unwrap_or_else(|| "SUCCESS".to_string());
                     let stream_start_time = current
-                        .and_then(|c| c.stream_start_time.clone())
-                        .or_else(|| fetched_stream_starts().get(idx).cloned().flatten());
+                        .and_then(|c| c.stream_start_time.clone());
                     let stream_start_go = stream_start_time.clone();
                     let stream_start_prev = stream_start_time.clone();
                     let stream_start_next = stream_start_time.clone();
@@ -1495,18 +1425,6 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                     let time_world_next = time_world_go.clone();
                     let time_video_next = time_video_go.clone();
 
-                    let failed_download_url = current
-                        .and_then(|c| c.video_path.clone())
-                        .and_then(|p| {
-                            let p = p.as_str().to_string();
-                            if p.starts_with("http://") || p.starts_with("https://") {
-                                Some(p)
-                            } else {
-                                let base = base_url_footage.trim_end_matches('/');
-                                let p = p.trim_start_matches('/');
-                                Some(format!("{}/{}", base, p))
-                            }
-                        });
                     rsx! {
                         div { class: "card mt-3",
                         div { class: "card-header d-flex justify-content-between align-items-center",
@@ -1589,10 +1507,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                 if status == "UPLOADING" {
                                     p { class: "text-muted", "Video is still processing." }
                                 } else if status == "FAILED" {
-                                    p { class: "text-danger", "error processing video. click here to download source." }
-                                    if let Some(ref href) = failed_download_url {
-                                        a { href: "{href}", class: "btn btn-sm btn-outline-danger ms-2", "Download source" }
-                                    }
+                                    p { class: "text-danger", "error processing video." }
                                 } else {
                                     div {
                                         id: "youtube-player-container",
@@ -2002,57 +1917,6 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                 }
                             }
 
-                            if d.can_retry_finalization {
-                                div { class: "row mt-3",
-                                    div { class: "col-12",
-                                        div { class: "d-flex gap-2 align-items-center flex-wrap",
-                                            button {
-                                                class: "btn btn-outline-secondary",
-                                                disabled: retry_finalization_pending(),
-                                                onclick: {
-                                                    let url = url.clone();
-                                                    let match_id = d.match_data.uuid.clone();
-                                                    let mut retry_finalization_pending = retry_finalization_pending;
-                                                    let mut retry_finalization_message = retry_finalization_message;
-                                                    let mut retry_finalization_error = retry_finalization_error;
-                                                    let mut data = data.clone();
-                                                    move |_| {
-                                                        if retry_finalization_pending() {
-                                                            return;
-                                                        }
-                                                        let url = url.clone();
-                                                        let match_id = match_id.clone();
-                                                        retry_finalization_pending.set(true);
-                                                        retry_finalization_message.set(None);
-                                                        retry_finalization_error.set(None);
-                                                        spawn(async move {
-                                                            match api::retry_match_finalization(&url, &match_id).await {
-                                                                Ok(msg) => {
-                                                                    retry_finalization_message.set(Some(msg));
-                                                                    data.restart();
-                                                                }
-                                                                Err(err) => retry_finalization_error.set(Some(err)),
-                                                            }
-                                                            retry_finalization_pending.set(false);
-                                                        });
-                                                    }
-                                                },
-                                                if retry_finalization_pending() {
-                                                    "Retrying..."
-                                                } else {
-                                                    "Retry Finalization"
-                                                }
-                                            }
-                                            if let Some(msg) = retry_finalization_message() {
-                                                span { class: "text-success small", "{msg}" }
-                                            }
-                                            if let Some(err) = retry_finalization_error() {
-                                                span { class: "text-danger small", "{err}" }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
                         }
                     }
 

@@ -1277,138 +1277,10 @@ fn FieldsModal(
     on_change: EventHandler<()>,
 ) -> Element {
     let mut new_name = use_signal(|| "".to_string());
-    let mut new_camera_urls = use_signal(|| vec!["".to_string()]);
     let mut error = use_signal(|| None::<String>);
     let url_sig = use_signal(|| tournament_url.clone());
-    let mut recording_modal_field = use_signal(|| None::<u32>);
-    let mut recording_modal_url = use_signal(|| None::<String>);
-    let mut recording_modal_loading = use_signal(|| false);
-    let mut recording_modal_error = use_signal(|| None::<String>);
-    let mut preview_modal_field = use_signal(|| None::<u32>);
-    let mut preview_modal_field_name = use_signal(|| None::<String>);
-    let mut preview_modal_closed =
-        use_signal(|| None::<std::sync::Arc<std::sync::atomic::AtomicBool>>);
-    let mut preview_cameras = use_signal(|| vec![] as Vec<String>);
-    let mut preview_selected_camera = use_signal(|| String::new());
-    let preview_cache_bust = use_signal(|| "0".to_string());
-    #[cfg(target_arch = "wasm32")]
-    let mut preview_image_object_url = use_signal(|| None::<String>);
-    #[cfg(target_arch = "wasm32")]
-    let mut preview_metadata = use_signal(|| None::<api::PreviewMetadata>);
     let mut editing_field_id = use_signal(|| None::<u32>);
     let mut editing_name = use_signal(|| "".to_string());
-    let mut editing_camera_urls = use_signal(|| vec!["".to_string()]);
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        let url_sig_eff = url_sig.clone();
-        let preview_modal_field_eff = preview_modal_field.clone();
-        let preview_modal_closed_eff = preview_modal_closed.clone();
-        let preview_modal_field_name_eff = preview_modal_field_name.clone();
-        let preview_cameras_eff = preview_cameras.clone();
-        let preview_selected_camera_eff = preview_selected_camera.clone();
-        let preview_image_object_url_eff = preview_image_object_url.clone();
-        #[cfg(target_arch = "wasm32")]
-        let preview_metadata_eff = preview_metadata.clone();
-        use_effect(move || {
-            let fid_opt = preview_modal_field_eff();
-            let closed_opt = preview_modal_closed_eff();
-            let field_name_opt = preview_modal_field_name_eff();
-            let (closed, field_name, u) = match (fid_opt, closed_opt, field_name_opt) {
-                (Some(_), Some(c), Some(fn_)) => (c.clone(), fn_.clone(), url_sig_eff().clone()),
-                _ => return,
-            };
-            let mut cameras_sig = preview_cameras_eff.clone();
-            let closed2 = closed.clone();
-            let u2 = u.clone();
-            let field_name2 = field_name.clone();
-            spawn(async move {
-                use std::sync::atomic::Ordering;
-                while !closed.load(Ordering::SeqCst) {
-                    if let Ok(list) = api::list_preview_cameras(&u, &field_name).await {
-                        cameras_sig.set(list);
-                    }
-                    for _ in 0..3 {
-                        if closed.load(Ordering::SeqCst) {
-                            return;
-                        }
-                        gloo_timers::future::TimeoutFuture::new(1000).await;
-                    }
-                }
-            });
-            // Fetch preview frame with credentials and set img via object URL (Safari compatibility).
-            let mut image_url_sig = preview_image_object_url_eff.clone();
-            let cam_sig = preview_selected_camera_eff.clone();
-            #[cfg(target_arch = "wasm32")]
-            let mut meta_sig = preview_metadata_eff.clone();
-            spawn(async move {
-                use std::sync::atomic::Ordering;
-                while !closed2.load(Ordering::SeqCst) {
-                    let camera = cam_sig();
-                    if !camera.is_empty() {
-                        let cache_bust = format!("{}", js_sys::Date::now());
-                        match api::fetch_preview_frame(&u2, &field_name2, &camera, &cache_bust)
-                            .await
-                        {
-                            Ok(Some(bytes)) => {
-                                let arr = js_sys::Uint8Array::from(&bytes[..]);
-                                let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(
-                                    &js_sys::Array::of1(&arr),
-                                    web_sys::BlobPropertyBag::new().type_("image/jpeg"),
-                                )
-                                .expect("Blob");
-                                let new_url = web_sys::Url::create_object_url_with_blob(&blob)
-                                    .expect("object URL");
-                                if let Some(old) = image_url_sig() {
-                                    web_sys::Url::revoke_object_url(&old).ok();
-                                }
-                                image_url_sig.set(Some(new_url));
-                            }
-                            Ok(None) => {}
-                            Err(_) => {}
-                        }
-                        #[cfg(target_arch = "wasm32")]
-                        if let Ok(Some(meta)) =
-                            api::fetch_preview_metadata(&u2, &field_name2, &camera).await
-                        {
-                            meta_sig.set(Some(meta));
-                        }
-                    }
-                    for _ in 0..2 {
-                        if closed2.load(Ordering::SeqCst) {
-                            if let Some(url) = image_url_sig() {
-                                web_sys::Url::revoke_object_url(&url).ok();
-                                image_url_sig.set(None);
-                            }
-                            #[cfg(target_arch = "wasm32")]
-                            meta_sig.set(None);
-                            return;
-                        }
-                        gloo_timers::future::TimeoutFuture::new(1000).await;
-                    }
-                }
-                if let Some(url) = image_url_sig() {
-                    web_sys::Url::revoke_object_url(&url).ok();
-                    image_url_sig.set(None);
-                }
-                #[cfg(target_arch = "wasm32")]
-                meta_sig.set(None);
-            });
-        });
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    use_effect(move || {
-        let _ = preview_modal_field();
-        let cameras = preview_cameras();
-        if preview_modal_field().is_none() || cameras.is_empty() {
-            return;
-        }
-        let sel = preview_selected_camera();
-        if sel.is_empty() || !cameras.contains(&sel) {
-            preview_selected_camera.set(cameras.first().cloned().unwrap_or_default());
-        }
-    });
 
     rsx! {
         div { class: "modal d-block", tabindex: "-1", style: "background: rgba(0,0,0,0.5)",
@@ -1433,60 +1305,17 @@ fn FieldsModal(
                                         oninput: move |e| new_name.set(e.value())
                                     }
                                 }
-                                div { class: "mb-2",
-                                    label { class: "form-label", "Camera URLs (YouTube livestreams, optional)" }
-                                    for (idx, _) in new_camera_urls().iter().enumerate() {
-                                        div { class: "input-group mb-2",
-                                            input {
-                                                class: "form-control form-control-sm",
-                                                placeholder: "https://youtube.com/...",
-                                                value: "{new_camera_urls().get(idx).cloned().unwrap_or_default()}",
-                                                oninput: move |e| {
-                                                    let mut v = new_camera_urls();
-                                                    if idx < v.len() { v[idx] = e.value(); }
-                                                    else { v.resize(idx + 1, String::new()); v[idx] = e.value(); }
-                                                    new_camera_urls.set(v);
-                                                }
-                                            }
-                                            button {
-                                                class: "btn btn-outline-secondary btn-sm",
-                                                type: "button",
-                                                onclick: move |_| {
-                                                    let mut v = new_camera_urls();
-                                                    if v.len() > 1 { v.remove(idx); new_camera_urls.set(v); }
-                                                },
-                                                "Remove"
-                                            }
-                                        }
-                                    }
-                                    button {
-                                        class: "btn btn-sm btn-outline-secondary",
-                                        type: "button",
-                                        onclick: move |_| {
-                                            let mut v = new_camera_urls();
-                                            v.push("".to_string());
-                                            new_camera_urls.set(v);
-                                        },
-                                        "Add camera URL"
-                                    }
-                                }
                                 button {
                                     class: "btn btn-outline-success",
                                     onclick: move |_| {
                                         let u = url_sig().clone();
                                         let on_change = on_change.clone();
-                                        let cams: Vec<String> = new_camera_urls()
-                                            .iter()
-                                            .filter(|s| !s.trim().is_empty())
-                                            .map(|s| s.trim().to_string())
-                                            .collect();
                                         let name = new_name().trim().to_string();
                                         spawn(async move {
-                                            let req = CreateFieldRequest { name: name.clone(), camera_urls: cams };
+                                            let req = CreateFieldRequest { name: name.clone() };
                                             match api::create_field(&u, &req).await {
                                                 Ok(_) => {
                                                     new_name.set("".to_string());
-                                                    new_camera_urls.set(vec!["".to_string()]);
                                                     on_change.call(());
                                                 }
                                                 Err(e) => error.set(Some(e)),
@@ -1503,9 +1332,6 @@ fn FieldsModal(
                             {data.fields.iter().map(|f| {
                                 let fid = f.id;
                                 let fname = f.name.clone();
-                                let fname_for_rec = fname.clone();
-                                let fname_for_preview = fname.clone();
-                                let cam_urls = f.camera_urls.clone();
                                 let is_editing = editing_field_id() == Some(fid);
                                 rsx! {
                                     li { key: "{fid}", class: "list-group-item d-flex flex-column gap-2",
@@ -1520,56 +1346,14 @@ fn FieldsModal(
                                                         oninput: move |e| editing_name.set(e.value())
                                                     }
                                                 }
-                                                div {
-                                                    label { class: "form-label small mb-0", "Camera URLs" }
-                                                    for (idx, _) in editing_camera_urls().iter().enumerate() {
-                                                        div { class: "input-group input-group-sm mb-1",
-                                                            input {
-                                                                class: "form-control form-control-sm",
-                                                                placeholder: "https://youtube.com/...",
-                                                                value: "{editing_camera_urls().get(idx).cloned().unwrap_or_default()}",
-                                                                oninput: move |e| {
-                                                                    let mut v = editing_camera_urls();
-                                                                    if idx < v.len() { v[idx] = e.value(); }
-                                                                    else { v.resize(idx + 1, String::new()); v[idx] = e.value(); }
-                                                                    editing_camera_urls.set(v);
-                                                                }
-                                                            }
-                                                            button {
-                                                                class: "btn btn-outline-secondary btn-sm",
-                                                                type: "button",
-                                                                onclick: move |_| {
-                                                                    let mut v = editing_camera_urls();
-                                                                    if v.len() > 1 { v.remove(idx); editing_camera_urls.set(v); }
-                                                                },
-                                                                "×"
-                                                            }
-                                                        }
-                                                    }
-                                                    button {
-                                                        class: "btn btn-sm btn-outline-secondary",
-                                                        type: "button",
-                                                        onclick: move |_| {
-                                                            let mut v = editing_camera_urls();
-                                                            v.push("".to_string());
-                                                            editing_camera_urls.set(v);
-                                                        },
-                                                        "Add camera URL"
-                                                    }
-                                                }
                                                 div { class: "d-flex gap-1 mt-1",
                                                     button { class: "btn btn-sm btn-primary",
                                                         onclick: move |_| {
                                                             let u = url_sig().clone();
                                                             let name = editing_name().clone();
-                                                            let cams: Vec<String> = editing_camera_urls()
-                                                                .iter()
-                                                                .filter(|s| !s.trim().is_empty())
-                                                                .map(|s| s.trim().to_string())
-                                                                .collect();
                                                             let on_change = on_change.clone();
                                                             spawn(async move {
-                                                                let req = UpdateFieldRequest { name, camera_urls: cams, stream_start_times: None };
+                                                                let req = UpdateFieldRequest { name };
                                                                 if api::update_field(&u, fid, &req).await.is_ok() {
                                                                     editing_field_id.set(None);
                                                                     on_change.call(());
@@ -1590,75 +1374,12 @@ fn FieldsModal(
                                             div { class: "d-flex justify-content-between align-items-center flex-wrap gap-2",
                                                 div { class: "d-flex align-items-center gap-2 flex-wrap",
                                                     strong { "{fname}" }
-                                                    if cam_urls.is_empty() {
-                                                        span { class: "badge bg-secondary", "No cameras" }
-                                                    } else {
-                                                        for (cam_idx, url) in cam_urls.iter().enumerate() {
-                                                            span { class: "d-inline",
-                                                                a {
-                                                                    href: "{url}",
-                                                                    target: "_blank",
-                                                                    rel: "noopener noreferrer",
-                                                                    class: "small text-primary text-break",
-                                                                    "Camera {cam_idx}"
-                                                                }
-                                                                if cam_idx < cam_urls.len() - 1 {
-                                                                    span { class: "text-muted", " · " }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
                                                 }
                                                 div { class: "btn-group btn-group-sm",
-                                                    button { class: "btn btn-outline-info",
-                                                        onclick: move |_| {
-                                                            recording_modal_field.set(Some(fid));
-                                                            recording_modal_url.set(None);
-                                                            recording_modal_error.set(None);
-                                                            recording_modal_loading.set(true);
-                                                            let u = url_sig().clone();
-                                                            let name = fname_for_rec.clone();
-                                                            spawn(async move {
-                                                                match api::camera_url(&u, &name).await {
-                                                                    Ok(url) => {
-                                                                        recording_modal_url.set(Some(url));
-                                                                        recording_modal_loading.set(false);
-                                                                    }
-                                                                    Err(e) => {
-                                                                        recording_modal_error.set(Some(e));
-                                                                        recording_modal_loading.set(false);
-                                                                    }
-                                                                }
-                                                            });
-                                                        },
-                                                        "Get recording link"
-                                                    }
-                                                    button { class: "btn btn-outline-secondary",
-                                                        onclick: move |_| {
-                                                            let u = url_sig().clone();
-                                                            let name = fname_for_preview.clone();
-                                                            preview_cameras.set(vec![]);
-                                                            preview_selected_camera.set(String::new());
-                                                            preview_modal_field_name.set(Some(name.clone()));
-                                                            let closed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-                                                            preview_modal_closed.set(Some(closed));
-                                                            preview_modal_field.set(Some(fid));
-                                                            spawn(async move {
-                                                                let _ = api::request_preview(&u, &name).await;
-                                                            });
-                                                        },
-                                                        "Preview camera"
-                                                    }
                                                     button { class: "btn btn-outline-primary",
                                                         onclick: move |_| {
                                                             editing_field_id.set(Some(fid));
                                                             editing_name.set(fname.clone());
-                                                            let urls = if cam_urls.is_empty() {
-                                                                vec!["".to_string()]
-                                                            } else {
-                                                                cam_urls.clone()
-                                                            };
-                                                            editing_camera_urls.set(urls);
                                                         },
                                                         "Edit"
                                                     }
@@ -1687,166 +1408,6 @@ fn FieldsModal(
                 }
             }
         }
-
-        {{
-            let rec_fid_opt = recording_modal_field();
-            match rec_fid_opt {
-                Some(rec_fid) => {
-                    let rec_field_label = data.fields.iter().find(|x| x.id == rec_fid).map(|x| x.name.as_str()).unwrap_or("");
-                    let rec_url = recording_modal_url();
-                    let rec_loading = recording_modal_loading();
-                    let rec_err = recording_modal_error();
-                    let qr_src = rec_url.as_ref().map(|u| format!("https://api.qrserver.com/v1/create-qr-code/?size=200x200&data={}", urlencoding::encode(u)));
-                    rsx! {
-                        div { class: "modal d-block", tabindex: "-1", style: "background: rgba(0,0,0,0.5); z-index: 1060;",
-                            div { class: "modal-dialog modal-dialog-centered",
-                                div { class: "modal-content",
-                                    div { class: "modal-header d-flex justify-content-between align-items-center",
-                                        h5 { class: "modal-title mb-0", "Recording link — {rec_field_label}" }
-                                        button { type: "button", class: "btn-close", onclick: move |_| {
-                                            recording_modal_field.set(None);
-                                            recording_modal_url.set(None);
-                                            recording_modal_error.set(None);
-                                            recording_modal_loading.set(false);
-                                        } }
-                                    }
-                                    div { class: "modal-body text-center",
-                                        if rec_loading {
-                                            p { class: "text-muted", "Loading..." }
-                                        } else if let Some(ref e) = rec_err {
-                                            p { class: "text-danger", "{e}" }
-                                        } else if let (Some(ref url), Some(ref qr)) = (rec_url, qr_src) {
-                                            img { src: "{qr}", alt: "QR code", style: "max-width: 200px; height: auto;" }
-                                            a { href: "{url}", target: "_blank", rel: "noopener noreferrer", class: "d-block mt-2 small text-break", "{url}" }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                None => rsx! { div {} },
-            }
-        }}
-
-        {{
-            let preview_fid_opt = preview_modal_field();
-            match preview_fid_opt {
-                Some(preview_fid) => {
-                    let preview_field_name = data.fields.iter().find(|x| x.id == preview_fid).map(|x| x.name.as_str()).unwrap_or("");
-                    let cameras = preview_cameras();
-                    let selected = preview_selected_camera();
-                    let cache_bust = preview_cache_bust();
-                    let effective_camera = if selected.is_empty() && !cameras.is_empty() {
-                        cameras.first().cloned().unwrap_or_default()
-                    } else if cameras.contains(&selected) {
-                        selected.clone()
-                    } else {
-                        cameras.first().cloned().unwrap_or_default()
-                    };
-                    let u = url_sig().clone();
-                    let u_release = url_sig().clone();
-                    let name_for_release = preview_field_name.to_string();
-                    #[cfg(target_arch = "wasm32")]
-                    let preview_img_src = preview_image_object_url()
-                        .unwrap_or_else(|| "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1' height='1'%3E%3C/svg%3E".to_string());
-                    #[cfg(not(target_arch = "wasm32"))]
-                    let preview_img_src = api::preview_frame_url(&u, preview_field_name, &effective_camera, &preview_cache_bust());
-                    #[cfg(target_arch = "wasm32")]
-                    let preview_metadata_block = match preview_metadata() {
-                        Some(meta) => {
-                            let storage_str = match (meta.storage_usage, meta.storage_quota) {
-                                (Some(usage), Some(quota)) if quota > 0.0 => {
-                                    let u_mb = usage / 1_048_576.0;
-                                    let q_mb = quota / 1_048_576.0;
-                                    format!("{:.1} MB / {:.1} MB", u_mb, q_mb)
-                                }
-                                _ => String::new(),
-                            };
-                            let battery_str = meta
-                                .battery_level
-                                .map(|l| format!("{:.0}%", l * 100.0))
-                                .unwrap_or_default();
-                            if !storage_str.is_empty() || !battery_str.is_empty() {
-                                rsx! {
-                                    div { class: "mt-2 small text-muted d-flex gap-3 flex-wrap",
-                                        if !storage_str.is_empty() { span { "Storage: {storage_str}" } }
-                                        if !battery_str.is_empty() { span { "Battery: {battery_str}" } }
-                                    }
-                                }
-                                .unwrap_or_default()
-                            } else {
-                                rsx! { div {} }.unwrap_or_default()
-                            }
-                        }
-                        None => rsx! { div {} }.unwrap_or_default(),
-                    };
-                    #[cfg(not(target_arch = "wasm32"))]
-                    let preview_metadata_block = rsx! { div {} }.unwrap_or_default();
-                    rsx! {
-                        div { class: "modal d-block", tabindex: "-1", style: "background: rgba(0,0,0,0.5); z-index: 1060;",
-                            div { class: "modal-dialog modal-dialog-centered modal-lg",
-                                div { class: "modal-content",
-                                    div { class: "modal-header d-flex justify-content-between align-items-center",
-                                        h5 { class: "modal-title mb-0", "Preview — {preview_field_name}" }
-                                        button { type: "button", class: "btn-close", onclick: move |_| {
-                                            let u_rel = u_release.clone();
-                                            let name_rel = name_for_release.clone();
-                                            spawn(async move {
-                                                let _ = api::release_preview(&u_rel, &name_rel).await;
-                                            });
-                                            #[cfg(target_arch = "wasm32")]
-                                            {
-                                                if let Some(url) = preview_image_object_url() {
-                                                    web_sys::Url::revoke_object_url(&url).ok();
-                                                    preview_image_object_url.set(None);
-                                                }
-                                                preview_metadata.set(None);
-                                            }
-                                            if let Some(closed) = preview_modal_closed() {
-                                                closed.store(true, std::sync::atomic::Ordering::SeqCst);
-                                            }
-                                            preview_modal_field.set(None);
-                                            preview_modal_field_name.set(None);
-                                            preview_modal_closed.set(None);
-                                        } }
-                                    }
-                                    div { class: "modal-body",
-                                        if cameras.is_empty() {
-                                            p { class: "text-muted", "Waiting for cameras..." }
-                                        } else {
-                                            div { class: "mb-2",
-                                                label { class: "form-label small", "Camera" }
-                                                select {
-                                                    class: "form-select form-select-sm",
-                                                    value: "{effective_camera}",
-                                                    onchange: move |e| preview_selected_camera.set(e.value()),
-                                                    for name in cameras.iter() {
-                                                        option { value: "{name}", "{name}" }
-                                                    }
-                                                }
-                                            }
-                                            if effective_camera.is_empty() {
-                                                p { class: "text-muted small", "Select a camera..." }
-                                            } else {
-                                                img {
-                                                    src: "{preview_img_src}",
-                                                    alt: "Preview",
-                                                    class: "img-fluid w-100",
-                                                    style: "max-height: 70vh; object-fit: contain;"
-                                                }
-                                                {preview_metadata_block}
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                None => rsx! { div {} },
-            }
-        }}
     }
 }
 

@@ -7,7 +7,6 @@ defined in :mod:`app.routes.tournaments.__init__`.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import json
 
 from flask import jsonify, request
 from flask_login import current_user, login_required
@@ -38,7 +37,6 @@ from app.utils.scheduling import (
 from models import (
     Field,
     Match,
-    Point,
     Tag,
     db,
 )
@@ -369,127 +367,10 @@ def update_field_api(tournament_url, field_id):
     old_field_name = field.name
     field.name = new_field_name
 
-    camera_urls = [url for url in data.get("camera_urls", []) if url.strip()]
-    old_camera_urls = []
-    try:
-        if field.camera:
-            loaded = json.loads(field.camera)
-            if isinstance(loaded, list):
-                old_camera_urls = loaded
-            else:
-                old_camera_urls = [field.camera]
-    except:
-        if field.camera:
-            old_camera_urls = [field.camera]
-
-    field.camera = json.dumps(camera_urls) if camera_urls else ""
-
-    # Update matches and points (logic copied from tournaments.py)
-    field_name_for_query = old_field_name if old_field_name != new_field_name else new_field_name
-    matches_to_update = Match.query.filter_by(event=tournament_url, field=field_name_for_query).all()
-
-    camera_urls_changed = old_camera_urls != camera_urls
-
-    if camera_urls_changed:
-        old_to_new_index_map = {}
-        for new_idx, new_url in enumerate(camera_urls):
-            try:
-                old_idx = old_camera_urls.index(new_url)
-                old_to_new_index_map[str(old_idx)] = str(new_idx)
-            except ValueError:
-                pass
-
-        for match in matches_to_update:
-            if match.camera_stream_starts:
-                try:
-                    stream_starts = json.loads(match.camera_stream_starts)
-                    new_stream_starts = {}
-                    for old_idx_str, start_time in stream_starts.items():
-                        if old_idx_str in old_to_new_index_map:
-                            new_idx_str = old_to_new_index_map[old_idx_str]
-                            new_stream_starts[new_idx_str] = start_time
-                    match.camera_stream_starts = json.dumps(new_stream_starts) if new_stream_starts else None
-                except:
-                    match.camera_stream_starts = None
-
-        from app.utils.camera_helpers import calculate_stream_timestamp
-
-        for match in matches_to_update:
-            points = Point.query.filter_by(match=match.uuid).all()
-            stream_starts = {}
-            if match.camera_stream_starts:
-                try:
-                    stream_starts = json.loads(match.camera_stream_starts)
-                except:
-                    pass
-
-            for point in points:
-                if point.camera_index is not None:
-                    old_idx_str = str(point.camera_index)
-                    if old_idx_str in old_to_new_index_map:
-                        point.camera_index = int(old_to_new_index_map[old_idx_str])
-                    else:
-                        # Try to find by URL
-                        if point.camera_index < len(old_camera_urls):
-                            old_url = old_camera_urls[point.camera_index]
-                            try:
-                                new_idx = camera_urls.index(old_url)
-                                point.camera_index = new_idx
-                            except ValueError:
-                                point.camera_index = None
-                                point.stream_timestamp = None
-                        else:
-                            point.camera_index = None
-                            point.stream_timestamp = None
-
-                if point.camera_index is not None and point.stamp:
-                    camera_idx_str = str(point.camera_index)
-                    if camera_idx_str in stream_starts:
-                        new_ts = calculate_stream_timestamp(point.stamp, stream_starts[camera_idx_str])
-                        if new_ts is not None:
-                            point.stream_timestamp = new_ts
-
     if old_field_name != new_field_name:
+        matches_to_update = Match.query.filter_by(event=tournament_url, field=old_field_name).all()
         for match in matches_to_update:
             match.field = new_field_name
-
-    # Optional: set stream start times for cameras (e.g. from YouTube API or user input).
-    # Merge with existing: only update indices present in the request; never remove other keys.
-    stream_start_times = data.get("stream_start_times")
-    if stream_start_times is not None and isinstance(stream_start_times, list):
-        from app.utils.camera_helpers import calculate_stream_timestamp
-
-        for match in matches_to_update:
-            stream_starts = {}
-            if match.camera_stream_starts:
-                try:
-                    loaded = json.loads(match.camera_stream_starts)
-                    if isinstance(loaded, dict):
-                        stream_starts = dict(loaded)
-                except (TypeError, ValueError):
-                    pass
-            for idx, val in enumerate(stream_start_times):
-                if idx >= len(camera_urls):
-                    break
-                if val is not None and isinstance(val, str) and val.strip():
-                    stream_starts[str(idx)] = val.strip()
-                elif str(idx) in stream_starts:
-                    del stream_starts[str(idx)]
-            match.camera_stream_starts = json.dumps(stream_starts) if stream_starts else None
-        # Recompute point stream_timestamp for matches we updated
-        for match in matches_to_update:
-            points = Point.query.filter_by(match=match.uuid).all()
-            stream_starts = {}
-            if match.camera_stream_starts:
-                try:
-                    stream_starts = json.loads(match.camera_stream_starts)
-                except (TypeError, ValueError):
-                    pass
-            for point in points:
-                if point.camera_index is not None and point.stamp and str(point.camera_index) in stream_starts:
-                    new_ts = calculate_stream_timestamp(point.stamp, stream_starts[str(point.camera_index)])
-                    if new_ts is not None:
-                        point.stream_timestamp = new_ts
 
     db.session.commit()
     return jsonify({"success": True})
@@ -701,9 +582,6 @@ def create_field_api(tournament_url):
         return jsonify({"error": "Field already exists"}), 400
 
     field = Field(event=tournament_url, name=name)
-    camera_urls = [url for url in data.get("camera_urls", []) if url.strip()]
-    if camera_urls:
-        field.camera = json.dumps(camera_urls)
 
     db.session.add(field)
     db.session.commit()

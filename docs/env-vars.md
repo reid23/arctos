@@ -40,20 +40,6 @@ and fill only the values you need.
   `Team.id` slug values used to log in, not display names and not
   numeric database row ids; e.g. `alice:team-slug`.
 
-`RECORDING_ARTIFACTS_AFTER_UPLOAD`
-: (default `delete`) What to do with footage after upload. Allowed
-  values: `delete` or `s3`.
-
-`ENABLE_MANUAL_FOOTAGE_UPLOADS`
-: (default `false`) Set to `true` to show manual footage upload
-  controls.
-
-`RETRY_FINALIZATION_USER_IDS`
-: Colon-separated account ids/usernames that can see the retry video
-  finalization button. These are the `Player.id` or `Team.id` slug
-  values used to log in, not display names and not numeric database row
-  ids; e.g. `alice:team-slug`.
-
 
 ## Google Oauth2 info
 
@@ -71,36 +57,7 @@ same server is reachable on multiple public domains, add each domain's
 Cloud Console.
 
 
-## S3 Bucket Config
-
-`AWS_REGION`
-: AWS or S3-compatible region name; e.g. `us-east-1` or Backblaze B2
-  `us-west-002`.
-
-`AWS_ACCESS_KEY_ID`
-: S3-compatible access key id.
-
-`AWS_SECRET_ACCESS_KEY`
-: S3-compatible secret access key.
-
-`S3_ENDPOINT_URL`
-: Absolute S3-compatible endpoint URL. For Backblaze B2, this looks like
-  `https://s3.us-west-002.backblazeb2.com`.
-
-`S3_PRESIGNED_EXPIRY_SECONDS`
-: (default `3600`) Presigned URL lifetime in seconds.
-
-`S3_VIDEO_BUCKET`
-: Bucket name only, not an `s3://` URL.
-
-`S3_VIDEO_PREFIX`
-: Optional key prefix inside the bucket. Format: path-like string without
-  leading slash; e.g. `recordings/prod`.
-
 ## Youtube config
-
-`YOUTUBE_API_KEY`
-: its literally just the youtube api key what explanation do you want
 
 `YOUTUBE_UPLOAD_CLIENT_ID`
 : Optional OAuth client id for upload. If unset, Arctos uses

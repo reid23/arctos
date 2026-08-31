@@ -20,7 +20,7 @@ def test_update_tags_recomputes_schedule(app, client, test_db, tournament, playe
         db.session.flush()
 
         # Create field and tag
-        field = Field(event=tournament_url, name="Field 1", camera=None)
+        field = Field(event=tournament_url, name="Field 1")
         db.session.add(field)
         tag = Tag(event=tournament_url, name="PoolA", team=None)
         db.session.add(tag)

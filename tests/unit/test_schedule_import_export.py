@@ -20,8 +20,8 @@ def test_export_schedule_includes_tags_fields_and_matches(test_db, tournament):
     # Seed tags and fields
     tag1 = Tag(event=tournament_url, name="Pool A")
     tag2 = Tag(event=tournament_url, name="Pool B")
-    field1 = Field(event=tournament_url, name="Field 1", camera=None)
-    field2 = Field(event=tournament_url, name="Field 2", camera="[]")
+    field1 = Field(event=tournament_url, name="Field 1")
+    field2 = Field(event=tournament_url, name="Field 2")
     db.session.add_all([tag1, tag2, field1, field2])
 
     # Seed a simple match that uses tag and result references
@@ -157,8 +157,8 @@ def test_import_schedule_replaces_existing_objects_and_deletes_missing(test_db, 
     # Seed two tags/fields/matches; only one of each will appear in the TOML
     old_tag = Tag(event=tournament_url, name="Old Tag")
     keep_tag = Tag(event=tournament_url, name="Keep Tag")
-    old_field = Field(event=tournament_url, name="Old Field", camera=None)
-    keep_field = Field(event=tournament_url, name="Keep Field", camera=None)
+    old_field = Field(event=tournament_url, name="Old Field")
+    keep_field = Field(event=tournament_url, name="Keep Field")
     db.session.add_all([old_tag, keep_tag, old_field, keep_field])
     db.session.flush()
 
@@ -183,7 +183,7 @@ def test_import_schedule_replaces_existing_objects_and_deletes_missing(test_db, 
 
     # Build TOML that only contains keep_tag / keep_field / keep_match
     tags = [{"id": keep_tag.id, "name": keep_tag.name}]
-    fields = [{"id": keep_field.id, "name": keep_field.name, "camera": ""}]
+    fields = [{"id": keep_field.id, "name": keep_field.name}]
     matches = [
         {
             "uuid": keep_match.uuid,
@@ -225,8 +225,8 @@ def test_break_join_matches_can_have_duplicate_names_on_different_fields(test_db
     tournament_url = tournament.url
 
     # Create two fields
-    field1 = Field(event=tournament_url, name="Field 1", camera=None)
-    field2 = Field(event=tournament_url, name="Field 2", camera=None)
+    field1 = Field(event=tournament_url, name="Field 1")
+    field2 = Field(event=tournament_url, name="Field 2")
     db.session.add_all([field1, field2])
     db.session.commit()
 
@@ -283,8 +283,8 @@ def test_regular_matches_cannot_have_duplicate_names(test_db, tournament, app):
     tournament_url = tournament.url
 
     # Create a field
-    field1 = Field(event=tournament_url, name="Field 1", camera=None)
-    field2 = Field(event=tournament_url, name="Field 2", camera=None)
+    field1 = Field(event=tournament_url, name="Field 1")
+    field2 = Field(event=tournament_url, name="Field 2")
     db.session.add_all([field1, field2])
     db.session.commit()
 
@@ -325,8 +325,8 @@ def test_import_resolves_duplicate_match_names_by_field(test_db, tournament):
     tournament_url = tournament.url
 
     # Create fields
-    field1 = Field(event=tournament_url, name="Field 1", camera=None)
-    field2 = Field(event=tournament_url, name="Field 2", camera=None)
+    field1 = Field(event=tournament_url, name="Field 1")
+    field2 = Field(event=tournament_url, name="Field 2")
     db.session.add_all([field1, field2])
     db.session.commit()
 
@@ -412,7 +412,7 @@ def test_tags_with_spaces_work_correctly(test_db, tournament):
     tournament_url = tournament.url
 
     # Create a field
-    field = Field(event=tournament_url, name="Field 1", camera=None)
+    field = Field(event=tournament_url, name="Field 1")
     db.session.add(field)
 
     # Create a tag with spaces in the name

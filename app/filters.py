@@ -4,7 +4,7 @@ Jinja2 template filters for the tournament site.
 
 import json
 from datetime import timezone, timedelta
-from flask import Blueprint, url_for
+from flask import Blueprint
 from markupsafe import Markup
 from models import TeamRegistration
 from app.utils.helpers import can_head_ref_match
@@ -268,45 +268,6 @@ def to_utc(dt):
         return dt.replace(tzinfo=timezone.utc)
     # If already timezone-aware, convert to UTC
     return dt.astimezone(timezone.utc)
-
-
-@bp.app_template_filter("camera_url")
-def camera_url(tournament_url: str, field_name: str) -> str:
-    """Generate a camera recording URL with an embedded HMAC access key.
-
-    The URL points to the camera page for *field_name* in *tournament_url*
-    and includes a signed ``camera_key`` query parameter so that camera
-    operators can access the page without a login.
-
-    Args:
-        tournament_url: The URL slug of the tournament.
-        field_name: The name of the field (court) to record.
-
-    Returns:
-        The fully-qualified camera-page URL, or a fallback URL string if
-        URL generation fails.
-    """
-    if not tournament_url or not field_name:
-        return ""
-
-    try:
-        from flask_login.utils import urlencode
-        from app.utils.camera_helpers import generate_camera_key
-
-        access_key = generate_camera_key(tournament_url, field_name)
-
-        # Generate the full URL
-        base_url = url_for(
-            "tournaments.camera_page",
-            tournament_url=tournament_url,
-            field=urlencode(field_name),
-            camera_key=access_key,
-            _external=True,
-        )
-        return base_url
-    except Exception:
-        # Fallback if there's an error
-        return f"/{tournament_url}/camera?field={field_name}&key="
 
 
 @bp.app_template_filter("merge_refs")

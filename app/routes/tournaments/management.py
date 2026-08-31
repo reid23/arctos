@@ -11,14 +11,12 @@ from flask import (
 from flask_login import login_required, current_user
 
 from datetime import datetime
-import json
 
 from models import (
     Tournament,
     Match,
     Field,
     Tag,
-    Point,
     TeamRegistration,
     PlayerRegistration,
     Team,
@@ -39,11 +37,6 @@ from app.models.validators import URL_SLUG_ALLOWED_HINT, is_valid_url_slug
 from app.utils.decorators import require_tournament_organizer
 from app.utils.datetime_helpers import now_utc_naive
 
-
-from app.utils.camera_helpers import (
-    parse_camera_urls,
-    calculate_stream_timestamp,
-)
 
 from app.services.permission_service import PermissionService
 
@@ -481,17 +474,9 @@ def remove_to(tournament_url):
 @require_tournament_organizer("Only tournament organizers can access this page")
 def add_field(tournament_url):
     """Add a field to tournament."""
-    tournament = Tournament.query.filter_by(url=tournament_url).first_or_404()
+    Tournament.query.filter_by(url=tournament_url).first_or_404()
 
-    # Get camera URLs from form (camera[] array)
-    camera_urls = request.form.getlist("camera[]")
-    # Filter out empty values
-    camera_urls = [url.strip() for url in camera_urls if url.strip()]
-
-    # Store as JSON array
-    camera_value = json.dumps(camera_urls) if camera_urls else ""
-
-    field = Field(event=tournament_url, name=request.form["field_name"], camera=camera_value)
+    field = Field(event=tournament_url, name=request.form["field_name"])
 
     db.session.add(field)
     db.session.commit()
@@ -514,133 +499,17 @@ def update_field(tournament_url):
     # Update field name
     field.name = new_field_name
 
-    # Get camera URLs from form (camera[] array)
-    camera_urls = request.form.getlist("camera[]")
-    # Filter out empty values
-    camera_urls = [url.strip() for url in camera_urls if url.strip()]
-
-    # Get old camera URLs for comparison
-    old_camera_urls = []
-    if field.camera:
-        old_camera_urls = parse_camera_urls(field.camera)
-
-    # Store as JSON array
-    field.camera = json.dumps(camera_urls) if camera_urls else ""
-
-    # Get all matches that reference this field (for both name and camera updates)
-    # Use old field name if name changed, otherwise use current name
-    field_name_for_query = old_field_name if old_field_name != new_field_name else new_field_name
-    matches_to_update = Match.query.filter_by(event=tournament_url, field=field_name_for_query).all()
-
-    # If camera URLs changed, update matches and points that reference this field
-    camera_urls_changed = old_camera_urls != camera_urls
-    camera_update_count = 0
-    if camera_urls_changed:
-        # Build mapping from old index to new index based on URL matching
-        # This handles reordering, additions, and removals
-        old_to_new_index_map = {}
-        for new_idx, new_url in enumerate(camera_urls):
-            # Find if this URL existed in old list
-            try:
-                old_idx = old_camera_urls.index(new_url)
-                old_to_new_index_map[str(old_idx)] = str(new_idx)
-            except ValueError:
-                # New URL, no mapping needed
-                pass
-
-        # Update matches that reference this field
-        for match in matches_to_update:
-            if match.camera_stream_starts:
-                try:
-                    stream_starts = json.loads(match.camera_stream_starts)
-                    # Remap camera indices
-                    new_stream_starts = {}
-                    for old_idx_str, start_time in stream_starts.items():
-                        if old_idx_str in old_to_new_index_map:
-                            new_idx_str = old_to_new_index_map[old_idx_str]
-                            new_stream_starts[new_idx_str] = start_time
-                        # If old index not in map, camera was removed - don't include it
-                    match.camera_stream_starts = json.dumps(new_stream_starts) if new_stream_starts else None
-                    camera_update_count += 1
-                except (json.JSONDecodeError, TypeError) as e:
-                    print(f"Error updating camera_stream_starts for match {match.uuid}: {e}")
-                    # If parsing fails, clear it
-                    match.camera_stream_starts = None
-
-        # Update points that reference this field (via the match)
-        # Get all points for matches on this field
-        point_update_count = 0
-        for match in matches_to_update:
-            points = Point.query.filter_by(match=match.uuid).all()
-
-            # Get stream start times for this match
-            stream_starts = {}
-            if match.camera_stream_starts:
-                try:
-                    stream_starts = json.loads(match.camera_stream_starts)
-                except (json.JSONDecodeError, TypeError):
-                    pass
-
-            for point in points:
-                # First, handle camera_index remapping if needed
-                if point.camera_index is not None:
-                    old_idx_str = str(point.camera_index)
-                    if old_idx_str in old_to_new_index_map:
-                        # Remap to new index
-                        new_idx = int(old_to_new_index_map[old_idx_str])
-                        point.camera_index = new_idx
-                        point_update_count += 1
-                    else:
-                        # Camera at this index was removed - try to find matching URL
-                        # If we can't find it, set to None
-                        if point.camera_index < len(old_camera_urls):
-                            old_url = old_camera_urls[point.camera_index]
-                            try:
-                                new_idx = camera_urls.index(old_url)
-                                point.camera_index = new_idx
-                                point_update_count += 1
-                            except ValueError:
-                                # URL not found in new list, set to None
-                                point.camera_index = None
-                                point.stream_timestamp = None
-                                point_update_count += 1
-                        else:
-                            # Index was out of bounds, set to None
-                            point.camera_index = None
-                            point.stream_timestamp = None
-                            point_update_count += 1
-
-                # Recompute stream_timestamp for all points that have a camera_index and stamp
-                # This ensures timestamps are recalculated based on current stream start times
-                if point.camera_index is not None and point.stamp:
-                    camera_idx_str = str(point.camera_index)
-                    if camera_idx_str in stream_starts:
-                        stream_start_time = stream_starts[camera_idx_str]
-                        new_timestamp = calculate_stream_timestamp(point.stamp, stream_start_time)
-                        if new_timestamp is not None:
-                            point.stream_timestamp = new_timestamp
-                            point_update_count += 1
-
     # Propagate field name change to all matches that reference this field
     name_update_count = 0
     if old_field_name != new_field_name:
+        matches_to_update = Match.query.filter_by(event=tournament_url, field=old_field_name).all()
         for match in matches_to_update:
             match.field = new_field_name
             name_update_count += 1
 
-    # Generate success message
-    update_messages = []
-    if name_update_count > 0:
-        update_messages.append(f"Updated {name_update_count} match(es) to use the new field name")
-    if camera_urls_changed:
-        if camera_update_count > 0:
-            update_messages.append(f"Updated camera stream data for {camera_update_count} match(es)")
-        if point_update_count > 0:
-            update_messages.append(f"Updated camera indices for {point_update_count} point(s)")
-
     msg = (
-        f"Field updated successfully! {' '.join(update_messages)}."
-        if update_messages
+        f"Field updated successfully! Updated {name_update_count} match(es) to use the new field name."
+        if name_update_count > 0
         else "Field updated successfully!"
     )
     db.session.commit()

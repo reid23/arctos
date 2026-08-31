@@ -264,8 +264,6 @@ class Point(db.Model):
         stamp: Timestamp when the point was scored.
         end_stamp: Timestamp when the point ended (for duration tracking).
         footage: URL or path to the footage clip for this point.
-        camera_index: 0-based index into the field's camera array.
-        stream_timestamp: Offset in seconds from the camera stream start.
         length: Duration of this point as a :class:`~datetime.timedelta`.
         nstones: Number of stones scored (``STONES`` mode only).
         stones_at_start: Stones remaining at the start of this point.
@@ -283,8 +281,6 @@ class Point(db.Model):
     stamp = db.Column(db.DateTime, default=now_utc_naive)
     end_stamp = db.Column(db.DateTime)
     footage = db.Column(db.String(LONG_URL_LEN))
-    camera_index = db.Column(db.Integer)  # Index of camera in field's camera array (0-based)
-    stream_timestamp = db.Column(db.Float)  # Timestamp in seconds from stream start
     length = db.Column(db.Interval)
     nstones = db.Column(db.Integer)
     stones_at_start = db.Column(db.Integer)  # Stones remaining when this point started (for STONES matches)

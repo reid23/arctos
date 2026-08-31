@@ -19,7 +19,7 @@ def test_delete_match_with_all_children(app, client, test_db, tournament, player
         tournament_url = t.url
 
         db.session.add(TO(user_id=p.id, user_type="player", event=tournament_url))
-        field = Field(event=tournament_url, name="Field 1", camera=None)
+        field = Field(event=tournament_url, name="Field 1")
         db.session.add(field)
         db.session.flush()
 
@@ -68,7 +68,7 @@ def test_delete_match_closes_chain_gap(app, client, test_db, tournament, player)
         tournament_url = t.url
 
         db.session.add(TO(user_id=p.id, user_type="player", event=tournament_url))
-        db.session.add(Field(event=tournament_url, name="Field 1", camera=None))
+        db.session.add(Field(event=tournament_url, name="Field 1"))
 
         first = Match(
             name="A",
@@ -126,7 +126,7 @@ def test_delete_tournament_removes_match_children(app, client, test_db, tourname
         tournament_url = t.url
 
         db.session.add(TO(user_id=p.id, user_type="player", event=tournament_url))
-        field = Field(event=tournament_url, name="Field 1", camera=None)
+        field = Field(event=tournament_url, name="Field 1")
         db.session.add(field)
         db.session.flush()
 
