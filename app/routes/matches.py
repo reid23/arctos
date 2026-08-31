@@ -145,7 +145,7 @@ def scoreboard():
         if (
             m.status in (MatchStatus.COMPLETED, MatchStatus.SKIPPED)
             and m.completed_time
-            and m.schedule_type not in (ScheduleType.BREAK, ScheduleType.JOIN)
+            and m.schedule_type not in (ScheduleType.BREAK, ScheduleType.STATBREAK, ScheduleType.JOIN)
         ):
             prev_match = m
             break
@@ -153,7 +153,7 @@ def scoreboard():
     # Find next match (not started or ready to start) - skip BREAK/JOIN matches
     next_match = None
     for m in all_field_matches:
-        if m.schedule_type not in (ScheduleType.BREAK, ScheduleType.JOIN) and (
+        if m.schedule_type not in (ScheduleType.BREAK, ScheduleType.STATBREAK, ScheduleType.JOIN) and (
             m.status in (MatchStatus.NOT_STARTED, MatchStatus.IN_PROGRESS)
             or (m.status in (MatchStatus.COMPLETED, MatchStatus.SKIPPED) and not m.completed_time)
         ):
@@ -373,7 +373,7 @@ def scoreboard_state():
         if (
             m.status in (MatchStatus.COMPLETED, MatchStatus.SKIPPED)
             and m.completed_time
-            and m.schedule_type not in (ScheduleType.BREAK, ScheduleType.JOIN)
+            and m.schedule_type not in (ScheduleType.BREAK, ScheduleType.STATBREAK, ScheduleType.JOIN)
         ):
             prev_match = m
             break
@@ -381,7 +381,7 @@ def scoreboard_state():
     # Find next match (not started or ready to start) - skip BREAK/JOIN matches
     next_match = None
     for m in all_field_matches:
-        if m.schedule_type not in (ScheduleType.BREAK, ScheduleType.JOIN) and (
+        if m.schedule_type not in (ScheduleType.BREAK, ScheduleType.STATBREAK, ScheduleType.JOIN) and (
             m.status in (MatchStatus.NOT_STARTED, MatchStatus.IN_PROGRESS)
             or (m.status in (MatchStatus.COMPLETED, MatchStatus.SKIPPED) and not m.completed_time)
         ):

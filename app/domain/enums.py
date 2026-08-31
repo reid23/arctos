@@ -123,7 +123,12 @@ class ScheduleType(StrEnum):
             delays.
         FAST: Times are recalculated aggressively, scheduling matches as
             early as possible.
-        BREAK: A scheduled break (no match played).
+        BREAK: A scheduled break (no match played). Same-name breaks across
+            fields start together (their dependency edges are unioned).
+        STATBREAK: A statically scheduled break: the user supplies the start
+            time and the solver never moves it. Its status is derived from the
+            current time when read (COMPLETED once the start has passed),
+            never stored.
         JOIN: A synchronisation point that waits for multiple preceding
             matches to complete before advancing.
     """
@@ -132,7 +137,17 @@ class ScheduleType(StrEnum):
     SAFE = "SAFE"
     FAST = "FAST"
     BREAK = "BREAK"
+    STATBREAK = "STATBREAK"
     JOIN = "JOIN"
+
+
+#: Structural schedule types: not games (no team1/team2, no lifecycle chrome),
+#: unique per (name, event, field) rather than per (name, event).
+STRUCTURAL_SCHEDULE_TYPES: tuple[ScheduleType, ...] = (
+    ScheduleType.BREAK,
+    ScheduleType.STATBREAK,
+    ScheduleType.JOIN,
+)
 
 
 class SetType(StrEnum):
