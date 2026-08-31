@@ -114,8 +114,12 @@ file upload that the server pushes to YouTube. Jump-to-point uses
 
 ## Testing
 
-The pytest suite tests the backend only. There is no automated frontend
-test setup. Manual testing is via `dx serve`.
+Backend: `just test` / `just coverage-check`.
+
+Frontend: Pure Rust unit tests (time sync, filters, display helpers,
+…) run on the host target with the `just frontend-test` recipe.
+
+Browser/wasm stuff still has to be done manually with `dx serve`.
 
 ## When the SPA can't reach the backend
 

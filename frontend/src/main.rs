@@ -8,6 +8,7 @@ mod time_format;
 mod url_slug;
 
 mod stones_filter;
+mod time_sync;
 mod types;
 
 use dioxus::prelude::*;
