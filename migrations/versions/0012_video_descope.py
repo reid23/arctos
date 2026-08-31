@@ -31,16 +31,35 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    with op.batch_alter_table("fields") as batch:
-        batch.drop_column("camera")
-    with op.batch_alter_table("points") as batch:
-        batch.drop_column("camera_index")
-        batch.drop_column("stream_timestamp")
+    # SQLite batch_alter_table rebuilds via DROP TABLE; match_notes.point_id
+    # references points.uuid, so FK enforcement must be off for the swap
+    # (same pattern as 0003/0005/0006/0007).
+    bind = op.get_bind()
+    is_sqlite = bind.dialect.name == "sqlite"
+    if is_sqlite:
+        bind.exec_driver_sql("PRAGMA foreign_keys = OFF")
+    try:
+        with op.batch_alter_table("fields") as batch:
+            batch.drop_column("camera")
+        with op.batch_alter_table("points") as batch:
+            batch.drop_column("camera_index")
+            batch.drop_column("stream_timestamp")
+    finally:
+        if is_sqlite:
+            bind.exec_driver_sql("PRAGMA foreign_keys = ON")
 
 
 def downgrade() -> None:
-    with op.batch_alter_table("points") as batch:
-        batch.add_column(sa.Column("stream_timestamp", sa.Float(), nullable=True))
-        batch.add_column(sa.Column("camera_index", sa.Integer(), nullable=True))
-    with op.batch_alter_table("fields") as batch:
-        batch.add_column(sa.Column("camera", sa.Text(), nullable=True))
+    bind = op.get_bind()
+    is_sqlite = bind.dialect.name == "sqlite"
+    if is_sqlite:
+        bind.exec_driver_sql("PRAGMA foreign_keys = OFF")
+    try:
+        with op.batch_alter_table("points") as batch:
+            batch.add_column(sa.Column("stream_timestamp", sa.Float(), nullable=True))
+            batch.add_column(sa.Column("camera_index", sa.Integer(), nullable=True))
+        with op.batch_alter_table("fields") as batch:
+            batch.add_column(sa.Column("camera", sa.Text(), nullable=True))
+    finally:
+        if is_sqlite:
+            bind.exec_driver_sql("PRAGMA foreign_keys = ON")

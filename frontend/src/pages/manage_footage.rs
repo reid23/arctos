@@ -106,8 +106,12 @@ pub fn ManageFootage(url: String) -> Element {
                                                 td { "{cam.world_start_timestamp.clone().unwrap_or_else(|| \"-\".to_string())}" }
                                                 td {
                                                     if let Some(link) = &cam.link {
-                                                        let href = youtube_href(link);
-                                                        a { href: "{href}", target: "_blank", rel: "noopener noreferrer", "Open" }
+                                                        a {
+                                                            href: "{youtube_href(link)}",
+                                                            target: "_blank",
+                                                            rel: "noopener noreferrer",
+                                                            "Open"
+                                                        }
                                                     } else {
                                                         span { class: "text-muted", "-" }
                                                     }
