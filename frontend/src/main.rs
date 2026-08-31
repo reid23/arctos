@@ -77,8 +77,8 @@ enum Route {
     #[route("/:url")]
     TournamentHome { url: String },
 
-    #[route("/:url/schedule")]
-    Schedule { url: String },
+    #[route("/:url/schedule?:view&:team&:field")]
+    Schedule { url: String, view: String, team: String, field: String },
 
     #[route("/:url/results")]
     Results { url: String },

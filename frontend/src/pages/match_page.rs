@@ -1749,6 +1749,9 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                 Link {
                                     to: Route::Schedule {
                                         url: url.clone(),
+                                        view: String::new(),
+                                        team: String::new(),
+                                        field: String::new(),
                                     },
                                     "Schedule"
                                 }
@@ -1884,7 +1887,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                     }
                                 }
                                 div { class: "col-md-4",
-                                    div { class: "d-flex align-items-center mb-2",
+                                    div { class: "d-flex align-items-center mb-2 flex-wrap gap-1",
                                         strong { class: "me-2", "Status:" }
                                         span {
                                             id: "match-status",
@@ -1892,16 +1895,38 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                                 "badge {}",
                                                 match d.match_data.status.as_str() {
                                                     "COMPLETED" => "bg-success",
-                                                    "IN_PROGRESS" => "bg-warning",
-                                                    _ => "bg-secondary",
+                                                    "IN_PROGRESS" => "bg-warning text-dark",
+                                                    "READY_TO_START" => "bg-primary",
+                                                    "TIME_FINALIZED" => "bg-secondary",
+                                                    "SKIPPED" => "bg-dark",
+                                                    _ => "bg-info text-dark",
                                                 },
                                             ),
                                             {
                                                 match d.match_data.status.as_str() {
                                                     "COMPLETED" => "Completed",
                                                     "IN_PROGRESS" => "In Progress",
-                                                    _ => "Scheduled",
+                                                    "READY_TO_START" => "Ready to Start",
+                                                    "TIME_FINALIZED" => "Time Finalized",
+                                                    "NOT_STARTED" => "Not Started",
+                                                    "SKIPPED" => "Skipped",
+                                                    other => other,
                                                 }
+                                            }
+                                        }
+                                        details { class: "ms-1",
+                                            summary {
+                                                class: "small text-muted",
+                                                style: "cursor: pointer; list-style: none;",
+                                                "What does this mean?"
+                                            }
+                                            div { class: "small border rounded p-2 mt-1 bg-light",
+                                                p { class: "mb-1", strong { "Not Started" } " — Match exists; start time may still move (dynamic schedule)." }
+                                                p { class: "mb-1", strong { "Time Finalized" } " — Planned start is locked; waiting until it can be started." }
+                                                p { class: "mb-1", strong { "Ready to Start" } " — Dependencies done and teams/refs resolved; can be started." }
+                                                p { class: "mb-1", strong { "In Progress" } " — Match has been started." }
+                                                p { class: "mb-1", strong { "Completed" } " — Match finished and finalized." }
+                                                p { class: "mb-0", strong { "Skipped" } " — Match was skipped by the schedule rules." }
                                             }
                                         }
                                     }
@@ -1911,12 +1936,13 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                             span { "{field}" }
                                         }
                                     }
+                                    // Planned start is always the published contract of the day (#196).
                                     div { class: "d-flex align-items-center mb-2",
-                                        strong { class: "me-2", "Start:" }
+                                        strong { class: "me-2", "Planned start:" }
                                         span {
                                             {
                                                 match d.match_data
-                                                    .confirmed_start_time
+                                                    .scheduled_start_time
                                                     .as_deref()
                                                     .or(d.match_data.nominal_start_time.as_deref())
                                                 {
@@ -1924,6 +1950,39 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                                     Some(t) => format_match_display_local(t),
                                                 }
                                             }
+                                        }
+                                    }
+                                    // SAFE only: also show start deadline (live nominal). STATIC/FAST: planned only (#196).
+                                    {
+                                        let is_safe = d.match_data.schedule_type.as_deref() == Some("SAFE");
+                                        let planned = d.match_data.scheduled_start_time.as_deref();
+                                        let nominal = d.match_data.nominal_start_time.as_deref();
+                                        let show_deadline = is_safe && nominal.is_some();
+                                        rsx! {
+                                            if show_deadline {
+                                                div {
+                                                    class: "d-flex align-items-center mb-2",
+                                                    title: "For SAFE matches this is the live start deadline from the scheduler (may move if earlier games run long).",
+                                                    strong { class: "me-2", "Start deadline:" }
+                                                    span {
+                                                        {
+                                                            // Prefer showing nominal; if identical to planned the label still clarifies semantics.
+                                                            let t = nominal.or(planned).unwrap_or("");
+                                                            if t.is_empty() {
+                                                                "TBA".to_string()
+                                                            } else {
+                                                                format_match_display_local(t)
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if let Some(t) = d.match_data.confirmed_start_time.as_deref() {
+                                        div { class: "d-flex align-items-center mb-2",
+                                            strong { class: "me-2", "Actual start:" }
+                                            span { "{format_match_display_local(t)}" }
                                         }
                                     }
                                     div { class: "d-flex align-items-center mb-2",
