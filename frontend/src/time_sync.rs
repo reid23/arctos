@@ -4,13 +4,12 @@
 //! scoreboard need to agree on the server's clock:
 //!
 //! * the [`BayesianOffsetFilter`](crate::stones_filter::BayesianOffsetFilter)
-//!   estimate of the clock offset,
+//!   estimate of the clock offset (the single source of truth for
+//!   `server_now`),
 //! * a best-of-N, RTT-weighted probe loop that coasts when confident,
-//! * two persisted manual corrections — a **clock offset** (shifts this
-//!   device's whole notion of server time, affecting playback *and* the live
-//!   stone counters) and an **audio offset** (signed timing correction that
-//!   shifts only when sound is scheduled: positive plays later, negative
-//!   earlier), shared across tabs via `localStorage`,
+//! * a persisted **audio offset** (signed timing correction for playback
+//!   scheduling only) and an optional **manual lock** on the filter offset
+//!   (set by the calibration slider; cleared by Reset Sync),
 //! * a corrected `server_now()` and a `quality()` readout for the UI and the
 //!   run-match staleness gate.
 //!
@@ -28,6 +27,10 @@ pub const PROBES_PER_ROUND: usize = 3;
 /// localStorage keys (namespaced, following the `record.rs` convention).
 pub const CLOCK_OFFSET_KEY: &str = "arctos_stones_clock_offset_ms";
 pub const AUDIO_DELAY_KEY: &str = "arctos_stones_audio_delay_ms";
+pub const OFFSET_LOCKED_KEY: &str = "arctos_stones_offset_locked";
+
+/// Variance pinned while the offset is manually locked (below the coast gate).
+const LOCKED_VARIANCE_MS2: f64 = CONVERGED_VARIANCE_MS2 * 0.5;
 
 /// One round-trip probe result. Times are unix seconds; `server_time` is the
 /// server's clock at the moment it replied.
@@ -78,28 +81,30 @@ pub fn should_probe(variance_ms2: f64) -> bool {
     variance_ms2 >= CONVERGED_VARIANCE_MS2
 }
 
-/// The two persisted manual corrections. Milliseconds.
+/// Persisted calibration knobs. The clock offset itself lives in the filter;
+/// when `offset_locked`, probing stops and `locked_offset_ms` is restored into
+/// the filter on load / cross-tab sync.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Calibration {
-    pub clock_offset_ms: f64,
     pub audio_delay_ms: f64,
+    pub offset_locked: bool,
+    pub locked_offset_ms: f64,
 }
 
 impl Default for Calibration {
     fn default() -> Self {
         Self {
-            clock_offset_ms: 0.0,
             audio_delay_ms: 0.0,
+            offset_locked: false,
+            locked_offset_ms: 0.0,
         }
     }
 }
 
 impl Calibration {
-    /// Corrected server time in seconds, given the raw device clock (seconds)
-    /// and the filter's estimated offset (ms). Folds in the manual clock
-    /// offset — so this shifts both playback and the live stone counters.
+    /// Corrected server time in seconds from the device clock and filter offset.
     pub fn server_now_secs(&self, raw_now_secs: f64, estimated_offset_ms: f64) -> f64 {
-        raw_now_secs + (estimated_offset_ms + self.clock_offset_ms) / 1000.0
+        raw_now_secs + estimated_offset_ms / 1000.0
     }
 
     /// Manual audio offset in seconds (playback scheduling only; does not
@@ -113,12 +118,19 @@ impl Calibration {
 /// Sync-quality snapshot for the stats UI and the run-match gate.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SyncQuality {
-    /// Raw filter estimate of the client→server offset (ms). Display-only; the
-    /// manual clock-offset knob is intentionally excluded.
+    /// Filter offset (ms) — same value the clock-offset slider edits.
     pub offset_ms: f64,
     pub variance_ms2: f64,
     pub rtt_ms: Option<f64>,
     pub converged: bool,
+}
+
+/// Snapshot for rolling back a cancelled calibration walkthrough.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SyncSnapshot {
+    pub calibration: Calibration,
+    pub mean_ms: f64,
+    pub variance_ms2: f64,
 }
 
 // ---------------------------------------------------------------------------
@@ -173,10 +185,56 @@ impl TimeSync {
         *self.calibration.read()
     }
 
-    /// Update the clock-offset knob and persist it (and the calibration
-    /// metadata) so other tabs pick it up.
-    pub fn set_clock_offset_ms(&mut self, value: f64) {
-        self.calibration.write().clock_offset_ms = value;
+    pub fn snapshot(&self) -> SyncSnapshot {
+        let filter = self.filter.read();
+        SyncSnapshot {
+            calibration: *self.calibration.read(),
+            mean_ms: filter.get_mean_ms(),
+            variance_ms2: filter.get_variance_ms2(),
+        }
+    }
+
+    pub fn restore_snapshot(&mut self, snap: SyncSnapshot) {
+        *self.calibration.write() = snap.calibration;
+        {
+            let mut filter = self.filter.write();
+            filter.mean_ms = snap.mean_ms;
+            filter.variance_ms2 = snap.variance_ms2;
+        }
+        self.persist();
+    }
+
+    /// Set the filter offset and lock it (default after manual calibration).
+    pub fn set_offset_ms(&mut self, value: f64) {
+        {
+            let mut filter = self.filter.write();
+            filter.mean_ms = value;
+            filter.variance_ms2 = LOCKED_VARIANCE_MS2;
+        }
+        {
+            let mut cal = self.calibration.write();
+            cal.offset_locked = true;
+            cal.locked_offset_ms = value;
+        }
+        self.persist();
+    }
+
+    /// Lock or unlock the offset. Unlocking resumes probing from the current mean.
+    pub fn set_offset_locked(&mut self, locked: bool) {
+        if locked {
+            let mean = self.filter.read().get_mean_ms();
+            self.filter.write().variance_ms2 = LOCKED_VARIANCE_MS2;
+            {
+                let mut cal = self.calibration.write();
+                cal.offset_locked = true;
+                cal.locked_offset_ms = mean;
+            }
+        } else {
+            self.calibration.write().offset_locked = false;
+            if self.filter.read().get_variance_ms2() < CONVERGED_VARIANCE_MS2 {
+                self.filter.write().variance_ms2 = CONVERGED_VARIANCE_MS2;
+            }
+        }
         self.persist();
     }
 
@@ -186,10 +244,26 @@ impl TimeSync {
         self.persist();
     }
 
-    /// Reset the estimator and force an immediate probe next tick
-    /// (the re-sync button).
-    pub fn reping(&mut self) {
+    /// Unlock, zero both knobs, and reset the estimator (Reset Sync).
+    pub fn reset_sync(&mut self) {
+        {
+            let mut cal = self.calibration.write();
+            cal.offset_locked = false;
+            cal.locked_offset_ms = 0.0;
+            cal.audio_delay_ms = 0.0;
+        }
         self.filter.write().reset();
+        self.persist();
+    }
+
+    /// Unlock and reset the estimator for step-2 re-measurement (keeps audio delay).
+    pub fn begin_clock_calibration(&mut self) {
+        {
+            let mut cal = self.calibration.write();
+            cal.offset_locked = false;
+        }
+        self.filter.write().reset();
+        self.persist();
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -217,7 +291,14 @@ fn raw_now_secs() -> f64 {
 /// cross-tab `storage` listener. Safe to call from each page that needs time;
 /// each gets its own estimator that converges to the same server clock.
 pub fn use_time_sync() -> TimeSync {
-    let filter = use_signal(BayesianOffsetFilter::default);
+    let filter = use_signal(|| {
+        let cal = load_calibration();
+        let mut f = BayesianOffsetFilter::default();
+        if cal.offset_locked {
+            apply_locked_offset(&mut f, cal.locked_offset_ms);
+        }
+        f
+    });
     let calibration = use_signal(load_calibration);
     let last_rtt_ms = use_signal(|| Option::<f64>::None);
     let handle = TimeSync {
@@ -230,16 +311,20 @@ pub fn use_time_sync() -> TimeSync {
     {
         let mut filter = filter;
         let mut last_rtt_ms = last_rtt_ms;
+        let calibration = calibration;
         use_effect(move || {
             spawn(async move {
                 loop {
-                    filter.write().predict();
-                    if should_probe(filter.read().get_variance_ms2()) {
-                        if let Some(best) = probe_lowest_rtt().await {
-                            let rtt_ms = best.rtt_secs() * 1000.0;
-                            let variance = measurement_variance_ms2(rtt_ms);
-                            filter.write().observe(best.offset_ms(), variance);
-                            last_rtt_ms.set(Some(rtt_ms));
+                    let locked = calibration.read().offset_locked;
+                    if !locked {
+                        filter.write().predict();
+                        if should_probe(filter.read().get_variance_ms2()) {
+                            if let Some(best) = probe_lowest_rtt().await {
+                                let rtt_ms = best.rtt_secs() * 1000.0;
+                                let variance = measurement_variance_ms2(rtt_ms);
+                                filter.write().observe(best.offset_ms(), variance);
+                                last_rtt_ms.set(Some(rtt_ms));
+                            }
                         }
                     }
                     gloo_timers::future::TimeoutFuture::new(TICK_INTERVAL_MS).await;
@@ -247,12 +332,11 @@ pub fn use_time_sync() -> TimeSync {
             });
         });
 
-        let calibration = calibration;
-        // Keep the listener in hook state so Drop removes it on unmount
-        // (avoids leaking a forgotten Closure + stale Signal per remount).
-        // Rc because use_hook's State must be Clone; the guard itself is not.
         let _storage_listener = use_hook(|| {
-            std::rc::Rc::new(std::cell::RefCell::new(install_storage_listener(calibration)))
+            std::rc::Rc::new(std::cell::RefCell::new(install_storage_listener(
+                calibration,
+                filter,
+            )))
         });
     }
 
@@ -286,6 +370,11 @@ async fn single_probe() -> Option<Probe> {
 
 // --- localStorage-backed calibration ---------------------------------------
 
+fn apply_locked_offset(filter: &mut BayesianOffsetFilter, locked_offset_ms: f64) {
+    filter.mean_ms = locked_offset_ms;
+    filter.variance_ms2 = LOCKED_VARIANCE_MS2;
+}
+
 #[cfg(target_arch = "wasm32")]
 fn local_storage() -> Option<web_sys::Storage> {
     web_sys::window().and_then(|w| w.local_storage().ok().flatten())
@@ -301,13 +390,29 @@ fn read_ms(storage: &web_sys::Storage, key: &str) -> Option<f64> {
 }
 
 #[cfg(target_arch = "wasm32")]
+fn read_locked(storage: &web_sys::Storage) -> bool {
+    storage
+        .get_item(OFFSET_LOCKED_KEY)
+        .ok()
+        .flatten()
+        .map(|s| s == "1" || s.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+#[cfg(target_arch = "wasm32")]
 fn load_calibration() -> Calibration {
     let Some(storage) = local_storage() else {
         return Calibration::default();
     };
+    let offset_locked = read_locked(&storage);
     Calibration {
-        clock_offset_ms: read_ms(&storage, CLOCK_OFFSET_KEY).unwrap_or(0.0),
         audio_delay_ms: read_ms(&storage, AUDIO_DELAY_KEY).unwrap_or(0.0),
+        offset_locked,
+        locked_offset_ms: if offset_locked {
+            read_ms(&storage, CLOCK_OFFSET_KEY).unwrap_or(0.0)
+        } else {
+            0.0
+        },
     }
 }
 
@@ -316,20 +421,22 @@ fn load_calibration() -> Calibration {
     Calibration::default()
 }
 
-/// Persist both knobs so other tabs can pick up the change.
+/// Persist knobs so other tabs can pick up the change.
 #[cfg(target_arch = "wasm32")]
 fn write_calibration(cal: &Calibration) {
     if let Some(storage) = local_storage() {
-        let _ = storage.set_item(CLOCK_OFFSET_KEY, &cal.clock_offset_ms.to_string());
         let _ = storage.set_item(AUDIO_DELAY_KEY, &cal.audio_delay_ms.to_string());
+        let _ = storage.set_item(OFFSET_LOCKED_KEY, if cal.offset_locked { "1" } else { "0" });
+        let _ = storage.set_item(CLOCK_OFFSET_KEY, &cal.locked_offset_ms.to_string());
     }
 }
 
-/// Reload the calibration signal whenever another tab writes one of our
-/// calibration keys (cross-tab consistency). Returns a guard that removes the
-/// listener when dropped — store it in hook state so remounts don't leak.
+/// Reload calibration (and locked filter state) when another tab writes our keys.
 #[cfg(target_arch = "wasm32")]
-fn install_storage_listener(mut calibration: Signal<Calibration>) -> Option<StorageListenerGuard> {
+fn install_storage_listener(
+    mut calibration: Signal<Calibration>,
+    mut filter: Signal<BayesianOffsetFilter>,
+) -> Option<StorageListenerGuard> {
     use wasm_bindgen::closure::Closure;
     use wasm_bindgen::JsCast;
 
@@ -337,11 +444,21 @@ fn install_storage_listener(mut calibration: Signal<Calibration>) -> Option<Stor
     let closure = Closure::wrap(Box::new(move |event: web_sys::StorageEvent| {
         let key = event.key();
         let touches_calibration = match key.as_deref() {
-            Some(k) => k == CLOCK_OFFSET_KEY || k == AUDIO_DELAY_KEY,
+            Some(k) => {
+                k == CLOCK_OFFSET_KEY || k == AUDIO_DELAY_KEY || k == OFFSET_LOCKED_KEY
+            }
             None => true,
         };
-        if touches_calibration {
-            calibration.set(load_calibration());
+        if !touches_calibration {
+            return;
+        }
+        let was_locked = calibration.read().offset_locked;
+        let cal = load_calibration();
+        calibration.set(cal);
+        if cal.offset_locked {
+            apply_locked_offset(&mut filter.write(), cal.locked_offset_ms);
+        } else if was_locked {
+            filter.write().reset();
         }
     }) as Box<dyn FnMut(web_sys::StorageEvent)>);
     window
@@ -454,22 +571,33 @@ mod tests {
     }
 
     #[test]
-    fn server_now_folds_in_clock_offset_only() {
-        let cal = Calibration { clock_offset_ms: 40.0, audio_delay_ms: 250.0 };
-        // raw 1000.0s, estimated offset 60ms, clock offset 40ms → +100ms.
-        assert_close(cal.server_now_secs(1000.0, 60.0), 1000.1, 1e-9);
-        // audio delay must not leak into server_now.
-        let cal_no_audio = Calibration { clock_offset_ms: 40.0, audio_delay_ms: 0.0 };
+    fn server_now_uses_estimated_offset_only() {
+        let cal = Calibration {
+            audio_delay_ms: 250.0,
+            offset_locked: false,
+            locked_offset_ms: 40.0,
+        };
+        // raw 1000.0s, estimated offset 100ms → +100ms. Locked field ignored here.
+        assert_close(cal.server_now_secs(1000.0, 100.0), 1000.1, 1e-9);
+        let cal_no_audio = Calibration {
+            audio_delay_ms: 0.0,
+            offset_locked: false,
+            locked_offset_ms: 0.0,
+        };
         assert_close(
-            cal.server_now_secs(1000.0, 60.0),
-            cal_no_audio.server_now_secs(1000.0, 60.0),
+            cal.server_now_secs(1000.0, 100.0),
+            cal_no_audio.server_now_secs(1000.0, 100.0),
             1e-12,
         );
     }
 
     #[test]
     fn audio_delay_secs_converts_ms() {
-        let cal = Calibration { clock_offset_ms: 0.0, audio_delay_ms: 250.0 };
+        let cal = Calibration {
+            audio_delay_ms: 250.0,
+            offset_locked: false,
+            locked_offset_ms: 0.0,
+        };
         assert_close(cal.audio_delay_secs(), 0.25, 1e-12);
     }
 
