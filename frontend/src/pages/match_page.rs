@@ -1837,7 +1837,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                             }
                                             div { class: "small border rounded p-2 mt-1 bg-light",
                                                 p { class: "mb-1", strong { "Not Started" } " — Match exists; start time may still move (dynamic schedule)." }
-                                                p { class: "mb-1", strong { "Time Finalized" } " — Planned start is locked; waiting until it can be started." }
+                                                p { class: "mb-1", strong { "Time Finalized" } " — Live start time is locked; waiting until it can be started." }
                                                 p { class: "mb-1", strong { "Ready to Start" } " — Dependencies done and teams/refs resolved; can be started." }
                                                 p { class: "mb-1", strong { "In Progress" } " — Match has been started." }
                                                 p { class: "mb-1", strong { "Completed" } " — Match finished and finalized." }

@@ -15,6 +15,43 @@ use std::rc::Rc;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast as _;
 
+#[cfg(target_arch = "wasm32")]
+struct PinchZoomGuard {
+    el_id: String,
+    on_start: wasm_bindgen::closure::Closure<dyn FnMut(web_sys::TouchEvent)>,
+    on_move: wasm_bindgen::closure::Closure<dyn FnMut(web_sys::TouchEvent)>,
+    on_end: wasm_bindgen::closure::Closure<dyn FnMut(web_sys::TouchEvent)>,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Drop for PinchZoomGuard {
+    fn drop(&mut self) {
+        use wasm_bindgen::JsCast;
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let Some(doc) = window.document() else {
+            return;
+        };
+        let Some(el) = doc.get_element_by_id(&self.el_id) else {
+            return;
+        };
+        let _ = el.remove_event_listener_with_callback(
+            "touchstart",
+            self.on_start.as_ref().unchecked_ref(),
+        );
+        let _ = el.remove_event_listener_with_callback(
+            "touchmove",
+            self.on_move.as_ref().unchecked_ref(),
+        );
+        let _ = el.remove_event_listener_with_callback(
+            "touchend",
+            self.on_end.as_ref().unchecked_ref(),
+        );
+        let _ = el.remove_attribute("data-pinch-zoom");
+    }
+}
+
 /// CSS for schedule page: timeline layout and team-token inputs (used by modals in both table and timeline view).
 const SCHEDULE_PAGE_CSS: &str = include_str!("schedule_timeline.css");
 const SCHEDULE_REFRESH_INTERVAL_MS: u32 = 60_000;
@@ -930,6 +967,7 @@ pub fn Schedule(url: String, view: String, team: String, field: String) -> Eleme
                                             class: "form-select form-select-sm d-inline-block w-auto",
                                             value: "{selected_field}",
                                             onchange: move |e| selected_field.set(e.value()),
+                                            onkeydown: move |ev: Event<KeyboardData>| ev.stop_propagation(),
                                             // "By field" requires a concrete field; the grid/table allow "all".
                                             if view_mode() != "field" {
                                                 option { value: "all", "All Fields" }
@@ -959,6 +997,7 @@ pub fn Schedule(url: String, view: String, team: String, field: String) -> Eleme
                                                     class: "form-select form-select-sm d-inline-block w-auto",
                                                     // Controlled value + per-option selected so default team shows correctly.
                                                     value: "{selected}",
+                                                    onkeydown: move |ev: Event<KeyboardData>| ev.stop_propagation(),
                                                     onchange: {
                                                         let u = url.clone();
                                                         move |e| {
@@ -2394,9 +2433,6 @@ fn TableView(
         .matches
         .iter()
         .filter(|m| {
-            if m.status == "SKIPPED" {
-                return false;
-            }
             if selected_field != "all" {
                 if let Some(f_name) = &m.field {
                     let field_id = data
@@ -2684,7 +2720,7 @@ struct TimelineEvent {
     team1_photo: Option<String>,
     team2_photo: Option<String>,
     refs_display: String, // ref teams as pseudonyms (comma-separated)
-    refs_list: Vec<(String, Option<String>)>, // (display_name, profile_photo) for refs
+    refs_list: Vec<(String, Option<String>, u8)>, // (display_name, profile_photo, kind)
     start_time: chrono::NaiveDateTime,
     end_time: chrono::NaiveDateTime,
     length_min: i64,
@@ -2745,7 +2781,7 @@ fn TimelineEventCard(
     };
     let url_clone = tournament_url.clone();
     let event_class = format!(
-        "schedule-timeline-event{}{}{}",
+        "schedule-timeline-event{}{}{}{}",
         if event.highlight_playing {
             " schedule-timeline-event--highlight-playing"
         } else {
@@ -2760,6 +2796,11 @@ fn TimelineEventCard(
             " schedule-timeline-event--structural"
         } else {
             ""
+        },
+        if event.status == "SKIPPED" {
+            " schedule-timeline-event--skipped"
+        } else {
+            ""
         }
     );
     let (t1_kind, t1_label) = team_ref_display(&event.team1);
@@ -2767,10 +2808,7 @@ fn TimelineEventCard(
     let event_refs: Vec<(String, Option<String>, u8, String)> = event
         .refs_list
         .iter()
-        .map(|(d, p)| {
-            let (k, l) = team_ref_display(d);
-            (d.clone(), p.clone(), k, l)
-        })
+        .map(|(d, p, k)| (d.clone(), p.clone(), *k, d.clone()))
         .collect();
     let edit_locked = matches!(
         event.status.as_str(),
@@ -3021,6 +3059,15 @@ fn ScheduleTimeline(
     };
     // After a zoom, apply this scrollTop once layout has the new slot-height.
     let mut pending_scroll_top = use_signal(|| None::<i32>);
+    #[cfg(target_arch = "wasm32")]
+    let mut pinch_guard = use_signal(|| None::<PinchZoomGuard>);
+    #[cfg(target_arch = "wasm32")]
+    {
+        let mut pinch_guard = pinch_guard;
+        use_drop(move || {
+            pinch_guard.set(None);
+        });
+    }
     {
         let scroll_el_id = scroll_el_id;
         use_effect(move || {
@@ -3064,17 +3111,41 @@ fn ScheduleTimeline(
     }
     let _ = now_tick();
 
-    // All match dates in local time (unique, sorted) for prev/next navigation
-    // Use plan times for day navigation so the calendar of the day stays stable.
+    // Dates for prev/next nav: active view only (team/field filters), including
+    // both plan and display dates so cross-midnight blocks stay reachable.
     let dates_with_matches: Vec<chrono::NaiveDate> = {
-        let mut dates: Vec<chrono::NaiveDate> = data
-            .matches
-            .iter()
-            .filter(|m| m.status != "SKIPPED")
-            .filter_map(|m| plan_start_str(m).or_else(|| actual_start_str(m)))
-            .filter_map(|s| parse_schedule_time_to_local(s, tz_offset_minutes))
-            .map(|dt| dt.date())
-            .collect();
+        let mut dates: Vec<chrono::NaiveDate> = Vec::new();
+        for m in data.matches.iter() {
+            if m.schedule_type.as_deref() == Some("JOIN") {
+                continue;
+            }
+            if team_view {
+                if is_structural_match(m)
+                    || !match_involves_team(m, &focus_team_id, &data.team_options)
+                {
+                    continue;
+                }
+            } else if selected_field != "all" {
+                let Some(field_name) = m.field.as_ref() else {
+                    continue;
+                };
+                let Some(field) = data.fields.iter().find(|f| &f.name == field_name) else {
+                    continue;
+                };
+                if field.id.to_string() != selected_field {
+                    continue;
+                }
+            }
+            if let Some(s) = plan_start_str(m).or_else(|| actual_start_str(m)) {
+                if let Some(dt) = parse_schedule_time_to_local(s, tz_offset_minutes) {
+                    dates.push(dt.date());
+                }
+            }
+            if let Some((start_utc, _)) = display_interval_utc(m, show_as_happened) {
+                let start_dt = start_utc + chrono::Duration::minutes(tz_offset_minutes);
+                dates.push(start_dt.date());
+            }
+        }
         dates.sort();
         dates.dedup();
         dates
@@ -3092,6 +3163,21 @@ fn ScheduleTimeline(
             dates_with_matches.first().copied().unwrap_or(today_local)
         }
     });
+
+    // When filters change the day list, keep the cursor on a day that still has events.
+    {
+        let dates = dates_with_matches.clone();
+        use_effect(move || {
+            let current = visible_date_signal();
+            if !dates.is_empty() && !dates.contains(&current) {
+                if dates.contains(&today_local) {
+                    visible_date_signal.set(today_local);
+                } else if let Some(&first) = dates.first() {
+                    visible_date_signal.set(first);
+                }
+            }
+        });
+    }
 
     // React to keyboard nav (n/p/t) from Schedule
     let dates_for_nav = dates_with_matches.clone();
@@ -3148,7 +3234,6 @@ fn ScheduleTimeline(
                     focus_team_id.clone()
                 }
             }),
-        camera_urls: vec![],
     };
     let visible_fields: Vec<&FieldSetupData> = if team_view {
         vec![&team_view_field]
@@ -3181,7 +3266,6 @@ fn ScheduleTimeline(
     let mut timeline_events: Vec<TimelineEvent> = data
         .matches
         .iter()
-        .filter(|m| m.status != "SKIPPED")
         .filter(|m| m.schedule_type.as_deref() != Some("JOIN"))
         .filter(|m| {
             if !team_view {
@@ -3257,32 +3341,31 @@ fn ScheduleTimeline(
             // Team profile photos
             let team1_photo = opt1.and_then(|o| o.profile_photo.clone());
             let team2_photo = opt2.and_then(|o| o.profile_photo.clone());
-            // Refs: per-slot resolved id else initial (#197).
+            // Refs: per-slot resolved id else initial (#197). Keep kind so tag/link
+            // tokens still render as tags after the label is stripped of `tag::`.
             let ref_toks = refs_tokens(m);
-            let refs_list: Vec<(String, Option<String>)> = ref_toks
+            let refs_list: Vec<(String, Option<String>, u8)> = ref_toks
                 .iter()
                 .map(|token| {
-                    if team_view {
-                        let (label, photo, _) = resolve_team_display(token, &data.team_options);
-                        (label, photo)
+                    if let Some(opt) = data.team_options.iter().find(|o| &o.id == token) {
+                        let display = if team_view {
+                            team_full_label(opt)
+                        } else {
+                            short_or_truncate(
+                                opt.pseudonym.as_deref().unwrap_or(opt.id.as_str()),
+                                opt.shortname.as_deref(),
+                            )
+                        };
+                        (display, opt.profile_photo.clone(), 0)
                     } else {
-                        let opt = data.team_options.iter().find(|o| &o.id == token);
-                        let display = opt
-                            .map(|o| {
-                                short_or_truncate(
-                                    o.pseudonym.as_deref().unwrap_or(o.id.as_str()),
-                                    o.shortname.as_deref(),
-                                )
-                            })
-                            .unwrap_or_else(|| token.clone());
-                        let photo = opt.and_then(|o| o.profile_photo.clone());
-                        (display, photo)
+                        let (kind, label) = team_ref_display(token);
+                        (label, None, kind)
                     }
                 })
                 .collect();
             let refs_display = refs_list
                 .iter()
-                .map(|(d, _)| d.as_str())
+                .map(|(d, _, _)| d.as_str())
                 .collect::<Vec<_>>()
                 .join(", ");
             let refs_display_raw = ref_toks
@@ -3410,7 +3493,6 @@ fn ScheduleTimeline(
                 e.field_id == field.id
                     && e.start_time.date() == current_visible_date
                     && e.schedule_type.as_deref() != Some("JOIN")
-                    && e.status != "SKIPPED"
             })
             .map(|(i, _)| i)
             .collect();
@@ -3843,9 +3925,12 @@ fn ScheduleTimeline(
                                         "touchend",
                                         on_touch_end.as_ref().unchecked_ref(),
                                     );
-                                    on_touch_start.forget();
-                                    on_touch_move.forget();
-                                    on_touch_end.forget();
+                                    pinch_guard.set(Some(PinchZoomGuard {
+                                        el_id: scroll_id.clone(),
+                                        on_start: on_touch_start,
+                                        on_move: on_touch_move,
+                                        on_end: on_touch_end,
+                                    }));
                                 }
                             }
                         }
@@ -3926,7 +4011,6 @@ fn ScheduleTimeline(
                         .iter()
                         .filter(|e| e.start_time.date() == current_visible_date)
                         .filter(|e| e.schedule_type.as_deref() != Some("JOIN"))
-                        .filter(|e| e.status != "SKIPPED")
                         .filter_map(|e| {
                             let col = *field_index.get(&e.field_id)?;
                             let hour = e.start_time.hour();
@@ -4476,6 +4560,7 @@ fn status_color_and_label(status: &str) -> (String, String) {
         "IN_PROGRESS" => "#ffd666",
         "TIME_FINALIZED" => "#a5adb5",
         "READY_TO_START" => "#82b1ff",
+        "SKIPPED" => "#adb5bd",
         _ => "#6cc5d4",
     };
     let label: String = match status {
@@ -4484,6 +4569,7 @@ fn status_color_and_label(status: &str) -> (String, String) {
         "TIME_FINALIZED" => "Time Finalized".to_string(),
         "NOT_STARTED" => "Not Started".to_string(),
         "READY_TO_START" => "Ready to Start".to_string(),
+        "SKIPPED" => "Skipped".to_string(),
         other => {
             let mut s = other.replace('_', " ").to_lowercase();
             if let Some(first) = s.get_mut(0..1) {

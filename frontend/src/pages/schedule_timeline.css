@@ -384,6 +384,18 @@
     box-shadow: none;
 }
 
+.schedule-timeline-event--skipped {
+    opacity: 0.55;
+    background: repeating-linear-gradient(
+        -45deg,
+        #f8f9fa,
+        #f8f9fa 6px,
+        #e9ecef 6px,
+        #e9ecef 12px
+    );
+    border-style: dashed;
+}
+
 /* Team view: single wide column, full opponent names */
 .schedule-timeline--team-view {
     grid-template-columns: var(--time-col-width, 80px) minmax(0, 1fr);
