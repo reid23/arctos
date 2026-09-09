@@ -8,6 +8,7 @@ import pytest
 import sqlalchemy as sa
 
 from app.error_values import Err, Ok
+from app.domain.enums import MatchStatus
 from app.services.schedule_import_export_service import ScheduleImportExportService
 from app.utils.toml_helpers import write_toml_schedule
 from models import Field, Match, Tag, db
@@ -603,10 +604,12 @@ def test_import_rewrites_unknown_team_tokens_to_tag_references(test_db, tourname
     assert m1.team1_initial == "tag::Mystery Team"
     assert m1.team2_initial == "known-team"  # registered team untouched
     assert get_match_refs_initial_csv(m1) == "tag::Mystery Team,known-team"
+    assert m1.status == MatchStatus.NOT_STARTED
 
     m2 = Match.query.filter_by(event=tournament_url, name="M2").first()
     assert m2.team1_initial == "M1::winner"  # match reference untouched
     assert m2.team2_initial == "tag::Existing"  # existing tag reference untouched
+    assert m2.status == MatchStatus.NOT_STARTED
 
     # Unassigned tag auto-created for the rewritten token
     auto_tag = Tag.query.filter_by(event=tournament_url, name="Mystery Team").first()

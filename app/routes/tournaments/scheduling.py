@@ -55,6 +55,7 @@ from app.utils.scheduling import (
     validate_match_warnings,
     recompute_all_match_times,
     recompute_scheduled_and_nominal_times,
+    push_back_unstarted_matches,
 )
 from app.utils.datetime_helpers import now_utc_naive, parse_datetime_local_to_utc
 from app.utils.name_validation import match_name_char_error
@@ -718,30 +719,13 @@ def update_all_references(tournament_url):
 @bp.route("/<tournament_url>/push-back-matches", methods=["POST"])
 @require_tournament_organizer("Only tournament organizers can access this page")
 def push_back_matches(tournament_url):
-    """Push all non-started matches backwards by a specified amount of time (in minutes)."""
+    """Push all unstarted STATIC plan anchors by a specified amount of time (in minutes)."""
     try:
         minutes = int(request.form.get("minutes", 0))
     except (ValueError, TypeError):
         return jsonify({"success": False, "error": "Invalid number of minutes"}), 400
 
-    non_started_matches = (
-        Match.query.filter_by(event=tournament_url)
-        .filter(~Match.status.in_([MatchStatus.IN_PROGRESS, MatchStatus.COMPLETED, MatchStatus.SKIPPED]))
-        .all()
-    )
-
-    updated_count = 0
-    for match in non_started_matches:
-        # Push back nominal_start_time if it exists
-        if match.nominal_start_time:
-            match.nominal_start_time = match.nominal_start_time + timedelta(minutes=minutes)
-            updated_count += 1
-
-        # Also push back confirmed_start_time if it exists (even when start time is already finalized)
-        if match.confirmed_start_time:
-            match.confirmed_start_time = match.confirmed_start_time + timedelta(minutes=minutes)
-
-    db.session.commit()
+    updated_count = push_back_unstarted_matches(tournament_url, minutes)
 
     if updated_count > 0:
         msg = f"Pushed back {updated_count} non-started match(es) by {minutes} minute(s)"
@@ -1312,32 +1296,7 @@ def push_back_matches_api(tournament_url):
     if not minutes:
         return jsonify({"success": True})
 
-    matches = (
-        Match.query.filter_by(event=tournament_url)
-        .filter(Match.status.in_([MatchStatus.NOT_STARTED, MatchStatus.TIME_FINALIZED]))
-        .all()
-    )
-    from datetime import timedelta
-
-    # Push-back is a deliberate shift of the *plan* of the day (e.g. late first
-    # whistle). STATIC anchors must move scheduled_start_time as well as nominal;
-    # dynamic matches then re-derive both timelines from the new anchors.
-    delta = timedelta(minutes=minutes)
-    for m in matches:
-        if m.schedule_type != ScheduleType.STATIC:
-            continue
-        if m.scheduled_start_time is not None:
-            m.scheduled_start_time = m.scheduled_start_time + delta
-        if m.nominal_start_time is not None:
-            m.nominal_start_time = m.nominal_start_time + delta
-        # Keep the two aligned if only one was populated.
-        if m.scheduled_start_time is None and m.nominal_start_time is not None:
-            m.scheduled_start_time = m.nominal_start_time
-        if m.nominal_start_time is None and m.scheduled_start_time is not None:
-            m.nominal_start_time = m.scheduled_start_time
-
-    db.session.commit()
-    recompute_scheduled_and_nominal_times(tournament_url)
+    push_back_unstarted_matches(tournament_url, minutes)
     return jsonify({"success": True})
 
 

@@ -79,6 +79,25 @@ def rewrite_unknown_team_token(token: str, known_teams: set[str]) -> tuple[str, 
     return new_tok, f"Team '{tok}' not found; imported as tag reference '{new_tok}'"
 
 
+def _token_is_unresolved(token: str) -> bool:
+    """True when a slot token is a tag or match ref rather than a concrete team."""
+    tok = (token or "").strip().lower()
+    if not tok:
+        return False
+    return tok.startswith("tag::") or "::winner" in tok or "::loser" in tok
+
+
+def _match_dict_has_unresolved_participants(match_dict: dict) -> bool:
+    """True when any team/ref initial on *match_dict* is still a symbolic ref."""
+    for key in ("team1_initial", "team2_initial"):
+        if _token_is_unresolved(match_dict.get(key) or ""):
+            return True
+    for tok in refs_string_to_tokens(match_dict.get("refs_initial") or ""):
+        if _token_is_unresolved(tok):
+            return True
+    return False
+
+
 def _rewrite_skip_condition(expression: str, known_teams: set[str]) -> tuple[str, list[str], list[str]]:
     """Rewrite unknown team literals ``[Foo]`` in an ASS expression to ``[tag::Foo]``.
 
@@ -128,7 +147,9 @@ def _create_match_from_dict(match_dict: dict) -> "Match":
     if match.nominal_start_time is None and match.scheduled_start_time is not None:
         match.nominal_start_time = match.scheduled_start_time
     if not match.status:
-        if match.schedule_type == ScheduleType.STATIC:
+        if match.schedule_type == ScheduleType.STATIC and not _match_dict_has_unresolved_participants(
+            match_dict
+        ):
             match.status = MatchStatus.READY_TO_START
         else:
             match.status = MatchStatus.NOT_STARTED

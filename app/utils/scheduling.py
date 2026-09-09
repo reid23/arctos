@@ -491,6 +491,64 @@ def recompute_scheduled_and_nominal_times(tournament_url: str) -> None:
     run_scheduling(tournament_url, scheduled_pass=False)
 
 
+_STARTED_STATUSES = (
+    MatchStatus.IN_PROGRESS,
+    MatchStatus.COMPLETED,
+    MatchStatus.SKIPPED,
+)
+
+
+def push_back_unstarted_matches(tournament_url: str, minutes: int) -> int:
+    """Shift STATIC plan anchors for all unstarted matches, then recompute.
+
+    Unstarted means anything not in progress / completed / skipped, including
+    ``READY_TO_START`` and ``TIME_FINALIZED``. Only STATIC rows move; dynamic
+    matches re-derive both timelines from the new anchors.
+
+    Args:
+        tournament_url: Tournament URL slug.
+        minutes: Signed minute delta to apply to plan anchors.
+
+    Returns:
+        Number of STATIC anchors whose times were shifted.
+    """
+    from app.models.match import Match
+
+    if not minutes:
+        return 0
+
+    delta = timedelta(minutes=minutes)
+    matches = (
+        Match.query.filter_by(event=tournament_url)
+        .filter(~Match.status.in_(_STARTED_STATUSES))
+        .all()
+    )
+    updated = 0
+    for m in matches:
+        if m.schedule_type != ScheduleType.STATIC:
+            continue
+        shifted = False
+        if m.scheduled_start_time is not None:
+            m.scheduled_start_time = m.scheduled_start_time + delta
+            shifted = True
+        if m.nominal_start_time is not None:
+            m.nominal_start_time = m.nominal_start_time + delta
+            shifted = True
+        if m.confirmed_start_time is not None:
+            m.confirmed_start_time = m.confirmed_start_time + delta
+            shifted = True
+        if m.scheduled_start_time is None and m.nominal_start_time is not None:
+            m.scheduled_start_time = m.nominal_start_time
+        if m.nominal_start_time is None and m.scheduled_start_time is not None:
+            m.nominal_start_time = m.scheduled_start_time
+        if shifted:
+            updated += 1
+
+    db.session.commit()
+    recompute_scheduled_and_nominal_times(tournament_url)
+    return updated
+
+
 def get_match_dependencies(match, tournament_url: str) -> List:
     """
     Return list of Match rows that are schedule dependencies of the given match.

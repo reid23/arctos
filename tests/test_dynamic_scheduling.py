@@ -591,11 +591,10 @@ class TestPlanAnchorWritePaths:
             db.session.commit()
 
             # Mirror push_back_matches_api: shift STATIC plan anchors, then both passes.
+            from app.utils.scheduling import push_back_unstarted_matches
+
             delta = timedelta(minutes=30)
-            anchor.scheduled_start_time = anchor.scheduled_start_time + delta
-            anchor.nominal_start_time = anchor.nominal_start_time + delta
-            db.session.commit()
-            recompute_scheduled_and_nominal_times(tournament_url)
+            push_back_unstarted_matches(tournament_url, 30)
 
             db.session.refresh(anchor)
             db.session.refresh(m2)
@@ -605,6 +604,33 @@ class TestPlanAnchorWritePaths:
             # Downstream plan follows the shifted STATIC anchor.
             assert _aware_utc(m2.scheduled_start_time) == _aware_utc(base + delta + timedelta(minutes=60))
             assert _aware_utc(m2.nominal_start_time) == _aware_utc(base + delta + timedelta(minutes=60))
+
+    @pytest.mark.unit
+    def test_push_back_includes_ready_to_start_static_anchors(self, app, test_db, tournament):
+        """READY_TO_START is still unstarted — push-back must move those STATIC anchors."""
+        from app.domain.enums import ScheduleType
+        from app.utils.scheduling import push_back_unstarted_matches
+
+        tournament_url = tournament.url
+        with app.app_context():
+            base = datetime.now(timezone.utc).replace(tzinfo=None)
+            anchor = Match(
+                name="ReadyAnchor",
+                event=tournament_url,
+                field="Field 1",
+                nominal_start_time=base,
+                scheduled_start_time=base,
+                schedule_type=ScheduleType.STATIC,
+                nominal_length=60,
+                status=MatchStatus.READY_TO_START,
+            )
+            db.session.add(anchor)
+            db.session.commit()
+
+            push_back_unstarted_matches(tournament_url, 15)
+            db.session.refresh(anchor)
+            assert _aware_utc(anchor.scheduled_start_time) == _aware_utc(base + timedelta(minutes=15))
+            assert _aware_utc(anchor.nominal_start_time) == _aware_utc(base + timedelta(minutes=15))
 
     @pytest.mark.unit
     def test_live_pass_after_late_finish_does_not_move_plan(self, app, test_db, tournament):

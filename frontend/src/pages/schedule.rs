@@ -1418,6 +1418,7 @@ fn TOMLImportModal(
     on_import: EventHandler<()>,
 ) -> Element {
     let mut error = use_signal(|| None::<String>);
+    let mut import_warnings = use_signal(|| None::<Vec<String>>);
     let mut importing = use_signal(|| false);
     let on_file_change = move |ev: Event<FormData>| {
         let files = ev.files();
@@ -1426,14 +1427,19 @@ fn TOMLImportModal(
             let on_import = on_import.clone();
             importing.set(true);
             error.set(None);
+            import_warnings.set(None);
             spawn(async move {
                 match file.read_string().await {
                     Ok(toml_content) => {
                         let req = ImportScheduleRequest { toml: toml_content };
                         match api::import_schedule(&u, &req).await {
-                            Ok(_) => {
+                            Ok(resp) => {
                                 importing.set(false);
-                                on_import.call(());
+                                if resp.warnings.is_empty() {
+                                    on_import.call(());
+                                } else {
+                                    import_warnings.set(Some(resp.warnings));
+                                }
                             }
                             Err(e) => {
                                 error.set(Some(e));
@@ -1460,19 +1466,38 @@ fn TOMLImportModal(
                         if let Some(err) = error() {
                             div { class: "alert alert-danger", "{err}" }
                         }
-                        p { class: "text-muted", "Select a TOML file exported from a tournament schedule." }
-                        input {
-                            r#type: "file",
-                            class: "form-control",
-                            accept: ".toml",
-                            onchange: on_file_change,
-                        }
-                        if importing() {
-                            div { class: "mt-2 text-muted", "Importing..." }
+                        if let Some(warnings) = import_warnings() {
+                            div { class: "alert alert-warning",
+                                p { class: "mb-2", strong { "Import succeeded with warnings:" } }
+                                ul { class: "mb-0",
+                                    for w in warnings.iter() {
+                                        li { "{w}" }
+                                    }
+                                }
+                            }
+                        } else {
+                            p { class: "text-muted", "Select a TOML file exported from a tournament schedule." }
+                            input {
+                                r#type: "file",
+                                class: "form-control",
+                                accept: ".toml",
+                                onchange: on_file_change,
+                            }
+                            if importing() {
+                                div { class: "mt-2 text-muted", "Importing..." }
+                            }
                         }
                     }
                     div { class: "modal-footer",
-                        button { class: "btn btn-secondary", onclick: move |_| on_close.call(()), "Cancel" }
+                        if import_warnings().is_some() {
+                            button {
+                                class: "btn btn-primary",
+                                onclick: move |_| on_import.call(()),
+                                "Done"
+                            }
+                        } else {
+                            button { class: "btn btn-secondary", onclick: move |_| on_close.call(()), "Cancel" }
+                        }
                     }
                 }
             }

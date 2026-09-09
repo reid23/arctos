@@ -1544,6 +1544,12 @@ pub struct ImportScheduleRequest {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ImportScheduleResponse {
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RegisterPlayerAsToResponse {
     pub success: bool,
     pub message: Option<String>,
