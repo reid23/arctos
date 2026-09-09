@@ -518,11 +518,7 @@ def push_back_unstarted_matches(tournament_url: str, minutes: int) -> int:
         return 0
 
     delta = timedelta(minutes=minutes)
-    matches = (
-        Match.query.filter_by(event=tournament_url)
-        .filter(~Match.status.in_(_STARTED_STATUSES))
-        .all()
-    )
+    matches = Match.query.filter_by(event=tournament_url).filter(~Match.status.in_(_STARTED_STATUSES)).all()
     updated = 0
     for m in matches:
         if m.schedule_type != ScheduleType.STATIC:

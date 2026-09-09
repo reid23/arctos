@@ -147,9 +147,7 @@ def _create_match_from_dict(match_dict: dict) -> "Match":
     if match.nominal_start_time is None and match.scheduled_start_time is not None:
         match.nominal_start_time = match.scheduled_start_time
     if not match.status:
-        if match.schedule_type == ScheduleType.STATIC and not _match_dict_has_unresolved_participants(
-            match_dict
-        ):
+        if match.schedule_type == ScheduleType.STATIC and not _match_dict_has_unresolved_participants(match_dict):
             match.status = MatchStatus.READY_TO_START
         else:
             match.status = MatchStatus.NOT_STARTED
