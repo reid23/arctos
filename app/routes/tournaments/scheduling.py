@@ -12,7 +12,7 @@ from flask import (
 from flask_login import login_required, current_user
 from sqlalchemy.orm.attributes import flag_modified
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import io
 
 from models import (
