@@ -456,7 +456,6 @@ fn matches_to_setup(matches: &[BracketMatchData]) -> Vec<MatchSetupData> {
             confirmed_start_time: None,
             completed_time: None,
             schedule_type: m.schedule_type.clone(),
-            group_id: None,
             set_type: None,
             nominal_length: None,
             previous_match: None,

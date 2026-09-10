@@ -9,17 +9,16 @@ Covers:
 - STATBREAK: never moved by either pass; its status is derived from the
   current time when read (COMPLETED once start + length passes) and never
   stored; chained matches respect its end; edit-locked once start passes;
-- break-group JSON endpoints (create/update/delete by stable group_id).
+- break-group JSON endpoints (create/update/delete by display name).
 """
 
 from __future__ import annotations
 
-import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.domain.enums import STRUCTURAL_SCHEDULE_TYPES, MatchStatus, ScheduleType
+from app.domain.enums import MatchStatus, ScheduleType
 from app.services.dual_write import get_match_ref_team_ids
 from app.utils.scheduling import recompute_scheduled_and_nominal_times
 from models import TO, Match, Player, db
@@ -61,7 +60,6 @@ def _mk(
     scheduled=None,
     length=60,
     status=MatchStatus.NOT_STARTED,
-    group_id=None,
 ):
     m = Match(
         name=name,
@@ -72,23 +70,10 @@ def _mk(
         schedule_type=schedule_type,
         nominal_length=length,
         status=status,
-        group_id=(
-            group_id
-            if group_id is not None
-            else (str(uuid.uuid4()) if schedule_type in STRUCTURAL_SCHEDULE_TYPES else None)
-        ),
     )
     db.session.add(m)
     db.session.flush()
     return m
-
-
-def _group_id(resp_or_match) -> str:
-    """group_id from a create-break-group JSON response or a Match row."""
-    if hasattr(resp_or_match, "get_json"):
-        data = resp_or_match.get_json()
-        return data["group_id"]
-    return resp_or_match.group_id
 
 
 class TestSameNameBreakSync:
@@ -285,11 +270,9 @@ class TestBreakGroupEndpoints:
 
         rows = Match.query.filter_by(event=t.url, name="Lunch").all()
         assert {m.field for m in rows} == {"Field 1", "Field 2"}
-        gid = _group_id(resp)
         for m in rows:
             assert m.schedule_type == ScheduleType.BREAK
             assert m.nominal_length == 30
-            assert m.group_id == gid
             assert m.team1 is None and m.team2 is None
             assert get_match_ref_team_ids(m) == []
 
@@ -328,10 +311,9 @@ class TestBreakGroupEndpoints:
             json={"name": "Lunch", "schedule_type": "BREAK", "length": 30, "fields": ["Field 1"]},
         )
         assert resp.status_code == 200, resp.get_json()
-        gid = _group_id(resp)
 
         resp = client.put(
-            f"/_api/tournaments/{t.url}/break-groups/{gid}",
+            f"/_api/tournaments/{t.url}/break-groups/Lunch",
             json={"teams": ["team1"]},
         )
         assert resp.status_code == 400
@@ -369,11 +351,10 @@ class TestBreakGroupEndpoints:
             },
         )
         assert resp.status_code == 200, resp.get_json()
-        gid = _group_id(resp)
 
         # Add Field 2 and change length in one PUT.
         resp = client.put(
-            f"/_api/tournaments/{t.url}/break-groups/{gid}",
+            f"/_api/tournaments/{t.url}/break-groups/Lunch",
             json={"length": 45, "fields": ["Field 1", "Field 2"]},
         )
         assert resp.status_code == 200, resp.get_json()
@@ -382,11 +363,10 @@ class TestBreakGroupEndpoints:
         for m in rows:
             assert m.nominal_length == 45
             assert get_match_ref_team_ids(m) == []
-            assert m.group_id == gid
 
         # Remove Field 1 again.
         resp = client.put(
-            f"/_api/tournaments/{t.url}/break-groups/{gid}",
+            f"/_api/tournaments/{t.url}/break-groups/Lunch",
             json={"fields": ["Field 2"]},
         )
         assert resp.status_code == 200, resp.get_json()
@@ -395,7 +375,7 @@ class TestBreakGroupEndpoints:
 
         # Removing every field is rejected (use DELETE instead).
         resp = client.put(
-            f"/_api/tournaments/{t.url}/break-groups/{gid}",
+            f"/_api/tournaments/{t.url}/break-groups/Lunch",
             json={"fields": []},
         )
         assert resp.status_code == 400
@@ -407,11 +387,10 @@ class TestBreakGroupEndpoints:
             json={"name": "Lunch", "schedule_type": "BREAK", "length": 30, "fields": ["Field 1", "Field 2"]},
         )
         assert resp.status_code == 200, resp.get_json()
-        gid = _group_id(resp)
-        resp = client.delete(f"/_api/tournaments/{t.url}/break-groups/{gid}")
+        resp = client.delete(f"/_api/tournaments/{t.url}/break-groups/Lunch")
         assert resp.status_code == 200
         assert Match.query.filter_by(event=t.url, name="Lunch").count() == 0
-        resp = client.delete(f"/_api/tournaments/{t.url}/break-groups/{gid}")
+        resp = client.delete(f"/_api/tournaments/{t.url}/break-groups/Lunch")
         assert resp.status_code == 404
 
     def test_statbreak_group_requires_start_time_and_sets_both_timelines(self, app, client, tournament, to_player):
@@ -460,11 +439,10 @@ class TestBreakGroupEndpoints:
             },
         )
         assert resp.status_code == 200, resp.get_json()
-        dinner_gid = _group_id(resp)
         row = Match.query.filter_by(event=t.url, name="Dinner").one()
         assert row.effective_status == MatchStatus.NOT_STARTED
         resp = client.put(
-            f"/_api/tournaments/{t.url}/break-groups/{dinner_gid}",
+            f"/_api/tournaments/{t.url}/break-groups/Dinner",
             json={"length": 60},
         )
         assert resp.status_code == 200, resp.get_json()
@@ -484,13 +462,12 @@ class TestBreakGroupEndpoints:
             },
         )
         assert resp.status_code == 200, resp.get_json()
-        lunch_gid = _group_id(resp)
         row = Match.query.filter_by(event=t.url, name="Lunch").one()
         assert row.effective_status == MatchStatus.NOT_STARTED  # window still open
         assert row.status == MatchStatus.NOT_STARTED  # never stored
 
         resp = client.put(
-            f"/_api/tournaments/{t.url}/break-groups/{lunch_gid}",
+            f"/_api/tournaments/{t.url}/break-groups/Lunch",
             json={"length": 90},
         )
         assert resp.status_code == 409
@@ -531,7 +508,6 @@ class TestBreakGroupEndpoints:
         # Use a start far enough in the past that start+length has elapsed.
         assert by_name["Past Break"]["status"] == "COMPLETED"
         assert by_name["Future Break"]["status"] == "NOT_STARTED"
-        assert by_name["Past Break"].get("group_id")
 
     def test_update_match_api_clears_refs_on_break(self, app, client, tournament, to_player, seeded_teams):
         """The single-match PUT clears refs on BREAK rows (like JOIN): breaks
@@ -585,9 +561,8 @@ class TestBreakGroupEndpoints:
         assert Match.query.filter_by(uuid=brk_uuid).one().schedule_type == ScheduleType.BREAK
 
         # Group PUT rejects it too.
-        brk_gid = Match.query.filter_by(uuid=brk_uuid).one().group_id
         resp = client.put(
-            f"/_api/tournaments/{t.url}/break-groups/{brk_gid}",
+            f"/_api/tournaments/{t.url}/break-groups/Break%20A",
             json={"schedule_type": "STATBREAK"},
         )
         assert resp.status_code == 400
@@ -712,10 +687,9 @@ class TestJoinGroupEndpoints:
             json={"name": "Sync", "schedule_type": "JOIN", "fields": ["Field 1"]},
         )
         assert resp.status_code == 200, resp.get_json()
-        gid = _group_id(resp)
 
         resp = client.put(
-            f"/_api/tournaments/{t.url}/break-groups/{gid}",
+            f"/_api/tournaments/{t.url}/break-groups/Sync",
             json={"teams": ["team1"]},
         )
         assert resp.status_code == 400
@@ -730,13 +704,12 @@ class TestJoinGroupEndpoints:
             json={"name": "Sync", "schedule_type": "JOIN", "fields": ["Field 1"]},
         )
         assert resp.status_code == 200, resp.get_json()
-        gid = _group_id(resp)
         join1 = Match.query.filter_by(event=t.url, name="Sync", field="Field 1").one()
         assert Match.query.filter_by(uuid=anchors["Field 1"]).one().next_match == join1.uuid
 
         # Add Field 2: new zero-length row appended at that field's chain tail.
         resp = client.put(
-            f"/_api/tournaments/{t.url}/break-groups/{gid}",
+            f"/_api/tournaments/{t.url}/break-groups/Sync",
             json={"fields": ["Field 1", "Field 2"]},
         )
         assert resp.status_code == 200, resp.get_json()
@@ -745,11 +718,10 @@ class TestJoinGroupEndpoints:
         join2 = next(m for m in rows if m.field == "Field 2")
         assert join2.nominal_length == 0
         assert join2.previous_match == anchors["Field 2"]
-        assert join2.group_id == gid
 
         # A group PUT length is ignored for JOIN: rows stay zero-length.
         resp = client.put(
-            f"/_api/tournaments/{t.url}/break-groups/{gid}",
+            f"/_api/tournaments/{t.url}/break-groups/Sync",
             json={"length": 30},
         )
         assert resp.status_code == 200, resp.get_json()
@@ -757,7 +729,7 @@ class TestJoinGroupEndpoints:
 
         # Remove Field 1: the row is deleted and its chain is spliced.
         resp = client.put(
-            f"/_api/tournaments/{t.url}/break-groups/{gid}",
+            f"/_api/tournaments/{t.url}/break-groups/Sync",
             json={"fields": ["Field 2"]},
         )
         assert resp.status_code == 200, resp.get_json()
@@ -773,15 +745,14 @@ class TestJoinGroupEndpoints:
             json={"name": "Sync", "schedule_type": "JOIN", "fields": ["Field 1", "Field 2"]},
         )
         assert resp.status_code == 200, resp.get_json()
-        gid = _group_id(resp)
 
-        resp = client.delete(f"/_api/tournaments/{t.url}/break-groups/{gid}")
+        resp = client.delete(f"/_api/tournaments/{t.url}/break-groups/Sync")
         assert resp.status_code == 200
         assert Match.query.filter_by(event=t.url, name="Sync").count() == 0
         # Chains are spliced: anchors are tails again.
         for uuid in anchors.values():
             assert Match.query.filter_by(uuid=uuid).one().next_match is None
-        resp = client.delete(f"/_api/tournaments/{t.url}/break-groups/{gid}")
+        resp = client.delete(f"/_api/tournaments/{t.url}/break-groups/Sync")
         assert resp.status_code == 404
 
     def test_join_break_group_conversion(self, app, client, tournament, to_player):
@@ -793,16 +764,15 @@ class TestJoinGroupEndpoints:
             json={"name": "Sync", "schedule_type": "JOIN", "fields": ["Field 1", "Field 2"]},
         )
         assert resp.status_code == 200, resp.get_json()
-        gid = _group_id(resp)
 
         # JOIN → BREAK requires a length (JOIN rows carry 0).
         resp = client.put(
-            f"/_api/tournaments/{t.url}/break-groups/{gid}",
+            f"/_api/tournaments/{t.url}/break-groups/Sync",
             json={"schedule_type": "BREAK"},
         )
         assert resp.status_code == 400
         resp = client.put(
-            f"/_api/tournaments/{t.url}/break-groups/{gid}",
+            f"/_api/tournaments/{t.url}/break-groups/Sync",
             json={"schedule_type": "BREAK", "length": 45},
         )
         assert resp.status_code == 200, resp.get_json()
@@ -813,7 +783,7 @@ class TestJoinGroupEndpoints:
 
         # And back: BREAK → JOIN forces length 0 on every row.
         resp = client.put(
-            f"/_api/tournaments/{t.url}/break-groups/{gid}",
+            f"/_api/tournaments/{t.url}/break-groups/Sync",
             json={"schedule_type": "JOIN"},
         )
         assert resp.status_code == 200, resp.get_json()

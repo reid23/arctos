@@ -790,7 +790,6 @@ def tournament_schedule_setup(tournament_url):
                 "confirmed_start_time": dt_iso(m.confirmed_start_time),
                 "completed_time": dt_iso(m.completed_time),
                 "schedule_type": m.schedule_type.value if m.schedule_type else None,
-                "group_id": m.group_id,
                 "set_type": m.set_type.value if m.set_type else None,
                 "nominal_length": m.nominal_length,
                 "previous_match": m.previous_match,

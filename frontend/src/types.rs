@@ -705,9 +705,6 @@ pub struct MatchDetailData {
     pub stones_remaining: Option<u32>,
     pub match_winner: Option<String>,
     pub schedule_type: Option<String>,
-    /// Stable id shared by every row in a multi-field BREAK/STATBREAK/JOIN group.
-    #[serde(default)]
-    pub group_id: Option<String>,
     pub nominal_length: Option<u32>,
     pub previous_match: Option<String>,
     #[serde(rename = "refs", default)]
@@ -1424,9 +1421,6 @@ pub struct MatchSetupData {
     pub confirmed_start_time: Option<String>,
     pub completed_time: Option<String>,
     pub schedule_type: Option<String>,
-    /// Stable id shared by every row in a multi-field BREAK/STATBREAK/JOIN group.
-    #[serde(default)]
-    pub group_id: Option<String>,
     pub set_type: Option<String>,
     pub nominal_length: Option<u32>,
     pub previous_match: Option<String>,
@@ -1514,8 +1508,6 @@ pub struct UpdateBreakGroupRequest {
 pub struct CreateBreakGroupResponse {
     pub success: bool,
     pub name: String,
-    #[serde(default)]
-    pub group_id: Option<String>,
     #[serde(default)]
     pub uuids: Vec<String>,
 }

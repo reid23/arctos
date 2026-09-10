@@ -14,7 +14,6 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from datetime import datetime, timezone
 import io
-import uuid
 
 from models import (
     Tournament,
@@ -71,7 +70,6 @@ from app.domain.enums import (
     RegistrationStatus,
     ScheduleType,
     SetType,
-    STRUCTURAL_SCHEDULE_TYPES,
     WinnerSide,
 )
 from app.serializers.match_note_serializer import MatchNoteSerializer
@@ -361,7 +359,6 @@ def add_match(tournament_url):
         nominal_length=nominal_length,
         stones_per_set=stones_per_set_value,
         skip_condition=skip_condition,
-        group_id=str(uuid.uuid4()) if schedule_type in STRUCTURAL_SCHEDULE_TYPES else None,
     )
 
     db.session.add(match)

@@ -146,8 +146,6 @@ def _create_match_from_dict(match_dict: dict) -> "Match":
         match.scheduled_start_time = match.nominal_start_time
     if match.nominal_start_time is None and match.scheduled_start_time is not None:
         match.nominal_start_time = match.scheduled_start_time
-    # group_id for structural rows without one is filled in after the full
-    # import pass via _ensure_structural_group_ids (so same-name rows coalesce).
     if not match.status:
         if match.schedule_type == ScheduleType.STATIC and not _match_dict_has_unresolved_participants(match_dict):
             match.status = MatchStatus.READY_TO_START
@@ -158,34 +156,6 @@ def _create_match_from_dict(match_dict: dict) -> "Match":
     if refs_csv or refs_initial_csv:
         set_match_referees_from_csv(match, refs_csv, refs_initial_csv)
     return match
-
-
-def _ensure_structural_group_ids(tournament_url: str) -> None:
-    """Assign ``group_id`` to structural rows that lack one.
-
-    Rows that already share a name + schedule type coalesce into one group so
-    legacy same-name multi-field breaks/joins keep editing as a unit after
-    import. Singletons get their own id.
-    """
-    from collections import defaultdict
-
-    from app.domain.enums import STRUCTURAL_SCHEDULE_TYPES
-    from models import Match
-
-    rows = (
-        Match.query.filter_by(event=tournament_url)
-        .filter(Match.schedule_type.in_(STRUCTURAL_SCHEDULE_TYPES))
-        .all()
-    )
-    by_key: dict[tuple[str, object], list] = defaultdict(list)
-    for m in rows:
-        if m.group_id:
-            continue
-        by_key[(m.name, m.schedule_type)].append(m)
-    for group_rows in by_key.values():
-        gid = str(uuid.uuid4())
-        for m in group_rows:
-            m.group_id = gid
 
 
 @dataclass(frozen=True)
@@ -836,11 +806,6 @@ class ScheduleImportExportService:
                 if "next_match" in match_data and match_data["next_match"]:
                     next_match_name = str(match_data["next_match"]).strip()
                     match.next_match = resolve_match_name(next_match_name, match_field)
-
-            # Ensure structural rows have a stable group_id. Prefer ids carried in
-            # the TOML; otherwise coalesce same-name/same-type rows that still lack
-            # one (legacy exports) into a shared group.
-            _ensure_structural_group_ids(tournament_url)
 
             # Delete any tags, fields, or matches for this tournament that are
             # NOT present in the uploaded file. This makes the uploaded schedule

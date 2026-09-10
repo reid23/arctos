@@ -578,7 +578,7 @@ pub fn Schedule(url: String, view: String, team: String, field: String) -> Eleme
 
     let mut active_modal = use_signal(|| "none".to_string());
     let mut selected_match_id = use_signal(|| "".to_string());
-    // Stable group_id of the break group being edited (BREAK/STATBREAK/JOIN
+    // Display name of the break group being edited (BREAK/STATBREAK/JOIN
     // blocks open the group modal instead of the single-match edit modal).
     let mut selected_break_group = use_signal(|| "".to_string());
     let mut key_nav = use_signal(|| None::<String>);
@@ -1216,12 +1216,10 @@ pub fn Schedule(url: String, view: String, team: String, field: String) -> Eleme
                                 move |id: String| {
                                     // Structural blocks (breaks/joins) are edited as a group.
                                     if let Some(m) = matches_for_edit.iter().find(|m| m.uuid == id) {
-                                        if is_structural_match(m) {
-                                            if let Some(gid) = m.group_id.as_ref().filter(|g| !g.is_empty()) {
-                                                selected_break_group.set(gid.clone());
-                                                active_modal.set("break_group".to_string());
-                                                return;
-                                            }
+                                        if is_structural_match(m) && !m.name.is_empty() {
+                                            selected_break_group.set(m.name.clone());
+                                            active_modal.set("break_group".to_string());
+                                            return;
                                         }
                                     }
                                     selected_match_id.set(id);
@@ -1244,12 +1242,10 @@ pub fn Schedule(url: String, view: String, team: String, field: String) -> Eleme
                                 let matches_for_edit = data.matches.clone();
                                 move |id: String| {
                                     if let Some(m) = matches_for_edit.iter().find(|m| m.uuid == id) {
-                                        if is_structural_match(m) {
-                                            if let Some(gid) = m.group_id.as_ref().filter(|g| !g.is_empty()) {
-                                                selected_break_group.set(gid.clone());
-                                                active_modal.set("break_group".to_string());
-                                                return;
-                                            }
+                                        if is_structural_match(m) && !m.name.is_empty() {
+                                            selected_break_group.set(m.name.clone());
+                                            active_modal.set("break_group".to_string());
+                                            return;
                                         }
                                     }
                                     selected_match_id.set(id);
@@ -1289,7 +1285,7 @@ pub fn Schedule(url: String, view: String, team: String, field: String) -> Eleme
                         div { key: "{selected_break_group()}",
                             BreakGroupModal {
                                 tournament_url: url.clone(),
-                                group_id: selected_break_group(),
+                                name: selected_break_group(),
                                 data: data.clone(),
                                 on_close: move |_| active_modal.set("none".to_string()),
                                 on_save: move |_| {
@@ -2122,14 +2118,14 @@ fn SelectAllToggle(all_selected: bool, on_toggle: EventHandler<bool>) -> Element
 }
 
 /// Edit a structural group: every BREAK/STATBREAK/JOIN row sharing a
-/// ``group_id`` across fields at once. Members are derived from the already-
+/// display name across fields at once. Members are derived from the already-
 /// loaded schedule data; edits go through the break-group endpoints (shared
 /// length / start time, field add/remove, whole-group delete). JOIN groups
 /// expose only field membership: no length or start time.
 #[component]
 fn BreakGroupModal(
     tournament_url: String,
-    group_id: String,
+    name: String,
     data: ScheduleSetupResponse,
     on_close: EventHandler<()>,
     on_save: EventHandler<()>,
@@ -2137,7 +2133,7 @@ fn BreakGroupModal(
     let members: Vec<MatchSetupData> = data
         .matches
         .iter()
-        .filter(|m| m.group_id.as_deref() == Some(group_id.as_str()) && is_structural_match(m))
+        .filter(|m| m.name == name && is_structural_match(m))
         .cloned()
         .collect();
 
@@ -2182,7 +2178,7 @@ fn BreakGroupModal(
     let mut saving = use_signal(|| false);
 
     let url_save = tournament_url.clone();
-    let id_save = group_id.clone();
+    let name_save = name.clone();
     let group_type_save = group_type.clone();
     let do_save = move |_| {
         if fields_sel().is_empty() {
@@ -2196,7 +2192,7 @@ fn BreakGroupModal(
             return;
         }
         let u = url_save.clone();
-        let gid = id_save.clone();
+        let n = name_save.clone();
         let on_save = on_save.clone();
         let group_type_now = group_type_save.clone();
         spawn(async move {
@@ -2215,7 +2211,7 @@ fn BreakGroupModal(
                 },
                 fields: Some(fields_sel()),
             };
-            match api::update_break_group(&u, &gid, &req).await {
+            match api::update_break_group(&u, &n, &req).await {
                 Ok(_) => {
                     saving.set(false);
                     on_save.call(());
@@ -2229,15 +2225,15 @@ fn BreakGroupModal(
     };
 
     let url_delete = tournament_url.clone();
-    let id_delete = group_id.clone();
+    let name_delete = name.clone();
     let do_delete = move |_| {
         let u = url_delete.clone();
-        let gid = id_delete.clone();
+        let n = name_delete.clone();
         let on_save = on_save.clone();
         spawn(async move {
             saving.set(true);
             error.set(None);
-            match api::delete_break_group(&u, &gid).await {
+            match api::delete_break_group(&u, &n).await {
                 Ok(_) => {
                     saving.set(false);
                     on_save.call(());

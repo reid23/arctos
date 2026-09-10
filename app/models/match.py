@@ -104,10 +104,6 @@ class Match(db.Model):
 
     uuid = db.Column(db.String(UUID_LEN), primary_key=True, default=lambda: str(uuid.uuid4()))
     name = db.Column(db.String(LONG_NAME_LEN), nullable=False)
-    #: Stable id shared by every row in a multi-field BREAK/STATBREAK/JOIN group.
-    #: ``None`` for ordinary (non-structural) matches. The break-groups API keys
-    #: on this rather than display name.
-    group_id = db.Column(db.String(UUID_LEN), nullable=True, index=True)
     event = db.Column(db.String(URL_SLUG_LEN), db.ForeignKey("tournaments.url"), nullable=False)
     team1 = db.Column(db.String(USER_ID_LEN), db.ForeignKey("teams.id"))
     team2 = db.Column(db.String(USER_ID_LEN), db.ForeignKey("teams.id"))

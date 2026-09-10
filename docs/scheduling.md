@@ -243,18 +243,10 @@ teams, no refs) and are unique per `(name, event, field)`.
   solver never moves them, so no edge-union is needed.
 
 Display name is still the solver's sync key. Unrelated groups should use
-distinct names if they must not sync.
-
-### Stable `group_id` (API / editing)
-
-Every structural row carries a `group_id` UUID. Rows created together via
-the break-groups API share one id. The edit/delete endpoints address the
-group by that id (`/_api/tournaments/.../break-groups/<group_id>`), not by
-display name — so `/` in a name cannot break routes, and mixed-type or
-unrelated same-name rows cannot be merged accidentally through the API.
-
-TOML import preserves `group_id` when present; otherwise same-name /
-same-type structural rows without an id are coalesced into one group.
+distinct names if they must not sync. Match names cannot contain `/` so
+break-group edit/delete routes can key on the name
+(`/_api/tournaments/.../break-groups/<name>`). Mixed schedule types that
+share a name are rejected by those endpoints.
 
 ### STATBREAK lifecycle
 

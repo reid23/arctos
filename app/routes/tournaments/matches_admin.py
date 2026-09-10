@@ -6,7 +6,6 @@ defined in :mod:`app.routes.tournaments.__init__`.
 
 from __future__ import annotations
 
-import uuid
 from datetime import datetime, timezone
 
 from flask import jsonify, request
@@ -35,6 +34,7 @@ from app.utils.helpers import (
     resolve_tag_to_team,
 )
 from app.utils.name_validation import match_name_char_error
+from app.utils.datetime_helpers import now_utc_naive
 from app.utils.scheduling import (
     compute_dynamic_match_nominal_start_time,
     recompute_scheduled_and_nominal_times,
@@ -133,14 +133,11 @@ def update_match_api(tournament_url, match_id):
     # start+length; the edit lock is intentionally earlier.)
     if match.schedule_type == ScheduleType.STATBREAK:
         start = match.nominal_start_time or match.scheduled_start_time
-        if start is not None:
-            from app.utils.datetime_helpers import now_utc_naive
-
-            if now_utc_naive() >= start:
-                return (
-                    jsonify({"error": "Static break cannot be edited once its start time has passed."}),
-                    409,
-                )
+        if start is not None and now_utc_naive() >= start:
+            return (
+                jsonify({"error": "Static break cannot be edited once its start time has passed."}),
+                409,
+            )
     elif match.status in _LOCKED_STATUSES:
         return (
             jsonify({"error": (f"Match cannot be edited once it has started (current status: {match.status.value}).")}),
@@ -199,15 +196,14 @@ def update_match_api(tournament_url, match_id):
                     ),
                     400,
                 )
-            # Structural rows sharing a group_id form one logical group; converting
-            # a single row of a multi-row group would leave it mixed-type. Convert
+            # Structural rows sharing a name form one logical group; converting a
+            # single row of a multi-row group would leave it mixed-type. Convert
             # the whole group at once via the break-groups endpoint instead.
             if (
                 new_schedule_type != current_schedule_type
                 and current_schedule_type in STRUCTURAL_SCHEDULE_TYPES
-                and match.group_id
-                and Match.query.filter_by(event=tournament_url, group_id=match.group_id)
-                .filter(Match.uuid != match.uuid)
+                and Match.query.filter_by(event=tournament_url, name=match.name)
+                .filter(Match.schedule_type.in_(STRUCTURAL_SCHEDULE_TYPES), Match.uuid != match.uuid)
                 .count()
                 > 0
             ):
@@ -491,9 +487,6 @@ def create_match_api(tournament_url):
     match.field = data.get("field")
     match.nominal_length = int(data.get("length")) if data.get("length") is not None else None
     match.schedule_type = schedule_type
-    if schedule_type in STRUCTURAL_SCHEDULE_TYPES:
-        # Singleton structural group until/unless edited via break-groups.
-        match.group_id = str(uuid.uuid4())
 
     # BREAK, JOIN, FAST, SAFE require non-empty previous_match on same field
     if match.schedule_type in (
@@ -580,8 +573,8 @@ def create_match_api(tournament_url):
         set_match_referees_from_csv(match, refs_csv_pair[0], refs_csv_pair[1])
 
     # Handle linked list insert (STATBREAK may optionally sit in a chain so
-    # downstream matches wait for its end). Same-field validation mirrors the
-    # required-previous check above so callers cannot create cross-field chains.
+    # downstream matches wait for its end). Same-field validation for any type
+    # that sets a predecessor here.
     prev_match_id = (
         data.get("previous_match_id")
         if match.schedule_type
@@ -603,13 +596,12 @@ def create_match_api(tournament_url):
             if not prev_match:
                 db.session.rollback()
                 return jsonify({"error": "Previous match not found."}), 400
-            if match.schedule_type == ScheduleType.STATBREAK:
-                if not effective_field:
-                    db.session.rollback()
-                    return jsonify({"error": "Field is required when using a previous match."}), 400
-                if (prev_match.field or "").strip() != effective_field:
-                    db.session.rollback()
-                    return jsonify({"error": "Previous match must be on the same field."}), 400
+            if not effective_field:
+                db.session.rollback()
+                return jsonify({"error": "Field is required when using a previous match."}), 400
+            if (prev_match.field or "").strip() != effective_field:
+                db.session.rollback()
+                return jsonify({"error": "Previous match must be on the same field."}), 400
             update_match_previous_link(match, prev_id, tournament_url, is_new=True)
 
     # Dynamic time compute (STATIC and STATBREAK keep their user-supplied anchor)
@@ -654,11 +646,11 @@ def delete_match_api(tournament_url, match_id):
 
 
 # ---------------------------------------------------------------------------
-# Structural groups ("break-groups" API): BREAK/STATBREAK/JOIN rows across
-# multiple fields, created and edited as one unit. Rows in a group share a
-# stable ``group_id`` (API key), plus display name / length / start time.
-# JOINs carry only a name — length is always 0. Structural rows only occupy
-# fields; they never have teams or refs.
+# Structural groups ("break-groups" API): same-name BREAK/STATBREAK/JOIN rows
+# across multiple fields, created and edited as one unit (shared name / length /
+# start time; JOINs carry only a name — length is always 0). Structural rows
+# only occupy fields; they never have teams or refs. Group identity is the
+# display name (``/`` is rejected by match_name_char_error so route segments work).
 # ---------------------------------------------------------------------------
 
 
@@ -675,12 +667,10 @@ def _parse_start_time_utc(start_time_str: str | None) -> datetime | None:
     return dt
 
 
-def _break_group_rows(tournament_url: str, group_id: str) -> list[Match]:
-    """All structural rows in *group_id* for this tournament."""
-    if not group_id:
-        return []
+def _break_group_rows(tournament_url: str, name: str) -> list[Match]:
+    """All BREAK/STATBREAK/JOIN rows sharing *name* in this tournament."""
     return (
-        Match.query.filter_by(event=tournament_url, group_id=group_id)
+        Match.query.filter_by(event=tournament_url, name=name)
         .filter(Match.schedule_type.in_(STRUCTURAL_SCHEDULE_TYPES))
         .all()
     )
@@ -691,8 +681,6 @@ def _statbreak_start_passed(row: Match) -> bool:
     start = row.nominal_start_time or row.scheduled_start_time
     if start is None:
         return False
-    from app.utils.datetime_helpers import now_utc_naive
-
     return now_utc_naive() >= start
 
 
@@ -731,7 +719,7 @@ def _structural_name_collision(tournament_url: str, name: str, field_name: str) 
 @bp.route("/tournaments/<tournament_url>/break-groups", methods=["POST"])
 @login_required
 def create_break_group_api(tournament_url):
-    """Create one BREAK/STATBREAK/JOIN row per field, sharing name/length/group_id.
+    """Create one BREAK/STATBREAK/JOIN row per field, sharing name/length.
 
     JOIN rows always have ``nominal_length`` 0. Structural rows never carry
     teams — they only occupy fields.
@@ -804,14 +792,12 @@ def create_break_group_api(tournament_url):
                 400,
             )
 
-    group_id = str(uuid.uuid4())
     created: list[Match] = []
     for f in fields:
         match = Match(event=tournament_url, name=name)
         match.field = f
         match.schedule_type = schedule_type
         match.nominal_length = length
-        match.group_id = group_id
         match.skip_condition = None
         if start_dt is not None:
             match.nominal_start_time = start_dt
@@ -843,20 +829,13 @@ def create_break_group_api(tournament_url):
     db.session.commit()
     recompute_scheduled_and_nominal_times(tournament_url)
 
-    return jsonify(
-        {
-            "success": True,
-            "name": name,
-            "group_id": group_id,
-            "uuids": [m.uuid for m in created],
-        }
-    )
+    return jsonify({"success": True, "name": name, "uuids": [m.uuid for m in created]})
 
 
-@bp.route("/tournaments/<tournament_url>/break-groups/<group_id>", methods=["PUT"])
+@bp.route("/tournaments/<tournament_url>/break-groups/<name>", methods=["PUT"])
 @login_required
-def update_break_group_api(tournament_url, group_id):
-    """Edit every structural row in *group_id* at once (length/start_time/fields).
+def update_break_group_api(tournament_url, name):
+    """Edit every same-name structural row at once (length/start_time/fields).
 
     JOIN groups only support field membership changes; length stays 0. Team
     requirements are rejected for every structural type. The whole group can
@@ -866,7 +845,7 @@ def update_break_group_api(tournament_url, group_id):
     if not _check_to(tournament_url):
         return jsonify({"error": "Forbidden"}), 403
 
-    rows = _break_group_rows(tournament_url, group_id)
+    rows = _break_group_rows(tournament_url, name)
     if not rows:
         return jsonify({"error": "Break group not found"}), 404
 
@@ -878,7 +857,6 @@ def update_break_group_api(tournament_url, group_id):
     if len(types) != 1:
         return jsonify({"error": "Break group has mixed schedule types; cannot edit."}), 409
     group_type = rows[0].schedule_type
-    group_name = rows[0].name
     # Lock once the static break's start has passed (even if its window has not
     # yet ended — completion is at start+length, but the break is already history
     # for editing purposes).
@@ -975,17 +953,16 @@ def update_break_group_api(tournament_url, group_id):
         to_remove = [m for f, m in current.items() if f not in fields]
 
         for f in to_add:
-            if _structural_name_collision(tournament_url, group_name, f):
+            if _structural_name_collision(tournament_url, name, f):
                 db.session.rollback()
                 return (
-                    jsonify({"error": f'A break or join named "{group_name}" already exists on field "{f}".'}),
+                    jsonify({"error": f'A break or join named "{name}" already exists on field "{f}".'}),
                     400,
                 )
-            match = Match(event=tournament_url, name=group_name)
+            match = Match(event=tournament_url, name=name)
             match.field = f
             match.schedule_type = effective_type
             match.nominal_length = length if length is not None else template.nominal_length
-            match.group_id = group_id
             match.skip_condition = None
             if effective_type == ScheduleType.STATBREAK:
                 match.nominal_start_time = template.nominal_start_time
@@ -1010,14 +987,14 @@ def update_break_group_api(tournament_url, group_id):
     return jsonify({"success": True})
 
 
-@bp.route("/tournaments/<tournament_url>/break-groups/<group_id>", methods=["DELETE"])
+@bp.route("/tournaments/<tournament_url>/break-groups/<name>", methods=["DELETE"])
 @login_required
-def delete_break_group_api(tournament_url, group_id):
-    """Delete every structural row in *group_id*."""
+def delete_break_group_api(tournament_url, name):
+    """Delete every same-name structural row in the group."""
     if not _check_to(tournament_url):
         return jsonify({"error": "Forbidden"}), 403
 
-    rows = _break_group_rows(tournament_url, group_id)
+    rows = _break_group_rows(tournament_url, name)
     if not rows:
         return jsonify({"error": "Break group not found"}), 404
 
