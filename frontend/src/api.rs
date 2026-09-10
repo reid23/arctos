@@ -2891,7 +2891,7 @@ pub async fn export_schedule(tournament_url: &str) -> Result<ExportScheduleRespo
 pub async fn import_schedule(
     tournament_url: &str,
     req: &ImportScheduleRequest,
-) -> Result<(), String> {
+) -> Result<ImportScheduleResponse, String> {
     let c = client();
     let r = with_credentials(
         c.post(format!(
@@ -2907,7 +2907,11 @@ pub async fn import_schedule(
 
     let data: Value = response_json(r).await?;
     if data.get("success").and_then(|v| v.as_bool()) == Some(true) {
-        Ok(())
+        let warnings = data
+            .get("warnings")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+        Ok(ImportScheduleResponse { warnings })
     } else {
         Err(data
             .get("error")
