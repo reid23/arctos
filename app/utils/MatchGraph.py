@@ -528,7 +528,7 @@ def build_match_graph(
             confirmed_start_time=match.confirmed_start_time,
             confirmed_end_time=match.finalized_at,
             # Effective status: for STATBREAK the lifecycle status is derived
-            # from the current time (COMPLETED once its start has passed), so
+            # from the current time (COMPLETED once start + length has passed), so
             # solver-internal status checks see the derived value. The write-back
             # step never persists STATBREAK status.
             schedule_type=match.schedule_type,

@@ -2621,10 +2621,10 @@ pub async fn create_break_group(
     response_json(r).await
 }
 
-/// Edit every same-name break row at once (length / start_time / fields).
+/// Edit every row in a break group at once (length / start_time / fields).
 pub async fn update_break_group(
     tournament_url: &str,
-    name: &str,
+    group_id: &str,
     req: &UpdateBreakGroupRequest,
 ) -> Result<(), String> {
     let c = client();
@@ -2633,7 +2633,7 @@ pub async fn update_break_group(
             "{}/_api/tournaments/{}/break-groups/{}",
             base(),
             tournament_url,
-            urlencoding::encode(name)
+            urlencoding::encode(group_id)
         ))
         .json(req),
     )
@@ -2653,14 +2653,14 @@ pub async fn update_break_group(
     }
 }
 
-/// Delete every same-name break row in the group.
-pub async fn delete_break_group(tournament_url: &str, name: &str) -> Result<(), String> {
+/// Delete every row in a break group.
+pub async fn delete_break_group(tournament_url: &str, group_id: &str) -> Result<(), String> {
     let c = client();
     let r = with_credentials(c.delete(format!(
         "{}/_api/tournaments/{}/break-groups/{}",
         base(),
         tournament_url,
-        urlencoding::encode(name)
+        urlencoding::encode(group_id)
     )))
     .send()
     .await

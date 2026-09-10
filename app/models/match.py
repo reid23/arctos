@@ -104,6 +104,10 @@ class Match(db.Model):
 
     uuid = db.Column(db.String(UUID_LEN), primary_key=True, default=lambda: str(uuid.uuid4()))
     name = db.Column(db.String(LONG_NAME_LEN), nullable=False)
+    #: Stable id shared by every row in a multi-field BREAK/STATBREAK/JOIN group.
+    #: ``None`` for ordinary (non-structural) matches. The break-groups API keys
+    #: on this rather than display name.
+    group_id = db.Column(db.String(UUID_LEN), nullable=True, index=True)
     event = db.Column(db.String(URL_SLUG_LEN), db.ForeignKey("tournaments.url"), nullable=False)
     team1 = db.Column(db.String(USER_ID_LEN), db.ForeignKey("teams.id"))
     team2 = db.Column(db.String(USER_ID_LEN), db.ForeignKey("teams.id"))
@@ -226,14 +230,19 @@ class Match(db.Model):
         """Lifecycle status as clients should see it.
 
         For ``STATBREAK`` the status is a pure function of the current time —
-        ``COMPLETED`` once the scheduled start has passed, ``NOT_STARTED``
-        before that — and the stored :attr:`status` is ignored (the solver
-        never writes it). All other schedule types return the stored status.
+        ``COMPLETED`` once the scheduled end (``start + nominal_length``) has
+        passed, ``NOT_STARTED`` before that — and the stored :attr:`status` is
+        ignored (the solver never writes it). Completing at the end (not the
+        start) keeps dependents from becoming ready while the break is active.
+        All other schedule types return the stored status.
         """
         if self.schedule_type == ScheduleType.STATBREAK:
             start = self.nominal_start_time or self.scheduled_start_time
-            if start is not None and now_utc_naive() >= start:
-                return MatchStatus.COMPLETED
+            if start is not None:
+                length_min = self.nominal_length or 0
+                end = start + timedelta(minutes=length_min)
+                if now_utc_naive() >= end:
+                    return MatchStatus.COMPLETED
             return MatchStatus.NOT_STARTED
         return self.status
 

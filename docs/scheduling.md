@@ -224,3 +224,48 @@ Same as on match start/end, but:
    (`recompute_scheduled_and_nominal_times`).
 3. Finalize status on matches that should be finalized from the beginning
    (live PROCEDURE).
+
+---
+
+## Structural types: BREAK, STATBREAK, JOIN
+
+These are schedule structure, not games. They occupy fields only (no playing
+teams, no refs) and are unique per `(name, event, field)`.
+
+### Same-name grouping (solver)
+
+- **BREAK**: same-name rows across fields sync their start — the solver
+  unions their dependency edges so every field's Lunch starts together.
+- **JOIN**: same-name rows collapse to one logical graph node (union of
+  predecessors); the day cannot advance past the join until every field's
+  predecessor has finished.
+- **STATBREAK**: same-name rows share a user-supplied start time; the
+  solver never moves them, so no edge-union is needed.
+
+Display name is still the solver's sync key. Unrelated groups should use
+distinct names if they must not sync.
+
+### Stable `group_id` (API / editing)
+
+Every structural row carries a `group_id` UUID. Rows created together via
+the break-groups API share one id. The edit/delete endpoints address the
+group by that id (`/_api/tournaments/.../break-groups/<group_id>`), not by
+display name — so `/` in a name cannot break routes, and mixed-type or
+unrelated same-name rows cannot be merged accidentally through the API.
+
+TOML import preserves `group_id` when present; otherwise same-name /
+same-type structural rows without an id are coalesced into one group.
+
+### STATBREAK lifecycle
+
+| Aspect | Behavior |
+|--------|----------|
+| Start time | User-supplied; written to both `scheduled_start_time` and `nominal_start_time` |
+| Solver | Never moves the start |
+| Stored `status` | Ignored / left `NOT_STARTED` — the solver does not write it |
+| `effective_status` | `COMPLETED` once `start + nominal_length` has passed; else `NOT_STARTED` |
+| Dependents | Wait for the STATBREAK **end** (start + length) before becoming ready |
+| Edit lock | Locked once the **start** has passed (earlier than completion) |
+
+Completing at the scheduled end (not the start) prevents chained matches
+from becoming `READY_TO_START` while the break is still active.

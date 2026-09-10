@@ -136,6 +136,8 @@ class MatchScheduleSerializer:
             result["schedule_type"] = match.schedule_type
         if match.set_type:
             result["set_type"] = match.set_type
+        if match.group_id:
+            result["group_id"] = match.group_id
 
         # Boolean - only include if True (False is default)
         if match.ribbon:
@@ -277,6 +279,11 @@ class MatchScheduleSerializer:
             "previous_match": None,
             "next_match": None,
         }
+        # Preserve group_id from TOML when present; omit otherwise so updates
+        # don't wipe an existing id before _ensure_structural_group_ids runs.
+        raw_gid = str(data.get("group_id") or "").strip()
+        if raw_gid:
+            result["group_id"] = raw_gid
 
         # Handle datetimes (planned + live). Accept either field; seed the other when
         # only one is present so STATIC anchors always land in scheduled_start_time.

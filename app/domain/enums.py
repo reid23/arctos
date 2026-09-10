@@ -127,8 +127,8 @@ class ScheduleType(StrEnum):
             fields start together (their dependency edges are unioned).
         STATBREAK: A statically scheduled break: the user supplies the start
             time and the solver never moves it. Its status is derived from the
-            current time when read (COMPLETED once the start has passed),
-            never stored.
+            current time when read (COMPLETED once ``start + nominal_length``
+            has passed), never stored.
         JOIN: A synchronisation point that waits for multiple preceding
             matches to complete before advancing.
     """
