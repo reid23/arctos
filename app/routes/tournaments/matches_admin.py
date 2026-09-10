@@ -43,7 +43,6 @@ from app.utils.scheduling import (
 from models import (
     Field,
     Match,
-    Point,
     ScriptVariable,
     Tag,
     db,

@@ -14,8 +14,8 @@ SQLite supports plain ADD COLUMN for a nullable column with no default, so no
 batch_alter is needed for the upgrade; the downgrade drops the column with
 batch_alter (table rebuild) for SQLite compatibility.
 
-Revision ID: 0013_tag_expr_script_vars
-Revises: 0012_statbreak
+Revision ID: 0014_tag_expr_script_vars
+Revises: 0013_statbreak
 Create Date: 2026-08-13
 """
 
@@ -27,8 +27,8 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision: str = "0013_tag_expr_script_vars"
-down_revision: Union[str, Sequence[str], None] = "0012_statbreak"
+revision: str = "0014_tag_expr_script_vars"
+down_revision: Union[str, Sequence[str], None] = "0013_statbreak"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
