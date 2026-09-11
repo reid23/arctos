@@ -2124,6 +2124,11 @@ fn CreateMatchModal(
         })));
     let validate_create_rc2 = validate_create_rc.clone();
 
+    // Snapshot for break-group predecessor lookup in submit handlers (avoid
+    // moving `data` into async / fighting over ownership across two closures).
+    let matches_for_break_prev = data.matches.clone();
+    let matches_for_break_prev_keydown = matches_for_break_prev.clone();
+
     let tournament_url_submit = tournament_url.clone();
     let onsubmit = move |ev: Event<FormData>| {
         ev.prevent_default();
@@ -2132,17 +2137,19 @@ fn CreateMatchModal(
         }
         let tournament_url = tournament_url_submit.clone();
         let on_save = on_save.clone();
+        // Build the predecessor map before spawn so we don't move state into the
+        // async block (which would make this closure FnOnce).
+        let break_prev = if matches!(schedule_type().as_str(), "BREAK" | "JOIN") {
+            break_group_previous_map(&matches_for_break_prev, &break_fields(), &start_time())
+        } else {
+            std::collections::HashMap::new()
+        };
         spawn(async move {
             saving.set(true);
             error.set(None);
             if matches!(schedule_type().as_str(), "BREAK" | "STATBREAK" | "JOIN") {
                 let is_join = schedule_type() == "JOIN";
                 let fields = break_fields();
-                let previous_match = if matches!(schedule_type().as_str(), "BREAK" | "JOIN") {
-                    break_group_previous_map(&data.matches, &fields, &start_time())
-                } else {
-                    std::collections::HashMap::new()
-                };
                 let req = CreateBreakGroupRequest {
                     name: name(),
                     schedule_type: schedule_type(),
@@ -2153,7 +2160,7 @@ fn CreateMatchModal(
                     } else {
                         None
                     },
-                    previous_match,
+                    previous_match: break_prev,
                 };
                 match api::create_break_group(&tournament_url, &req).await {
                     Ok(_) => {
@@ -2271,17 +2278,22 @@ fn CreateMatchModal(
             }
             let tournament_url = tournament_url_keydown.clone();
             let on_save = on_save.clone();
+            // Same as onsubmit: compute before spawn so state is not moved into async.
+            let break_prev = if matches!(schedule_type().as_str(), "BREAK" | "JOIN") {
+                break_group_previous_map(
+                    &matches_for_break_prev_keydown,
+                    &break_fields(),
+                    &start_time(),
+                )
+            } else {
+                std::collections::HashMap::new()
+            };
             spawn(async move {
                 saving.set(true);
                 error.set(None);
                 if matches!(schedule_type().as_str(), "BREAK" | "STATBREAK" | "JOIN") {
                     let is_join = schedule_type() == "JOIN";
                     let fields = break_fields();
-                    let previous_match = if matches!(schedule_type().as_str(), "BREAK" | "JOIN") {
-                        break_group_previous_map(&data.matches, &fields, &start_time())
-                    } else {
-                        std::collections::HashMap::new()
-                    };
                     let req = CreateBreakGroupRequest {
                         name: name(),
                         schedule_type: schedule_type(),
@@ -2292,7 +2304,7 @@ fn CreateMatchModal(
                         } else {
                             None
                         },
-                        previous_match,
+                        previous_match: break_prev,
                     };
                     match api::create_break_group(&tournament_url, &req).await {
                         Ok(_) => {
