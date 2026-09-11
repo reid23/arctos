@@ -214,11 +214,44 @@ class TestStatBreak:
                 scheduled=past_start,
                 length=30,
             )
+            after = _mk(url, "After Dinner", "Field 1", ScheduleType.SAFE, length=60)
+            after.previous_match = sb.uuid
+            sb.next_match = after.uuid
             db.session.commit()
             recompute_scheduled_and_nominal_times(url)
             db.session.refresh(sb)
+            db.session.refresh(after)
             assert sb.status == MatchStatus.NOT_STARTED
             assert sb.effective_status == MatchStatus.NOT_STARTED
+            # STATBREAK is a schedule-dep terminal: not walked through to anything
+            # earlier, so the dependent stays blocked while the window is open.
+            assert after.status == MatchStatus.NOT_STARTED
+
+    @pytest.mark.unit
+    def test_statbreak_end_unblocks_dependent_ready(self, app, test_db, tournament):
+        """Once start+length has passed, a chained SAFE may become READY_TO_START."""
+        url = tournament.url
+        with app.app_context():
+            base = datetime.now(timezone.utc).replace(tzinfo=None)
+            past_start = base - timedelta(minutes=40)
+            sb = _mk(
+                url,
+                "Dinner",
+                "Field 1",
+                ScheduleType.STATBREAK,
+                start=past_start,
+                scheduled=past_start,
+                length=30,
+            )
+            after = _mk(url, "After Dinner", "Field 1", ScheduleType.SAFE, length=60)
+            after.previous_match = sb.uuid
+            sb.next_match = after.uuid
+            db.session.commit()
+            recompute_scheduled_and_nominal_times(url)
+            db.session.refresh(sb)
+            db.session.refresh(after)
+            assert sb.effective_status == MatchStatus.COMPLETED
+            assert after.status == MatchStatus.READY_TO_START
 
     @pytest.mark.unit
     def test_future_statbreak_not_completed(self, app, test_db, tournament):
@@ -509,9 +542,9 @@ class TestBreakGroupEndpoints:
         assert by_name["Past Break"]["status"] == "COMPLETED"
         assert by_name["Future Break"]["status"] == "NOT_STARTED"
 
-    def test_update_match_api_clears_refs_on_break(self, app, client, tournament, to_player, seeded_teams):
-        """The single-match PUT clears refs on BREAK rows (like JOIN): breaks
-        only occupy fields and never carry team requirements."""
+    def test_update_match_api_rejects_refs_on_break(self, app, client, tournament, to_player, seeded_teams):
+        """The single-match PUT rejects refs on BREAK rows (like the group API):
+        breaks only occupy fields and never carry team requirements."""
         t = self._login(app, client, tournament, to_player)
         with app.app_context():
             base = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -533,10 +566,42 @@ class TestBreakGroupEndpoints:
                 "refs": ["team1"],
             },
         )
-        assert resp.status_code == 200, resp.get_json()
+        assert resp.status_code == 400
+        assert "team requirements" in (resp.get_json().get("error") or "").lower()
         brk = Match.query.filter_by(uuid=brk_uuid).one()
         assert get_match_ref_team_ids(brk) == []
         assert brk.team1 is None and brk.team2 is None
+
+    def test_create_statbreak_requires_length_rejects_skip(self, app, client, tournament, to_player):
+        """Single-match STATBREAK create matches the group API: length required,
+        skip_condition rejected."""
+        t = self._login(app, client, tournament, to_player)
+        start = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        resp = client.post(
+            f"/_api/tournaments/{t.url}/matches",
+            json={
+                "name": "Static Pause",
+                "schedule_type": "STATBREAK",
+                "field": "Field 1",
+                "start_time": start,
+            },
+        )
+        assert resp.status_code == 400
+        assert "length" in (resp.get_json().get("error") or "").lower()
+
+        resp = client.post(
+            f"/_api/tournaments/{t.url}/matches",
+            json={
+                "name": "Static Pause",
+                "schedule_type": "STATBREAK",
+                "length": 30,
+                "field": "Field 1",
+                "start_time": start,
+                "skip_condition": "(true)",
+            },
+        )
+        assert resp.status_code == 400
+        assert "skip condition" in (resp.get_json().get("error") or "").lower()
 
     def test_statbreak_conversion_rules(self, app, client, tournament, to_player):
         """Nothing converts TO a STATBREAK; STATBREAK→BREAK is still allowed."""
@@ -618,6 +683,74 @@ class TestBreakGroupEndpoints:
         )
         assert resp.status_code == 400
         assert "same field" in (resp.get_json().get("error") or "").lower()
+
+    def test_statbreak_put_previous_match_must_be_same_field(self, app, client, tournament, to_player):
+        """PUT /matches also same-field-validates STATBREAK previous_match."""
+        t = self._login(app, client, tournament, to_player)
+        start = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with app.app_context():
+            base = datetime.now(timezone.utc).replace(tzinfo=None)
+            other = _mk(
+                t.url,
+                "Other Field Match",
+                "Field 2",
+                ScheduleType.STATIC,
+                start=base,
+                scheduled=base,
+                length=60,
+            )
+            db.session.commit()
+            other_uuid = other.uuid
+
+        resp = client.post(
+            f"/_api/tournaments/{t.url}/matches",
+            json={
+                "name": "Static Pause",
+                "schedule_type": "STATBREAK",
+                "length": 30,
+                "field": "Field 1",
+                "start_time": start,
+            },
+        )
+        assert resp.status_code == 200, resp.get_json()
+        sb_uuid = resp.get_json()["uuid"]
+
+        resp = client.put(
+            f"/_api/tournaments/{t.url}/matches/{sb_uuid}",
+            json={"previous_match_id": other_uuid},
+        )
+        assert resp.status_code == 400
+        assert "same field" in (resp.get_json().get("error") or "").lower()
+
+    def test_create_rejects_mixed_structural_types_same_name(self, app, client, tournament, to_player):
+        """BREAK and JOIN (or STATBREAK) cannot share a display name."""
+        t = self._login(app, client, tournament, to_player)
+        resp = client.post(
+            f"/_api/tournaments/{t.url}/break-groups",
+            json={"name": "Lunch", "schedule_type": "BREAK", "length": 30, "fields": ["Field 1"]},
+        )
+        assert resp.status_code == 200, resp.get_json()
+
+        resp = client.post(
+            f"/_api/tournaments/{t.url}/break-groups",
+            json={"name": "Lunch", "schedule_type": "JOIN", "fields": ["Field 2"]},
+        )
+        assert resp.status_code == 400
+        assert "cannot share a name" in (resp.get_json().get("error") or "").lower()
+
+        start = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        resp = client.post(
+            f"/_api/tournaments/{t.url}/matches",
+            json={
+                "name": "Lunch",
+                "schedule_type": "STATBREAK",
+                "length": 15,
+                "field": "Field 2",
+                "start_time": start,
+            },
+        )
+        assert resp.status_code == 400
+        assert "cannot share a name" in (resp.get_json().get("error") or "").lower()
 
 
 @pytest.mark.integration

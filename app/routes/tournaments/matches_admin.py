@@ -250,13 +250,43 @@ def update_match_api(tournament_url, match_id):
                 )
 
     # Structural matches (BREAK/STATBREAK/JOIN) never have playing teams or
-    # refs — they only occupy fields.
+    # refs — they only occupy fields. Match the break-groups API: reject
+    # team/ref/skip payloads rather than silently dropping them.
     if match.schedule_type in STRUCTURAL_SCHEDULE_TYPES:
+        if (team1_input is not None and str(team1_input).strip()) or (
+            team2_input is not None and str(team2_input).strip()
+        ):
+            return (
+                jsonify(
+                    {
+                        "error": "Breaks and joins cannot have team requirements; they only occupy fields."
+                    }
+                ),
+                400,
+            )
+        if refs is not None:
+            has_refs = False
+            if isinstance(refs, list):
+                has_refs = any(str(r or "").strip() for r in refs)
+            else:
+                has_refs = bool(str(refs).strip())
+            if has_refs:
+                return (
+                    jsonify(
+                        {
+                            "error": "Breaks and joins cannot have team requirements; they only occupy fields."
+                        }
+                    ),
+                    400,
+                )
+        if skip_condition is not None and str(skip_condition).strip():
+            return jsonify({"error": "Breaks and joins cannot have a skip condition."}), 400
         match.team1 = None
         match.team1_initial = None
         match.team2 = None
         match.team2_initial = None
         clear_match_referees(match)
+        match.skip_condition = None
     else:
         # When _initial fields change, write through to the resolved team cache
         # (team1 / team2). _resolve_initial_to_cached_team returns None for
@@ -302,10 +332,16 @@ def update_match_api(tournament_url, match_id):
     if match.schedule_type == ScheduleType.JOIN:
         match.nominal_length = 0
     elif length is not None:
-        match.nominal_length = int(length)
+        try:
+            length_int = int(length)
+        except (TypeError, ValueError):
+            return jsonify({"error": "Length must be an integer number of minutes."}), 400
+        if length_int < 0:
+            return jsonify({"error": "Length cannot be negative."}), 400
+        match.nominal_length = length_int
 
     # Skip Condition (only for SAFE/FAST)
-    if skip_condition is not None:
+    if match.schedule_type not in STRUCTURAL_SCHEDULE_TYPES and skip_condition is not None:
         match.skip_condition = (
             (skip_condition.strip() if skip_condition.strip() else None)
             if match.schedule_type in (ScheduleType.SAFE, ScheduleType.FAST)
@@ -365,9 +401,9 @@ def update_match_api(tournament_url, match_id):
         flag_modified(match, "next_match")
     elif match.schedule_type == ScheduleType.STATBREAK:
         # Statically-scheduled break: user-supplied start time is written to both
-        # timelines and the solver never moves it. Unlike STATIC it may sit in a
-        # field chain (matches chained after it wait for its end), so we only
-        # touch chain links when the client explicitly supplies one.
+        # timelines and the solver never moves it. Like STATIC it does not require
+        # a predecessor; an optional previous_match may still place it in a field
+        # chain so matches after it wait for its end.
         if start_time_str:
             try:
                 dt = datetime.fromisoformat(start_time_str.replace("Z", "+00:00"))
@@ -377,8 +413,23 @@ def update_match_api(tournament_url, match_id):
                 match.scheduled_start_time = dt
             except ValueError:
                 pass
-        if previous_match_id:
-            update_match_previous_link(match, previous_match_id, tournament_url)
+        if previous_match_id is not None:
+            prev_id = str(previous_match_id).strip()
+            if prev_id:
+                effective_field = (match.field or "").strip()
+                if not effective_field:
+                    return (
+                        jsonify({"error": "Field is required when using a previous match."}),
+                        400,
+                    )
+                prev_match = Match.query.filter_by(uuid=prev_id, event=tournament_url).first()
+                if not prev_match:
+                    return jsonify({"error": "Previous match not found."}), 400
+                if (prev_match.field or "").strip() != effective_field:
+                    return jsonify({"error": "Previous match must be on the same field."}), 400
+                update_match_previous_link(match, prev_id, tournament_url)
+            else:
+                detach_match_from_chain(match, tournament_url)
     else:
         # Dynamic (BREAK, JOIN, FAST, SAFE)
         match.nominal_start_time = compute_dynamic_match_nominal_start_time(match, tournament_url)
@@ -463,7 +514,27 @@ def create_match_api(tournament_url):
 
     # Name uniqueness: structural matches (BREAK/STATBREAK/JOIN) are unique per
     # (name, event, field) across the structural group; others globally in tournament.
+    # Same display name must not be reused across different structural types.
     if schedule_type in STRUCTURAL_SCHEDULE_TYPES:
+        type_conflict = (
+            Match.query.filter_by(event=tournament_url, name=name.strip())
+            .filter(Match.schedule_type.in_(STRUCTURAL_SCHEDULE_TYPES))
+            .filter(Match.schedule_type != schedule_type)
+            .first()
+        )
+        if type_conflict:
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            f'Name "{name.strip()}" is already used by a '
+                            f"{type_conflict.schedule_type.value} group; "
+                            "structural types cannot share a name."
+                        )
+                    }
+                ),
+                400,
+            )
         existing = (
             Match.query.filter_by(
                 event=tournament_url,
@@ -485,8 +556,38 @@ def create_match_api(tournament_url):
 
     match = Match(event=tournament_url, name=name)
     match.field = data.get("field")
-    match.nominal_length = int(data.get("length")) if data.get("length") is not None else None
     match.schedule_type = schedule_type
+
+    # Structural rows match the break-groups API: field required, length rules,
+    # no teams/refs/skip_condition.
+    if match.schedule_type in STRUCTURAL_SCHEDULE_TYPES:
+        if not effective_field:
+            return jsonify({"error": "Field is required for breaks and joins."}), 400
+        if team1_input := (data.get("team1") or "").strip():
+            return jsonify({"error": "Breaks and joins cannot have team requirements; they only occupy fields."}), 400
+        if team2_input := (data.get("team2") or "").strip():
+            return jsonify({"error": "Breaks and joins cannot have team requirements; they only occupy fields."}), 400
+        refs = data.get("refs")
+        if refs:
+            if isinstance(refs, list) and any(str(r or "").strip() for r in refs):
+                return jsonify({"error": "Breaks and joins cannot have team requirements; they only occupy fields."}), 400
+            if isinstance(refs, str) and refs.strip():
+                return jsonify({"error": "Breaks and joins cannot have team requirements; they only occupy fields."}), 400
+        if (data.get("skip_condition") or "").strip():
+            return jsonify({"error": "Breaks and joins cannot have a skip condition."}), 400
+        if match.schedule_type == ScheduleType.JOIN:
+            match.nominal_length = 0
+        else:
+            try:
+                length = int(data.get("length"))
+            except (TypeError, ValueError):
+                return jsonify({"error": "Length (minutes) is required."}), 400
+            if length < 0:
+                return jsonify({"error": "Length cannot be negative."}), 400
+            match.nominal_length = length
+        match.skip_condition = None
+    else:
+        match.nominal_length = int(data.get("length")) if data.get("length") is not None else None
 
     # BREAK, JOIN, FAST, SAFE require non-empty previous_match on same field
     if match.schedule_type in (
@@ -564,7 +665,8 @@ def create_match_api(tournament_url):
     if data.get("ribbon") is not None:
         match.ribbon = bool(data.get("ribbon"))
 
-    match.skip_condition = data.get("skip_condition")
+    if match.schedule_type not in STRUCTURAL_SCHEDULE_TYPES:
+        match.skip_condition = data.get("skip_condition")
 
     db.session.add(match)
     db.session.flush()  # Ensure uuid exists before link updates and validation.
@@ -716,6 +818,22 @@ def _structural_name_collision(tournament_url: str, name: str, field_name: str) 
     )
 
 
+def _structural_name_type_conflict(
+    tournament_url: str, name: str, schedule_type: ScheduleType
+) -> Match | None:
+    """Existing same-name structural row with a different schedule type, or ``None``.
+
+    Display name is the group key, so BREAK ``Lunch`` and JOIN ``Lunch`` must
+    not coexist in one tournament.
+    """
+    return (
+        Match.query.filter_by(event=tournament_url, name=name)
+        .filter(Match.schedule_type.in_(STRUCTURAL_SCHEDULE_TYPES))
+        .filter(Match.schedule_type != schedule_type)
+        .first()
+    )
+
+
 @bp.route("/tournaments/<tournament_url>/break-groups", methods=["POST"])
 @login_required
 def create_break_group_api(tournament_url):
@@ -784,6 +902,21 @@ def create_break_group_api(tournament_url):
     previous_map = data.get("previous_match")
     if not isinstance(previous_map, dict):
         previous_map = {}
+
+    type_conflict = _structural_name_type_conflict(tournament_url, name, schedule_type)
+    if type_conflict:
+        return (
+            jsonify(
+                {
+                    "error": (
+                        f'Name "{name}" is already used by a '
+                        f"{type_conflict.schedule_type.value} group; "
+                        "structural types cannot share a name."
+                    )
+                }
+            ),
+            400,
+        )
 
     for f in fields:
         if _structural_name_collision(tournament_url, name, f):

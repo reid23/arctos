@@ -246,7 +246,7 @@ Display name is still the solver's sync key. Unrelated groups should use
 distinct names if they must not sync. Match names cannot contain `/` so
 break-group edit/delete routes can key on the name
 (`/_api/tournaments/.../break-groups/<name>`). Mixed schedule types that
-share a name are rejected by those endpoints.
+share a name are rejected on create and edit.
 
 ### STATBREAK lifecycle
 
@@ -254,9 +254,10 @@ share a name are rejected by those endpoints.
 |--------|----------|
 | Start time | User-supplied; written to both `scheduled_start_time` and `nominal_start_time` |
 | Solver | Never moves the start |
+| Predecessor | Optional (like STATIC) — not required; group create does not auto-chain |
 | Stored `status` | Ignored / left `NOT_STARTED` — the solver does not write it |
 | `effective_status` | `COMPLETED` once `start + nominal_length` has passed; else `NOT_STARTED` |
-| Dependents | Wait for the STATBREAK **end** (start + length) before becoming ready |
+| Dependents | Treat STATBREAK as a schedule-dependency terminal; wait for **end** before `READY_TO_START` |
 | Edit lock | Locked once the **start** has passed (earlier than completion) |
 
 Completing at the scheduled end (not the start) prevents chained matches

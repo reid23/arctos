@@ -84,8 +84,11 @@ class MatchGraphNode:
         """
         Get schedule dependencies by traversing the dependency tree.
 
-        Returns only STATIC, SAFE, or FAST matches; skips over BREAK, JOIN, and SKIPPED.
-        Used to decide when this match becomes READY_TO_START / TIME_FINALIZED.
+        Returns only STATIC, SAFE, FAST, or STATBREAK matches; walks through
+        BREAK and JOIN. Used to decide when this match becomes READY_TO_START /
+        TIME_FINALIZED. STATBREAK is a terminal gate so dependents wait for its
+        time-derived end (``effective_status`` COMPLETED) rather than the match
+        before the break.
         """
         result: Set["MatchGraphNode"] = set()
         visited: Set["MatchGraphNode"] = set()
@@ -95,7 +98,13 @@ class MatchGraphNode:
                 return
             visited.add(node)
             if (
-                node.schedule_type in (ScheduleType.STATIC, ScheduleType.SAFE, ScheduleType.FAST)
+                node.schedule_type
+                in (
+                    ScheduleType.STATIC,
+                    ScheduleType.SAFE,
+                    ScheduleType.FAST,
+                    ScheduleType.STATBREAK,
+                )
                 # and node.status != MatchStatus.SKIPPED # idt we should do this bc we know skipping only happens at match start
             ):
                 result.add(node)

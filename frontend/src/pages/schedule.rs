@@ -1945,6 +1945,8 @@ fn CreateMatchModal(
                                     div { class: "form-text mb-1",
                                         if schedule_type() == "JOIN" {
                                             "One join is created per selected field, appended at the end of each field's chain. Each field's schedule continues only once all joined fields reach it."
+                                        } else if schedule_type() == "STATBREAK" {
+                                            "One static break is created per selected field at the given start time. Like static matches, they do not need a predecessor; same-name rows share the start time."
                                         } else {
                                             "One break is created per selected field. New breaks are appended at the end of each field's chain, and same-name breaks always start together."
                                         }
@@ -2176,11 +2178,28 @@ fn BreakGroupModal(
     });
     let mut error = use_signal(|| None::<String>);
     let mut saving = use_signal(|| false);
+    // Match the API edit lock: once a STATBREAK start has passed, Save/Delete
+    // are disabled (PUT would 409). Delete via the API remains available as an
+    // escape hatch if needed outside this modal.
+    let edit_locked = is_statbreak
+        && first
+            .nominal_start_time
+            .as_deref()
+            .or(first.scheduled_start_time.as_deref())
+            .and_then(parse_schedule_time_utc)
+            .map(|start| chrono::Utc::now().naive_utc() >= start)
+            .unwrap_or(false);
 
     let url_save = tournament_url.clone();
     let name_save = name.clone();
     let group_type_save = group_type.clone();
     let do_save = move |_| {
+        if edit_locked {
+            error.set(Some(
+                "Static break cannot be edited once its start time has passed.".to_string(),
+            ));
+            return;
+        }
         if fields_sel().is_empty() {
             error.set(Some(format!(
                 "A {type_noun} group needs at least one field. Use Delete to remove it entirely."
@@ -2227,6 +2246,12 @@ fn BreakGroupModal(
     let url_delete = tournament_url.clone();
     let name_delete = name.clone();
     let do_delete = move |_| {
+        if edit_locked {
+            error.set(Some(
+                "Static break cannot be edited once its start time has passed.".to_string(),
+            ));
+            return;
+        }
         let u = url_delete.clone();
         let n = name_delete.clone();
         let on_save = on_save.clone();
@@ -2268,6 +2293,11 @@ fn BreakGroupModal(
                         if let Some(err) = error() {
                             div { class: "alert alert-danger", "{err}" }
                         }
+                        if edit_locked {
+                            div { class: "alert alert-warning",
+                                "This static break's start time has passed, so it can no longer be edited or deleted here."
+                            }
+                        }
                         div { class: "form-text mb-2",
                             if is_join {
                                 "Edits apply to every field's copy of this join. Each field's schedule continues only once all joined fields reach it."
@@ -2283,6 +2313,7 @@ fn BreakGroupModal(
                                 select {
                                     class: "form-select",
                                     value: "{sel_type}",
+                                    disabled: edit_locked,
                                     onchange: move |e| sel_type.set(e.value()),
                                     option { value: "BREAK", selected: sel_type() == "BREAK", "Break" }
                                     option { value: "JOIN", selected: sel_type() == "JOIN", "Join" }
@@ -2299,6 +2330,7 @@ fn BreakGroupModal(
                                             "type": "number",
                                             min: "0",
                                             value: "{length}",
+                                            disabled: edit_locked,
                                             oninput: move |e| length.set(e.value().parse().unwrap_or(30)),
                                         }
                                     }
@@ -2311,6 +2343,7 @@ fn BreakGroupModal(
                                                 class: "form-control",
                                                 "type": "datetime-local",
                                                 value: "{start_time}",
+                                                disabled: edit_locked,
                                                 oninput: move |e| start_time.set(e.value()),
                                             }
                                         }
@@ -2325,15 +2358,17 @@ fn BreakGroupModal(
                                 let all_selected = !all_field_names.is_empty()
                                     && all_field_names.iter().all(|f| fields_sel().contains(f));
                                 rsx! {
-                                    SelectAllToggle {
-                                        all_selected: all_selected,
-                                        on_toggle: move |select: bool| {
-                                            if select {
-                                                fields_sel.set(all_field_names.clone());
-                                            } else {
-                                                fields_sel.set(Vec::new());
-                                            }
-                                        },
+                                    if !edit_locked {
+                                        SelectAllToggle {
+                                            all_selected: all_selected,
+                                            on_toggle: move |select: bool| {
+                                                if select {
+                                                    fields_sel.set(all_field_names.clone());
+                                                } else {
+                                                    fields_sel.set(Vec::new());
+                                                }
+                                            },
+                                        }
                                     }
                                 }
                             }
@@ -2349,6 +2384,7 @@ fn BreakGroupModal(
                                                     "type": "checkbox",
                                                     id: "break-group-field-{f.id}",
                                                     checked: checked,
+                                                    disabled: edit_locked,
                                                     onchange: move |e| {
                                                         let mut v = fields_sel();
                                                         if e.value() == "true" {
@@ -2373,8 +2409,18 @@ fn BreakGroupModal(
                         }
                         div { class: "modal-footer",
                             button { class: "btn btn-secondary", "type": "button", onclick: move |_| on_close.call(()), "Cancel (Esc)" }
-                            button { class: "btn btn-danger", "type": "button", disabled: "{saving}", onclick: do_delete, "Delete Group" }
-                            button { class: "btn btn-primary", "type": "button", disabled: "{saving}", onclick: do_save,
+                            button {
+                                class: "btn btn-danger",
+                                "type": "button",
+                                disabled: saving() || edit_locked,
+                                onclick: do_delete,
+                                "Delete Group"
+                            }
+                            button {
+                                class: "btn btn-primary",
+                                "type": "button",
+                                disabled: saving() || edit_locked,
+                                onclick: do_save,
                                 if saving() { span { class: "spinner-border spinner-border-sm me-2" } }
                                 "Save"
                             }
