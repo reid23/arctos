@@ -146,9 +146,7 @@ class MatchDependencyAnalyzer:
             self._visit_list(tree, dependencies, visited_matches, visited_vars)
         elif tree.data == "identifier_atom":
             if tree.children and isinstance(tree.children[0], Token):
-                self._expand_variable(
-                    tree.children[0].value, dependencies, visited_matches, visited_vars
-                )
+                self._expand_variable(tree.children[0].value, dependencies, visited_matches, visited_vars)
         elif tree.data == "match_atom":
             # This is a match reference - it will be used in a function call context
             # The context will determine the dependency type

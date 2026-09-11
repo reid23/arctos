@@ -725,9 +725,7 @@ def push_back_matches(tournament_url):
     except (ValueError, TypeError):
         return jsonify({"success": False, "error": "Invalid tz_offset_minutes"}), 400
 
-    updated_count = push_back_unstarted_matches(
-        tournament_url, minutes, day, tz_offset_minutes=tz_offset_minutes
-    )
+    updated_count = push_back_unstarted_matches(tournament_url, minutes, day, tz_offset_minutes=tz_offset_minutes)
 
     if updated_count > 0:
         msg = f"Pushed back {updated_count} non-started match(es) on {day_str} by {minutes} minute(s)"
@@ -1305,9 +1303,7 @@ def push_back_matches_api(tournament_url):
     except (TypeError, ValueError):
         return jsonify({"error": "Invalid tz_offset_minutes"}), 400
 
-    push_back_unstarted_matches(
-        tournament_url, minutes, day, tz_offset_minutes=tz_offset_minutes
-    )
+    push_back_unstarted_matches(tournament_url, minutes, day, tz_offset_minutes=tz_offset_minutes)
     return jsonify({"success": True})
 
 

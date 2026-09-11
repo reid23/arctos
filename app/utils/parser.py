@@ -1794,10 +1794,15 @@ def _let_binding_pairs(bindings_tree) -> list[tuple[str, object]]:
         if not isinstance(b, Tree) or b.data != "list" or len(b.children) < 2:
             continue
         name = _identifier_atom_name(b.children[0])
-        if name is None and isinstance(b.children[0], Tree) and b.children[0].data in {
-            "expression",
-            "atom",
-        }:
+        if (
+            name is None
+            and isinstance(b.children[0], Tree)
+            and b.children[0].data
+            in {
+                "expression",
+                "atom",
+            }
+        ):
             name = _identifier_atom_name(b.children[0].children[0]) if b.children[0].children else None
         if name:
             pairs.append((name, b.children[1]))

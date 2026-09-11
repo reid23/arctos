@@ -787,9 +787,7 @@ def tournament_schedule_setup(tournament_url):
     script_variables_data = (
         [
             {"id": v.id, "name": v.name, "expression": v.expression}
-            for v in ScriptVariable.query.filter_by(event=tournament_url)
-            .order_by(ScriptVariable.name)
-            .all()
+            for v in ScriptVariable.query.filter_by(event=tournament_url).order_by(ScriptVariable.name).all()
         ]
         if is_to
         else []
