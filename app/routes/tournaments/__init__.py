@@ -44,23 +44,53 @@ def _lookup_match_in(uid: str | None, tournament_url: str) -> Match | None:
     return Match.query.filter_by(uuid=uid, event=tournament_url).first()
 
 
+def _chain_successor(match: Match, tournament_url: str, exclude_uuid: str | None = None) -> Match | None:
+    """The match that sits after *match* in its per-field chain.
+
+    Trusts ``match.next_match`` when set. Otherwise falls back to the unique
+    match whose ``previous_match`` back-pointer aims at *match* — chains can be
+    "half-linked" (child points at parent, parent's ``next_match`` unset), e.g.
+    around STATIC matches (which are deliberately detached on edit) or after a
+    TOML import that only populates ``previous_match``. If several candidates
+    point back (already-degenerate state), returns ``None`` rather than guess.
+
+    Args:
+        match: Chain node whose successor we want.
+        tournament_url: Tournament scope.
+        exclude_uuid: Optional uuid to ignore among back-pointer candidates
+            (used to exclude the match currently being spliced).
+    """
+    if match.next_match:
+        nxt = _lookup_match_in(match.next_match, tournament_url)
+        if nxt is not None:
+            return nxt
+    candidates = [
+        m
+        for m in Match.query.filter_by(previous_match=match.uuid, event=tournament_url).all()
+        if m.uuid != exclude_uuid
+    ]
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def detach_match_from_chain(match: Match, tournament_url: str) -> None:
     """Remove *match* from its per-field doubly-linked chain.
 
-    Closes up the gap left behind: ``old_prev.next_match`` is rewritten to
-    ``match.next_match`` and ``old_next.previous_match`` to ``match.previous_match``,
-    each guarded by a back-link consistency check so we never overwrite a
-    pointer that wasn't actually aimed at *match*. Both of *match*'s own
-    pointers are then cleared.
+    Closes up the gap left behind: the predecessor's ``next_match`` (when it
+    pointed at *match*) is rewritten to the successor, and the successor's
+    ``previous_match`` (when it pointed at *match*) is rewritten to the
+    predecessor. The successor is resolved via :func:`_chain_successor` so
+    half-linked chains (child ``previous_match`` set, parent's ``next_match``
+    unset) still get spliced closed. Both of *match*'s own pointers are then
+    cleared.
     """
     old_prev_id = match.previous_match
-    old_next_id = match.next_match
     old_prev = _lookup_match_in(old_prev_id, tournament_url)
-    old_next = _lookup_match_in(old_next_id, tournament_url)
+    successor = _chain_successor(match, tournament_url)
+    old_next_id = successor.uuid if successor is not None else None
     if old_prev is not None and old_prev.next_match == match.uuid:
         old_prev.next_match = old_next_id
-    if old_next is not None and old_next.previous_match == match.uuid:
-        old_next.previous_match = old_prev_id
+    if successor is not None and successor.previous_match == match.uuid:
+        successor.previous_match = old_prev_id
     match.previous_match = None
     match.next_match = None
 
@@ -91,18 +121,19 @@ def update_match_previous_link(match: Match, prev_match_id: str, tournament_url:
     if not is_new:
         detach_match_from_chain(match, tournament_url)
 
-    # Splice *match* between prev_match and whatever currently sits after prev_match.
-    new_next_id = prev_match.next_match
-    if new_next_id == match.uuid:
-        # Stale back-pointer guard.
-        new_next_id = None
+    # Splice *match* between prev_match and whatever currently sits after
+    # prev_match. The successor is derived via _chain_successor rather than
+    # prev_match.next_match alone: half-linked chains (successor's
+    # previous_match set, prev's next_match unset — STATIC matches, TOML
+    # imports) would otherwise leave the old successor also pointing at
+    # prev_match, giving two matches the same dependency and thus the same
+    # solved start time.
+    new_next = _chain_successor(prev_match, tournament_url, exclude_uuid=match.uuid)
     match.previous_match = prev_match.uuid
-    match.next_match = new_next_id
+    match.next_match = new_next.uuid if new_next is not None else None
     prev_match.next_match = match.uuid
-    if new_next_id:
-        new_next = _lookup_match_in(new_next_id, tournament_url)
-        if new_next is not None:
-            new_next.previous_match = match.uuid
+    if new_next is not None:
+        new_next.previous_match = match.uuid
 
 
 def delete_matches_with_children(match_uuids: list[str]) -> None:

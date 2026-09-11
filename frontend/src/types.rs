@@ -1486,9 +1486,35 @@ pub struct CreateBreakGroupRequest {
     /// Required for STATBREAK groups; ignored for BREAK.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub start_time: Option<String>,
+    /// Per-field previous-match UUID (BREAK/JOIN). Empty map = chain-tail default.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub previous_match: std::collections::HashMap<String, String>,
 }
 
 /// Edit every same-name break row at once. `None` fields are left unchanged.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BulkMatchLengthRequest {
+    pub match_ids: Vec<String>,
+    pub length: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BulkMatchLengthResultEntry {
+    pub match_id: String,
+    pub status: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BulkMatchLengthResponse {
+    pub success: bool,
+    #[serde(default)]
+    pub updated: u32,
+    #[serde(default)]
+    pub results: Vec<BulkMatchLengthResultEntry>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UpdateBreakGroupRequest {
     /// Whole-group conversion; only BREAK↔JOIN is accepted by the server.
@@ -1563,7 +1589,6 @@ pub struct CreateTagResponse {
     pub id: u32,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PushBackRequest {
     pub minutes: i32,

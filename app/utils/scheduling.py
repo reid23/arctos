@@ -234,12 +234,50 @@ def _procedure_with_match(
         # (start + length) as the dependency end time.
         return
 
-    if node.status in (
+    # Real-world facts are never recomputed: a started/finished/skipped match
+    # stays that way. BREAK/JOIN are exempt from the COMPLETED early-return —
+    # their COMPLETED is solver-derived (nothing else can set it on structural
+    # rows), so it must be re-earned each pass like any other solver status.
+    if node.schedule_type not in (ScheduleType.BREAK, ScheduleType.JOIN) and node.status in (
         MatchStatus.COMPLETED,
         MatchStatus.IN_PROGRESS,
         MatchStatus.SKIPPED,
     ):
         return
+
+    # --- Downgrade pass -----------------------------------------------------
+    # Solver-earned statuses must be re-earned on every solve: schedule edits
+    # (reordering, retargeted previous-match links, new dependencies, tag
+    # unassignment) can invalidate a previously-correct TIME_FINALIZED /
+    # READY_TO_START / structural COMPLETED. Reset such nodes to their type's
+    # floor here; the earn logic below re-grants whatever still holds. This
+    # runs before the time computation so a downgraded SAFE/FAST node (now
+    # NOT_STARTED again) also gets its nominal recomputed this pass.
+    # Dependencies were already processed (topological order), so their
+    # downgraded statuses are visible and downgrades cascade down chains.
+    deps_started = _all_schedule_deps_in(node, (MatchStatus.IN_PROGRESS, MatchStatus.COMPLETED, MatchStatus.SKIPPED))
+    deps_complete = _all_schedule_deps_in(node, (MatchStatus.COMPLETED, MatchStatus.SKIPPED))
+    if node.status == MatchStatus.READY_TO_START:
+        ready_still_valid = deps_complete and _all_participating_teams_resolved(
+            name_to_match[node.name], tournament_url, name_to_match, tag_by_name
+        )
+        if not ready_still_valid:
+            if node.schedule_type == ScheduleType.STATIC:
+                # A STATIC match's time is finalized by definition.
+                node.status = MatchStatus.TIME_FINALIZED
+            elif node.schedule_type == ScheduleType.SAFE and deps_started:
+                node.status = MatchStatus.TIME_FINALIZED
+            else:
+                node.status = MatchStatus.NOT_STARTED
+    elif node.status == MatchStatus.TIME_FINALIZED:
+        if node.schedule_type == ScheduleType.SAFE and not deps_started:
+            node.status = MatchStatus.NOT_STARTED
+        # STATIC TIME_FINALIZED is the floor; FAST never earns TIME_FINALIZED.
+    elif node.status == MatchStatus.COMPLETED:
+        # Only reachable for BREAK/JOIN (see early-return above).
+        if not deps_complete:
+            node.status = MatchStatus.NOT_STARTED
+    # -------------------------------------------------------------------------
 
     nominal_start_if_skipped: Optional[datetime] = None
 
@@ -310,8 +348,8 @@ def _procedure_for_cycle_node(
       ``nominal_start_time`` alone — the operator can fix the cycle from the
       Schedule Warnings modal.
 
-    Status is left at ``NOT_STARTED`` because in a cycle we can't honestly
-    say the schedule is finalised.
+    Solver-earned statuses (``READY_TO_START`` / ``TIME_FINALIZED``) are reset
+    to the type floor: a cycle cannot honestly keep a match startable.
     """
     from app.utils.MatchGraph import _node_end_time
 
@@ -321,6 +359,14 @@ def _procedure_for_cycle_node(
         MatchStatus.SKIPPED,
     ):
         return
+
+    # Downgrade solver-earned statuses — READY cannot be re-earned in a cycle.
+    if node.status in (MatchStatus.READY_TO_START, MatchStatus.TIME_FINALIZED):
+        if node.schedule_type == ScheduleType.STATIC:
+            node.status = MatchStatus.TIME_FINALIZED
+        else:
+            node.status = MatchStatus.NOT_STARTED
+
     if node.schedule_type == ScheduleType.STATIC:
         if node.status == MatchStatus.NOT_STARTED:
             node.status = MatchStatus.TIME_FINALIZED
@@ -502,20 +548,23 @@ _STARTED_STATUSES = (
 
 
 def push_back_unstarted_matches(tournament_url: str, minutes: int) -> int:
-    """Shift STATIC plan anchors for all unstarted matches, then recompute.
+    """Shift plan anchors for unstarted STATIC and future STATBREAK rows, then recompute.
 
     Unstarted means anything not in progress / completed / skipped, including
-    ``READY_TO_START`` and ``TIME_FINALIZED``. Only STATIC rows move; dynamic
-    matches re-derive both timelines from the new anchors.
+    ``READY_TO_START`` and ``TIME_FINALIZED``. STATIC anchors always move when
+    unstarted. STATBREAK anchors move only when their start has not yet passed
+    (same edit-lock rule as the break-group endpoints). Dynamic matches
+    re-derive both timelines from the new anchors.
 
     Args:
         tournament_url: Tournament URL slug.
         minutes: Signed minute delta to apply to plan anchors.
 
     Returns:
-        Number of STATIC anchors whose times were shifted.
+        Number of anchors whose times were shifted.
     """
     from app.models.match import Match
+    from app.utils.datetime_helpers import now_utc_naive
 
     if not minutes:
         return 0
@@ -523,8 +572,15 @@ def push_back_unstarted_matches(tournament_url: str, minutes: int) -> int:
     delta = timedelta(minutes=minutes)
     matches = Match.query.filter_by(event=tournament_url).filter(~Match.status.in_(_STARTED_STATUSES)).all()
     updated = 0
+    now = now_utc_naive()
     for m in matches:
-        if m.schedule_type != ScheduleType.STATIC:
+        if m.schedule_type == ScheduleType.STATIC:
+            pass
+        elif m.schedule_type == ScheduleType.STATBREAK:
+            start = m.nominal_start_time or m.scheduled_start_time
+            if start is not None and now >= start:
+                continue  # past-start STATBREAKs are locked history
+        else:
             continue
         shifted = False
         if m.scheduled_start_time is not None:

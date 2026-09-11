@@ -743,6 +743,89 @@ def delete_match_api(tournament_url, match_id):
     return jsonify({"success": True})
 
 
+@bp.route("/tournaments/<tournament_url>/matches/bulk-length", methods=["POST"])
+@login_required
+def bulk_match_length_api(tournament_url):
+    """Set ``nominal_length`` on many matches at once.
+
+    Body: ``{"match_ids": [...], "length": <minutes>}``. Applies the shared
+    length to every editable match. Selecting any row of a multi-field
+    BREAK/STATBREAK group expands to the whole same-name group so durations
+    stay in sync. Skips JOINs (structurally zero-length), started matches, and
+    STATBREAKs whose start has passed (same lock as the group endpoint).
+    Single commit, one recompute, per-match results in the response.
+    """
+    if not _check_to(tournament_url):
+        return jsonify({"error": "Forbidden"}), 403
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    match_ids = data.get("match_ids")
+    if not isinstance(match_ids, list) or not match_ids:
+        return jsonify({"error": "match_ids must be a non-empty list."}), 400
+
+    try:
+        length = int(data.get("length"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Length must be a number of minutes."}), 400
+    if length <= 0:
+        return jsonify({"error": "Length must be greater than zero."}), 400
+
+    # Dedup while preserving order so results line up with the request.
+    seen: set[str] = set()
+    unique_ids: list[str] = []
+    for mid in match_ids:
+        mid = str(mid or "").strip()
+        if mid and mid not in seen:
+            seen.add(mid)
+            unique_ids.append(mid)
+    if not unique_ids:
+        return jsonify({"error": "match_ids must be a non-empty list."}), 400
+
+    # Expand BREAK/STATBREAK selections to every same-name structural row so a
+    # bulk length change cannot desync a multi-field group.
+    expanded_ids: list[str] = []
+    expanded_seen: set[str] = set()
+    for mid in unique_ids:
+        match = Match.query.filter_by(uuid=mid, event=tournament_url).first()
+        if match is not None and match.schedule_type in (ScheduleType.BREAK, ScheduleType.STATBREAK) and match.name:
+            for sibling in _break_group_rows(tournament_url, match.name):
+                if sibling.uuid not in expanded_seen:
+                    expanded_seen.add(sibling.uuid)
+                    expanded_ids.append(sibling.uuid)
+        elif mid not in expanded_seen:
+            expanded_seen.add(mid)
+            expanded_ids.append(mid)
+
+    results = []
+    updated = 0
+    for mid in expanded_ids:
+        match = Match.query.filter_by(uuid=mid, event=tournament_url).first()
+        if not match:
+            results.append({"match_id": mid, "status": "not_found"})
+            continue
+        if match.schedule_type == ScheduleType.JOIN:
+            results.append({"match_id": mid, "status": "skipped_join"})
+            continue
+        if match.schedule_type == ScheduleType.STATBREAK and _statbreak_start_passed(match):
+            results.append({"match_id": mid, "status": "skipped_locked"})
+            continue
+        if match.status in _LOCKED_STATUSES:
+            results.append({"match_id": mid, "status": "skipped_locked"})
+            continue
+        match.nominal_length = length
+        updated += 1
+        results.append({"match_id": mid, "status": "updated"})
+
+    db.session.commit()
+    if updated:
+        recompute_scheduled_and_nominal_times(tournament_url)
+
+    return jsonify({"success": True, "updated": updated, "results": results})
+
+
 # ---------------------------------------------------------------------------
 # Structural groups ("break-groups" API): same-name BREAK/STATBREAK/JOIN rows
 # across multiple fields, created and edited as one unit (shared name / length /
