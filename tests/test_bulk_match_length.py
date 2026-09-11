@@ -69,36 +69,51 @@ def test_bulk_length_happy_path(app, client, tournament, to_player):
 
 
 @pytest.mark.integration
-def test_bulk_length_skips_locked_but_updates_statbreak(app, client, tournament, to_player):
-    """Started matches are skipped; a COMPLETED STATBREAK is still editable."""
+def test_bulk_length_skips_past_statbreak_expands_group(app, client, tournament, to_player):
+    """Past-start STATBREAKs are locked; selecting one BREAK updates the whole group."""
+    from datetime import timedelta
+
     with app.app_context():
         t = db.session.merge(tournament)
         t_url = t.url
         locked = _make_match(t.url, "Locked", status=MatchStatus.COMPLETED)
-        statbreak = _make_match(
-            t.url,
-            "Lunch",
-            schedule_type=ScheduleType.STATBREAK,
-            status=MatchStatus.COMPLETED,
+        past = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=1)
+        sb = _make_match(t.url, "PastLunch", schedule_type=ScheduleType.STATBREAK, length=30)
+        sb.nominal_start_time = past
+        sb.scheduled_start_time = past
+        brk1 = _make_match(t.url, "Lunch", schedule_type=ScheduleType.BREAK, length=30)
+        brk2 = Match(
+            name="Lunch",
+            event=t.url,
+            field="Field 2",
+            schedule_type=ScheduleType.BREAK,
+            status=MatchStatus.NOT_STARTED,
+            nominal_length=30,
+            nominal_start_time=datetime.now(timezone.utc).replace(tzinfo=None),
         )
+        db.session.add(brk2)
         db.session.commit()
-        locked_id, statbreak_id = locked.uuid, statbreak.uuid
+        locked_id, sb_id, brk1_id, brk2_id = locked.uuid, sb.uuid, brk1.uuid, brk2.uuid
         login_as(client, db.session.merge(to_player))
 
     resp = client.post(
         f"/_api/tournaments/{t_url}/matches/bulk-length",
-        json={"match_ids": [locked_id, statbreak_id], "length": 20},
+        json={"match_ids": [locked_id, sb_id, brk1_id], "length": 20},
     )
     assert resp.status_code == 200
     data = resp.get_json()
-    assert data["updated"] == 1
     statuses = {r["match_id"]: r["status"] for r in data["results"]}
     assert statuses[locked_id] == "skipped_locked"
-    assert statuses[statbreak_id] == "updated"
+    assert statuses[sb_id] == "skipped_locked"
+    assert statuses[brk1_id] == "updated"
+    assert statuses[brk2_id] == "updated"
+    assert data["updated"] == 2
 
     with app.app_context():
         assert Match.query.filter_by(uuid=locked_id).first().nominal_length == 30
-        assert Match.query.filter_by(uuid=statbreak_id).first().nominal_length == 20
+        assert Match.query.filter_by(uuid=sb_id).first().nominal_length == 30
+        assert Match.query.filter_by(uuid=brk1_id).first().nominal_length == 20
+        assert Match.query.filter_by(uuid=brk2_id).first().nominal_length == 20
 
 
 @pytest.mark.integration

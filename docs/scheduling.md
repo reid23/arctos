@@ -272,3 +272,22 @@ share a name are rejected on create and edit.
 Completing at the start (not the end) lets the next match become ready early
 while the break window is still open; the chain still places that match at
 `start + nominal_length`.
+
+---
+
+## Schedule editor (`/:url/schedule/edit`)
+
+TO-only full-width editor. Public schedule views stay read-only.
+
+| Tool | Behavior |
+|------|----------|
+| Drag empty space | Create card prefilled with field / start / length; BREAK/JOIN/STATBREAK use the group form |
+| Drag STATIC | Free place (field + start) |
+| Drag STATBREAK | Vertical (time) only — shared group start; field membership via the group card |
+| Drag BREAK / JOIN | Disabled — edit via the group card so multi-field rows stay in sync |
+| Drag SAFE / FAST | Snap after a previous match on the destination field |
+| Bulk change length | Multi-select; BREAK/STATBREAK selections expand to the whole same-name group; past-start STATBREAKs are locked |
+| Push back day | Shifts **STATIC** and **future STATBREAK** plan anchors by N minutes; dynamic matches re-solve |
+
+Break/join create from a drag sends a per-field `previous_match` map so rows
+land at the drop position rather than always at each field's chain tail.

@@ -75,20 +75,22 @@ def _chain_successor(match: Match, tournament_url: str, exclude_uuid: str | None
 def detach_match_from_chain(match: Match, tournament_url: str) -> None:
     """Remove *match* from its per-field doubly-linked chain.
 
-    Closes up the gap left behind: ``old_prev.next_match`` is rewritten to
-    ``match.next_match`` and ``old_next.previous_match`` to ``match.previous_match``,
-    each guarded by a back-link consistency check so we never overwrite a
-    pointer that wasn't actually aimed at *match*. Both of *match*'s own
-    pointers are then cleared.
+    Closes up the gap left behind: the predecessor's ``next_match`` (when it
+    pointed at *match*) is rewritten to the successor, and the successor's
+    ``previous_match`` (when it pointed at *match*) is rewritten to the
+    predecessor. The successor is resolved via :func:`_chain_successor` so
+    half-linked chains (child ``previous_match`` set, parent's ``next_match``
+    unset) still get spliced closed. Both of *match*'s own pointers are then
+    cleared.
     """
     old_prev_id = match.previous_match
-    old_next_id = match.next_match
     old_prev = _lookup_match_in(old_prev_id, tournament_url)
-    old_next = _lookup_match_in(old_next_id, tournament_url)
+    successor = _chain_successor(match, tournament_url)
+    old_next_id = successor.uuid if successor is not None else None
     if old_prev is not None and old_prev.next_match == match.uuid:
         old_prev.next_match = old_next_id
-    if old_next is not None and old_next.previous_match == match.uuid:
-        old_next.previous_match = old_prev_id
+    if successor is not None and successor.previous_match == match.uuid:
+        successor.previous_match = old_prev_id
     match.previous_match = None
     match.next_match = None
 

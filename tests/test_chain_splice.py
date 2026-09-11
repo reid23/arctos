@@ -133,3 +133,28 @@ class TestHalfLinkedChainSplice:
             assert a.next_match is None
             assert b.previous_match == s.uuid
             assert c.previous_match == s.uuid
+
+    def test_detach_half_linked_middle_repoints_child(self, app, test_db, tournament):
+        """Detaching a half-linked middle node must close the child's back-pointer."""
+        from app.routes.tournaments import detach_match_from_chain
+
+        url = tournament.url
+        with app.app_context():
+            s = _mk("S", url, ScheduleType.STATIC, start=datetime(2026, 8, 20, 9, 0))
+            mid = _mk("Mid", url, ScheduleType.SAFE)
+            child = _mk("Child", url, ScheduleType.SAFE)
+            # Half-linked: Mid has no next_match, but Child.previous_match → Mid.
+            mid.previous_match = s.uuid
+            child.previous_match = mid.uuid
+            db.session.commit()
+
+            mid = Match.query.filter_by(name="Mid", event=url).one()
+            detach_match_from_chain(mid, url)
+            db.session.commit()
+
+            mid = Match.query.filter_by(name="Mid", event=url).one()
+            child = Match.query.filter_by(name="Child", event=url).one()
+            s = Match.query.filter_by(name="S", event=url).one()
+            assert mid.previous_match is None
+            assert mid.next_match is None
+            assert child.previous_match == s.uuid

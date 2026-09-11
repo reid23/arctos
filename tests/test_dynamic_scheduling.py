@@ -633,6 +633,47 @@ class TestPlanAnchorWritePaths:
             assert _aware_utc(anchor.nominal_start_time) == _aware_utc(base + timedelta(minutes=15))
 
     @pytest.mark.unit
+    def test_push_back_moves_future_statbreak_not_past(self, app, test_db, tournament):
+        """Future STATBREAK anchors shift; past-start STATBREAKs stay locked."""
+        from app.domain.enums import ScheduleType
+        from app.utils.scheduling import push_back_unstarted_matches
+
+        tournament_url = tournament.url
+        with app.app_context():
+            base = datetime.now(timezone.utc).replace(tzinfo=None)
+            future = Match(
+                name="FutureLunch",
+                event=tournament_url,
+                field="Field 1",
+                nominal_start_time=base + timedelta(hours=2),
+                scheduled_start_time=base + timedelta(hours=2),
+                schedule_type=ScheduleType.STATBREAK,
+                nominal_length=30,
+                status=MatchStatus.NOT_STARTED,
+            )
+            past = Match(
+                name="PastLunch",
+                event=tournament_url,
+                field="Field 1",
+                nominal_start_time=base - timedelta(hours=1),
+                scheduled_start_time=base - timedelta(hours=1),
+                schedule_type=ScheduleType.STATBREAK,
+                nominal_length=30,
+                status=MatchStatus.NOT_STARTED,
+            )
+            db.session.add_all([future, past])
+            db.session.commit()
+            past_start = past.scheduled_start_time
+
+            push_back_unstarted_matches(tournament_url, 20)
+            db.session.refresh(future)
+            db.session.refresh(past)
+            assert _aware_utc(future.scheduled_start_time) == _aware_utc(
+                base + timedelta(hours=2, minutes=20)
+            )
+            assert _aware_utc(past.scheduled_start_time) == _aware_utc(past_start)
+
+    @pytest.mark.unit
     def test_live_pass_after_late_finish_does_not_move_plan(self, app, test_db, tournament):
         """Regression: recompute_all_match_times after a late finish must leave scheduled alone."""
         tournament_url = tournament.url

@@ -1486,6 +1486,9 @@ pub struct CreateBreakGroupRequest {
     /// Required for STATBREAK groups; ignored for BREAK.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub start_time: Option<String>,
+    /// Per-field previous-match UUID (BREAK/JOIN). Empty map = chain-tail default.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub previous_match: std::collections::HashMap<String, String>,
 }
 
 /// Edit every same-name break row at once. `None` fields are left unchanged.

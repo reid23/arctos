@@ -70,6 +70,29 @@ fn schedule_tz_offset_minutes() -> i64 {
     }
 }
 
+/// Build a per-field `previous_match` map for BREAK/JOIN create: each selected
+/// field gets the latest match that starts at or before *start_local_str*
+/// (datetime-local). Empty when the start can't be parsed.
+fn break_group_previous_map(
+    matches: &[MatchSetupData],
+    fields: &[String],
+    start_local_str: &str,
+) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    let Ok(ndt) =
+        chrono::NaiveDateTime::parse_from_str(start_local_str.trim(), "%Y-%m-%dT%H:%M")
+    else {
+        return map;
+    };
+    let tz = schedule_tz_offset_minutes();
+    for f in fields {
+        if let Some((uuid, _, _)) = latest_match_before(matches, f, ndt, "", false, tz) {
+            map.insert(f.clone(), uuid);
+        }
+    }
+    map
+}
+
 /// Convert a datetime-local value (local time, no timezone) to UTC ISO string for the API.
 fn local_datetime_to_utc_iso(local_str: &str) -> Option<String> {
     use chrono::{FixedOffset, TimeZone, Utc};
@@ -1256,7 +1279,7 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                                             button { class: "btn btn-sm btn-outline-secondary", onclick: move |_| active_modal.set("toml_import".to_string()), "Import TOML" }
                                             button {
                                                 class: if push_back_open() { "btn btn-sm btn-primary" } else { "btn btn-sm btn-outline-primary" },
-                                                title: "Shift every not-yet-started match's planned time by N minutes (e.g. the day started late)",
+                                                title: "Shift STATIC and future STATBREAK plan anchors by N minutes; dynamic matches re-solve (e.g. the day started late)",
                                                 onclick: move |_| push_back_open.set(!push_back_open()),
                                                 "Push back day…"
                                             }
@@ -1322,7 +1345,7 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                                 div { class: "card-body py-2 d-flex flex-wrap align-items-center gap-2",
                                     strong { class: "small", "Push back day:" }
                                     span { class: "small text-muted",
-                                        "shifts the plan of every match that hasn't started (negative pulls the day forward)"
+                                        "shifts STATIC and future STATBREAK plan anchors; dynamic matches re-solve (negative pulls the day forward)"
                                     }
                                     label { class: "small mb-0 ms-2", "Minutes" }
                                     input {
@@ -1493,8 +1516,38 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                                 let matches_for_edit = data.matches.clone();
                                 move |id: String| {
                                     // Bulk-length tool: clicks toggle selection instead of editing.
+                                    // Structural BREAK/STATBREAK rows toggle the whole same-name group.
                                     if bulk_mode() {
                                         let mut sel = bulk_selected();
+                                        if let Some(m) =
+                                            matches_for_edit.iter().find(|m| m.uuid == id)
+                                        {
+                                            if is_structural_match(m)
+                                                && m.schedule_type.as_deref() != Some("JOIN")
+                                                && !m.name.is_empty()
+                                            {
+                                                let group_ids: Vec<String> = matches_for_edit
+                                                    .iter()
+                                                    .filter(|x| {
+                                                        x.name == m.name && is_structural_match(x)
+                                                    })
+                                                    .map(|x| x.uuid.clone())
+                                                    .collect();
+                                                let all_on =
+                                                    group_ids.iter().all(|g| sel.contains(g));
+                                                if all_on {
+                                                    sel.retain(|s| !group_ids.contains(s));
+                                                } else {
+                                                    for g in group_ids {
+                                                        if !sel.contains(&g) {
+                                                            sel.push(g);
+                                                        }
+                                                    }
+                                                }
+                                                bulk_selected.set(sel);
+                                                return;
+                                            }
+                                        }
                                         if let Some(pos) = sel.iter().position(|s| s == &id) {
                                             sel.remove(pos);
                                         } else {
@@ -1870,9 +1923,13 @@ fn CreateMatchModal(
         let s = prefill_start_time.clone();
         move || s.unwrap_or_default()
     });
-    // Dynamic default types start with the drag-derived previous match preselected.
+    // Dynamic / structural default types start with the drag-derived previous
+    // match preselected (BREAK/JOIN use it for the group predecessor map).
     let mut previous_match_id = use_signal({
-        let init = if matches!(initial_type.as_str(), "SAFE" | "FAST") {
+        let init = if matches!(
+            initial_type.as_str(),
+            "SAFE" | "FAST" | "BREAK" | "JOIN"
+        ) {
             prefill_prev_match_id.clone().unwrap_or_default()
         } else {
             String::new()
@@ -2080,16 +2137,23 @@ fn CreateMatchModal(
             error.set(None);
             if matches!(schedule_type().as_str(), "BREAK" | "STATBREAK" | "JOIN") {
                 let is_join = schedule_type() == "JOIN";
+                let fields = break_fields();
+                let previous_match = if matches!(schedule_type().as_str(), "BREAK" | "JOIN") {
+                    break_group_previous_map(&data.matches, &fields, &start_time())
+                } else {
+                    std::collections::HashMap::new()
+                };
                 let req = CreateBreakGroupRequest {
                     name: name(),
                     schedule_type: schedule_type(),
                     length: if is_join { 0 } else { length() },
-                    fields: break_fields(),
+                    fields,
                     start_time: if schedule_type() == "STATBREAK" {
                         local_datetime_to_utc_iso(&start_time()).or_else(|| Some(start_time()))
                     } else {
                         None
                     },
+                    previous_match,
                 };
                 match api::create_break_group(&tournament_url, &req).await {
                     Ok(_) => {
@@ -2212,16 +2276,23 @@ fn CreateMatchModal(
                 error.set(None);
                 if matches!(schedule_type().as_str(), "BREAK" | "STATBREAK" | "JOIN") {
                     let is_join = schedule_type() == "JOIN";
+                    let fields = break_fields();
+                    let previous_match = if matches!(schedule_type().as_str(), "BREAK" | "JOIN") {
+                        break_group_previous_map(&data.matches, &fields, &start_time())
+                    } else {
+                        std::collections::HashMap::new()
+                    };
                     let req = CreateBreakGroupRequest {
                         name: name(),
                         schedule_type: schedule_type(),
                         length: if is_join { 0 } else { length() },
-                        fields: break_fields(),
+                        fields,
                         start_time: if schedule_type() == "STATBREAK" {
                             local_datetime_to_utc_iso(&start_time()).or_else(|| Some(start_time()))
                         } else {
                             None
                         },
+                        previous_match,
                     };
                     match api::create_break_group(&tournament_url, &req).await {
                         Ok(_) => {
@@ -2486,11 +2557,11 @@ fn CreateMatchModal(
                                     }
                                     div { class: "form-text mb-1",
                                         if schedule_type() == "JOIN" {
-                                            "One join is created per selected field, appended at the end of each field's chain. Each field's schedule continues only once all joined fields reach it."
+                                            "One join is created per selected field. When created from a drag, each field's row is inserted after the match at that drop time. Each field's schedule continues only once all joined fields reach it."
                                         } else if schedule_type() == "STATBREAK" {
                                             "One static break is created per selected field at the given start time. Like static matches, they do not need a predecessor; same-name rows share the start time."
                                         } else {
-                                            "One break is created per selected field. New breaks are appended at the end of each field's chain, and same-name breaks always start together."
+                                            "One break is created per selected field. When created from a drag, each field's row is inserted after the match at that drop time; same-name breaks always start together."
                                         }
                                     }
                                     div { class: "d-flex flex-wrap gap-3",
@@ -5318,7 +5389,9 @@ fn ScheduleTimeline(
             let Some((st, name, start_min, dur, col)) = info.get(&id).cloned() else {
                 return;
             };
-            if st == "JOIN" {
+            if st == "JOIN" || st == "BREAK" {
+                // Joins and breaks are edited via the group card — dragging a
+                // single row would desync multi-field groups.
                 return;
             }
             let Some((_, ptr_min)) = grid_pos_from_client(cx, cy, num_fields_total) else {
@@ -5636,10 +5709,18 @@ fn ScheduleTimeline(
                     cur_start_min,
                     moved,
                 } => {
+                    // STATBREAK groups share one start across fields — vertical
+                    // (time) moves only; membership stays in the group card.
+                    let target_col = if schedule_type == "STATBREAK" {
+                        orig_col
+                    } else {
+                        col
+                    };
                     let new_start =
                         snap5(min - grab_offset_min).clamp(0, 24 * 60 - duration_min.min(24 * 60));
-                    let new_moved = moved || new_start != orig_start_min || col != orig_col;
-                    if new_start != cur_start_min || col != cur_col || new_moved != moved {
+                    let new_moved =
+                        moved || new_start != orig_start_min || target_col != orig_col;
+                    if new_start != cur_start_min || target_col != cur_col || new_moved != moved {
                         drag_state.set(Some(TimelineDrag::Move {
                             id,
                             schedule_type,
@@ -5648,7 +5729,7 @@ fn ScheduleTimeline(
                             grab_offset_min,
                             orig_col,
                             orig_start_min,
-                            cur_col: col,
+                            cur_col: target_col,
                             cur_start_min: new_start,
                             moved: new_moved,
                         }));

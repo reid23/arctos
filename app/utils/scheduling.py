@@ -348,8 +348,8 @@ def _procedure_for_cycle_node(
       ``nominal_start_time`` alone — the operator can fix the cycle from the
       Schedule Warnings modal.
 
-    Status is left at ``NOT_STARTED`` because in a cycle we can't honestly
-    say the schedule is finalised.
+    Solver-earned statuses (``READY_TO_START`` / ``TIME_FINALIZED``) are reset
+    to the type floor: a cycle cannot honestly keep a match startable.
     """
     from app.utils.MatchGraph import _node_end_time
 
@@ -359,6 +359,14 @@ def _procedure_for_cycle_node(
         MatchStatus.SKIPPED,
     ):
         return
+
+    # Downgrade solver-earned statuses — READY cannot be re-earned in a cycle.
+    if node.status in (MatchStatus.READY_TO_START, MatchStatus.TIME_FINALIZED):
+        if node.schedule_type == ScheduleType.STATIC:
+            node.status = MatchStatus.TIME_FINALIZED
+        else:
+            node.status = MatchStatus.NOT_STARTED
+
     if node.schedule_type == ScheduleType.STATIC:
         if node.status == MatchStatus.NOT_STARTED:
             node.status = MatchStatus.TIME_FINALIZED
@@ -540,20 +548,23 @@ _STARTED_STATUSES = (
 
 
 def push_back_unstarted_matches(tournament_url: str, minutes: int) -> int:
-    """Shift STATIC plan anchors for all unstarted matches, then recompute.
+    """Shift plan anchors for unstarted STATIC and future STATBREAK rows, then recompute.
 
     Unstarted means anything not in progress / completed / skipped, including
-    ``READY_TO_START`` and ``TIME_FINALIZED``. Only STATIC rows move; dynamic
-    matches re-derive both timelines from the new anchors.
+    ``READY_TO_START`` and ``TIME_FINALIZED``. STATIC anchors always move when
+    unstarted. STATBREAK anchors move only when their start has not yet passed
+    (same edit-lock rule as the break-group endpoints). Dynamic matches
+    re-derive both timelines from the new anchors.
 
     Args:
         tournament_url: Tournament URL slug.
         minutes: Signed minute delta to apply to plan anchors.
 
     Returns:
-        Number of STATIC anchors whose times were shifted.
+        Number of anchors whose times were shifted.
     """
     from app.models.match import Match
+    from app.utils.datetime_helpers import now_utc_naive
 
     if not minutes:
         return 0
@@ -561,8 +572,15 @@ def push_back_unstarted_matches(tournament_url: str, minutes: int) -> int:
     delta = timedelta(minutes=minutes)
     matches = Match.query.filter_by(event=tournament_url).filter(~Match.status.in_(_STARTED_STATUSES)).all()
     updated = 0
+    now = now_utc_naive()
     for m in matches:
-        if m.schedule_type != ScheduleType.STATIC:
+        if m.schedule_type == ScheduleType.STATIC:
+            pass
+        elif m.schedule_type == ScheduleType.STATBREAK:
+            start = m.nominal_start_time or m.scheduled_start_time
+            if start is not None and now >= start:
+                continue  # past-start STATBREAKs are locked history
+        else:
             continue
         shifted = False
         if m.scheduled_start_time is not None:
