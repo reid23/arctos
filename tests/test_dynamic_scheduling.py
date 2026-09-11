@@ -668,9 +668,7 @@ class TestPlanAnchorWritePaths:
             push_back_unstarted_matches(tournament_url, 20)
             db.session.refresh(future)
             db.session.refresh(past)
-            assert _aware_utc(future.scheduled_start_time) == _aware_utc(
-                base + timedelta(hours=2, minutes=20)
-            )
+            assert _aware_utc(future.scheduled_start_time) == _aware_utc(base + timedelta(hours=2, minutes=20))
             assert _aware_utc(past.scheduled_start_time) == _aware_utc(past_start)
 
     @pytest.mark.unit

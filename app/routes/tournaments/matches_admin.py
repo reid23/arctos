@@ -790,11 +790,7 @@ def bulk_match_length_api(tournament_url):
     expanded_seen: set[str] = set()
     for mid in unique_ids:
         match = Match.query.filter_by(uuid=mid, event=tournament_url).first()
-        if (
-            match is not None
-            and match.schedule_type in (ScheduleType.BREAK, ScheduleType.STATBREAK)
-            and match.name
-        ):
+        if match is not None and match.schedule_type in (ScheduleType.BREAK, ScheduleType.STATBREAK) and match.name:
             for sibling in _break_group_rows(tournament_url, match.name):
                 if sibling.uuid not in expanded_seen:
                     expanded_seen.add(sibling.uuid)
