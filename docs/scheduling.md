@@ -256,9 +256,10 @@ share a name are rejected on create and edit.
 | Solver | Never moves the start |
 | Predecessor | Optional (like STATIC) — not required; group create does not auto-chain |
 | Stored `status` | Ignored / left `NOT_STARTED` — the solver does not write it |
-| `effective_status` | `COMPLETED` once `start + nominal_length` has passed; else `NOT_STARTED` |
-| Dependents | Treat STATBREAK as a schedule-dependency terminal; wait for **end** before `READY_TO_START` |
-| Edit lock | Locked once the **start** has passed (earlier than completion) |
+| `effective_status` | `COMPLETED` once the **start** has passed; else `NOT_STARTED` |
+| Dependents | Treat STATBREAK as a schedule-dependency terminal; may become `READY_TO_START` once the start has passed (early start OK). Planned times still use the break **end** (`start + length`) |
+| Edit lock | Locked once the **start** has passed (same moment as completion) |
 
-Completing at the scheduled end (not the start) prevents chained matches
-from becoming `READY_TO_START` while the break is still active.
+Completing at the start (not the end) lets the next match become ready early
+while the break window is still open; the chain still places that match at
+`start + nominal_length`.

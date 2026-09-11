@@ -7,8 +7,9 @@ Covers:
 - breaks and joins only occupy fields: team requirements are rejected on every
   structural type, and the single-match endpoints clear refs on them;
 - STATBREAK: never moved by either pass; its status is derived from the
-  current time when read (COMPLETED once start + length passes) and never
-  stored; chained matches respect its end; edit-locked once start passes;
+  current time when read (COMPLETED once the start passes) and never
+  stored; chained matches use its end (start + length) for placement and
+  may become READY once the start has passed; edit-locked once start passes;
 - break-group JSON endpoints (create/update/delete by display name).
 """
 
@@ -157,11 +158,11 @@ class TestSameNameBreakSync:
 
 class TestStatBreak:
     @pytest.mark.unit
-    def test_statbreak_never_moves_and_completes_at_end(self, app, test_db, tournament):
+    def test_statbreak_never_moves_and_completes_at_start(self, app, test_db, tournament):
         """A STATBREAK keeps its user-set times through both passes; its
-        effective status is COMPLETED only once start + length has passed
-        while the stored status stays NOT_STARTED; a chained match still
-        respects its END (start + length)."""
+        effective status is COMPLETED once the start has passed while the
+        stored status stays NOT_STARTED; a chained match still places at the
+        break END (start + length)."""
         url = tournament.url
         with app.app_context():
             base = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -197,9 +198,9 @@ class TestStatBreak:
             assert _close(after.scheduled_start_time, past_start + timedelta(minutes=30))
 
     @pytest.mark.unit
-    def test_statbreak_active_window_not_completed(self, app, test_db, tournament):
-        """During start..start+length the STATBREAK is still NOT_STARTED so
-        dependents do not become ready mid-break."""
+    def test_statbreak_start_unblocks_dependent_ready_mid_window(self, app, test_db, tournament):
+        """Once the start has passed, effective status is COMPLETED and a chained
+        SAFE may become READY_TO_START even while start..start+length is open."""
         url = tournament.url
         with app.app_context():
             base = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -222,14 +223,14 @@ class TestStatBreak:
             db.session.refresh(sb)
             db.session.refresh(after)
             assert sb.status == MatchStatus.NOT_STARTED
-            assert sb.effective_status == MatchStatus.NOT_STARTED
-            # STATBREAK is a schedule-dep terminal: not walked through to anything
-            # earlier, so the dependent stays blocked while the window is open.
-            assert after.status == MatchStatus.NOT_STARTED
+            assert sb.effective_status == MatchStatus.COMPLETED
+            assert after.status == MatchStatus.READY_TO_START
+            # Placement still uses the break end.
+            assert _close(after.nominal_start_time, past_start + timedelta(minutes=30))
 
     @pytest.mark.unit
-    def test_statbreak_end_unblocks_dependent_ready(self, app, test_db, tournament):
-        """Once start+length has passed, a chained SAFE may become READY_TO_START."""
+    def test_statbreak_past_end_keeps_dependent_ready(self, app, test_db, tournament):
+        """After start+length, status stays COMPLETED and the dependent stays READY."""
         url = tournament.url
         with app.app_context():
             base = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -482,7 +483,7 @@ class TestBreakGroupEndpoints:
         assert Match.query.filter_by(event=t.url, name="Dinner").one().nominal_length == 60
 
         # Past-start STATBREAK: locked on both endpoints (even mid-window).
-        # Start 10 min ago with 30-min length: start passed, not yet COMPLETED.
+        # Start 10 min ago with 30-min length: start passed → COMPLETED + locked.
         past = (datetime.now(timezone.utc) - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
         resp = client.post(
             f"/_api/tournaments/{t.url}/break-groups",
@@ -496,7 +497,7 @@ class TestBreakGroupEndpoints:
         )
         assert resp.status_code == 200, resp.get_json()
         row = Match.query.filter_by(event=t.url, name="Lunch").one()
-        assert row.effective_status == MatchStatus.NOT_STARTED  # window still open
+        assert row.effective_status == MatchStatus.COMPLETED  # start has passed
         assert row.status == MatchStatus.NOT_STARTED  # never stored
 
         resp = client.put(
@@ -513,7 +514,7 @@ class TestBreakGroupEndpoints:
 
     def test_statbreak_serialized_status_is_time_derived(self, app, client, tournament, to_player):
         """The schedule payload reports the time-derived STATBREAK status, not
-        the stored one: COMPLETED once start+length passes, NOT_STARTED before."""
+        the stored one: COMPLETED once the start passes, NOT_STARTED before."""
         t = self._login(app, client, tournament, to_player)
         past = (datetime.now(timezone.utc) - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
         future = (datetime.now(timezone.utc) + timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -537,8 +538,7 @@ class TestBreakGroupEndpoints:
         resp = client.get(f"/_api/tournaments/{t.url}/schedule-setup")
         assert resp.status_code == 200, resp.get_json()
         by_name = {m["name"]: m for m in resp.get_json()["matches"]}
-        # Past end → COMPLETED; mid-window and future → NOT_STARTED.
-        # Use a start far enough in the past that start+length has elapsed.
+        # Past start → COMPLETED; future → NOT_STARTED.
         assert by_name["Past Break"]["status"] == "COMPLETED"
         assert by_name["Future Break"]["status"] == "NOT_STARTED"
 

@@ -87,8 +87,9 @@ class MatchGraphNode:
         Returns only STATIC, SAFE, FAST, or STATBREAK matches; walks through
         BREAK and JOIN. Used to decide when this match becomes READY_TO_START /
         TIME_FINALIZED. STATBREAK is a terminal gate so dependents wait for its
-        time-derived end (``effective_status`` COMPLETED) rather than the match
-        before the break.
+        time-derived ``effective_status`` (COMPLETED once the start has passed)
+        rather than the match before the break; planned times still use the
+        break end (start + length).
         """
         result: Set["MatchGraphNode"] = set()
         visited: Set["MatchGraphNode"] = set()
@@ -537,7 +538,7 @@ def build_match_graph(
             confirmed_start_time=match.confirmed_start_time,
             confirmed_end_time=match.finalized_at,
             # Effective status: for STATBREAK the lifecycle status is derived
-            # from the current time (COMPLETED once start + length has passed), so
+            # from the current time (COMPLETED once the start has passed), so
             # solver-internal status checks see the derived value. The write-back
             # step never persists STATBREAK status.
             schedule_type=match.schedule_type,

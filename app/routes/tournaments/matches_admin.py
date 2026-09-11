@@ -129,8 +129,8 @@ def update_match_api(tournament_url, match_id):
 
     match = Match.query.filter_by(uuid=match_id, event=tournament_url).first_or_404()
     # STATBREAK status is time-derived (nobody "starts" them): locked once the
-    # scheduled start has passed, editable before that. (Completion is at
-    # start+length; the edit lock is intentionally earlier.)
+    # scheduled start has passed, editable before that. (effective_status also
+    # flips to COMPLETED at that same moment.)
     if match.schedule_type == ScheduleType.STATBREAK:
         start = match.nominal_start_time or match.scheduled_start_time
         if start is not None and now_utc_naive() >= start:
@@ -990,9 +990,8 @@ def update_break_group_api(tournament_url, name):
     if len(types) != 1:
         return jsonify({"error": "Break group has mixed schedule types; cannot edit."}), 409
     group_type = rows[0].schedule_type
-    # Lock once the static break's start has passed (even if its window has not
-    # yet ended — completion is at start+length, but the break is already history
-    # for editing purposes).
+    # Lock once the static break's start has passed (same moment effective_status
+    # becomes COMPLETED — the break is history for editing).
     if group_type == ScheduleType.STATBREAK and _statbreak_start_passed(rows[0]):
         return jsonify({"error": "Static break cannot be edited once its start time has passed."}), 409
 

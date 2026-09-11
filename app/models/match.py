@@ -226,19 +226,17 @@ class Match(db.Model):
         """Lifecycle status as clients should see it.
 
         For ``STATBREAK`` the status is a pure function of the current time —
-        ``COMPLETED`` once the scheduled end (``start + nominal_length``) has
-        passed, ``NOT_STARTED`` before that — and the stored :attr:`status` is
-        ignored (the solver never writes it). Completing at the end (not the
-        start) keeps dependents from becoming ready while the break is active.
+        ``COMPLETED`` once the scheduled **start** has passed, ``NOT_STARTED``
+        before that — and the stored :attr:`status` is ignored (the solver
+        never writes it). Completing at the start lets chained matches become
+        ``READY_TO_START`` early; their planned times still use the break
+        **end** (``start + nominal_length``) as the dependency end time.
         All other schedule types return the stored status.
         """
         if self.schedule_type == ScheduleType.STATBREAK:
             start = self.nominal_start_time or self.scheduled_start_time
-            if start is not None:
-                length_min = self.nominal_length or 0
-                end = start + timedelta(minutes=length_min)
-                if now_utc_naive() >= end:
-                    return MatchStatus.COMPLETED
+            if start is not None and now_utc_naive() >= start:
+                return MatchStatus.COMPLETED
             return MatchStatus.NOT_STARTED
         return self.status
 

@@ -226,10 +226,12 @@ def _procedure_with_match(
     if node.schedule_type == ScheduleType.STATBREAK:
         # Statically-scheduled break: the solver never moves its time and never
         # writes its status. STATBREAK status is derived from the current time
-        # when read (Match.effective_status: COMPLETED once start + length has
+        # when read (Match.effective_status: COMPLETED once the start has
         # passed), so the stored status stays NOT_STARTED. Downstream matches
-        # treat STATBREAK as a schedule-dependency terminal (not walked through)
-        # and wait for that end before becoming READY_TO_START.
+        # treat STATBREAK as a schedule-dependency terminal (not walked
+        # through): once the start has passed they may become READY_TO_START
+        # early, while their planned times still use the break end
+        # (start + length) as the dependency end time.
         return
 
     if node.status in (
