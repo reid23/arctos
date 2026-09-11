@@ -735,7 +735,7 @@ def test_tag_expression_roundtrips_through_toml(test_db, tournament):
     tournament_url = tournament.url
     _register_team(tournament_url, "known-team")
 
-    field = Field(event=tournament_url, name="Field 1", camera=None)
+    field = Field(event=tournament_url, name="Field 1")
     m1 = Match(
         name="Semi A",
         event=tournament_url,

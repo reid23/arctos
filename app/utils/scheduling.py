@@ -472,6 +472,35 @@ def _write_scheduled_to_db(graph: MatchGraph, uuid_to_match: Dict[str, object]) 
                 m.scheduled_start_time = node.scheduled_start_time
 
 
+def reconcile_tag_backed_match_slots(tournament_url: str) -> None:
+    """Write resolved expression-backed tags into match/ref team columns.
+
+    ``READY_TO_START`` promotion and start eligibility both need concrete
+    ``team1`` / ``team2`` / ref ``team_id`` values. Expression tags can resolve
+    in ``_slot_resolved`` without those columns being filled; this pass keeps
+    them in sync (same write-through as the tag-update endpoint).
+    """
+    from app.models.match import Match
+    from app.services.dual_write import get_match_referee_rows
+    from app.utils.helpers import resolve_tag_to_team
+
+    for m in Match.query.filter_by(event=tournament_url).all():
+        if m.status in (
+            MatchStatus.COMPLETED,
+            MatchStatus.SKIPPED,
+            MatchStatus.IN_PROGRESS,
+        ):
+            continue
+        for attr_team, attr_initial in (("team1", "team1_initial"), ("team2", "team2_initial")):
+            initial = (getattr(m, attr_initial, None) or "").strip()
+            if initial.lower().startswith("tag::"):
+                setattr(m, attr_team, resolve_tag_to_team(initial, tournament_url))
+        for row in get_match_referee_rows(m):
+            initial = (row.initial or "").strip()
+            if initial.lower().startswith("tag::"):
+                row.team_id = resolve_tag_to_team(initial, tournament_url)
+
+
 def run_scheduling(tournament_url: str, *, scheduled_pass: bool = False) -> None:
     """
     Single scheduling pass: load all matches, build graph, apply PROCEDURE, write back.
@@ -488,6 +517,12 @@ def run_scheduling(tournament_url: str, *, scheduled_pass: bool = False) -> None
     lock = _get_tournament_lock(tournament_url)
     lock.acquire()
     try:
+        if not scheduled_pass:
+            # Fill tag-backed team/ref columns before status promotion so
+            # READY_TO_START stays consistent with start eligibility.
+            reconcile_tag_backed_match_slots(tournament_url)
+            db.session.flush()
+
         all_matches = Match.query.filter_by(event=tournament_url).all()
         tags = Tag.query.filter_by(event=tournament_url).all()
         tag_by_name = {t.name: t for t in tags}

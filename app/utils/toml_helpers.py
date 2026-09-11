@@ -55,21 +55,33 @@ def parse_toml_schedule(content: str) -> Result[dict[str, Any], ArctosError]:
     variables = data.get("variables", [])
     if not isinstance(variables, list):
         return Err(ValidationError("'variables' must be an array of tables"))
+    for i, entry in enumerate(variables):
+        if not isinstance(entry, dict):
+            return Err(ValidationError(f"'variables[{i}]' must be a table"))
 
     # Extract tags (optional, defaults to empty list)
     tags = data.get("tags", [])
     if not isinstance(tags, list):
         return Err(ValidationError("'tags' must be an array of tables"))
+    for i, entry in enumerate(tags):
+        if not isinstance(entry, dict):
+            return Err(ValidationError(f"'tags[{i}]' must be a table"))
 
     # Extract fields (optional, defaults to empty list)
     fields = data.get("fields", [])
     if not isinstance(fields, list):
         return Err(ValidationError("'fields' must be an array of tables"))
+    for i, entry in enumerate(fields):
+        if not isinstance(entry, dict):
+            return Err(ValidationError(f"'fields[{i}]' must be a table"))
 
     # Extract matches (optional, defaults to empty list)
     matches = data.get("matches", [])
     if not isinstance(matches, list):
         return Err(ValidationError("'matches' must be an array of tables"))
+    for i, entry in enumerate(matches):
+        if not isinstance(entry, dict):
+            return Err(ValidationError(f"'matches[{i}]' must be a table"))
 
     return Ok(
         {

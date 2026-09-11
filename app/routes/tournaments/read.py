@@ -776,17 +776,24 @@ def tournament_schedule_setup(tournament_url):
             "id": t.id,
             "name": t.name,
             "team": t.team,
-            "expression": t.expression,
+            # Raw expression is organizer-only; public viewers get resolved_team.
+            "expression": t.expression if is_to else None,
             "resolved_team": resolve_tag_to_team(f"tag::{t.name}", tournament_url),
         }
         for t in tags_query
     ]
 
-    # Tournament-scoped ASS script variables (for the Scripting modal).
-    script_variables_data = [
-        {"id": v.id, "name": v.name, "expression": v.expression}
-        for v in ScriptVariable.query.filter_by(event=tournament_url).order_by(ScriptVariable.name).all()
-    ]
+    # Tournament-scoped ASS script variables (organizer scripting UI only).
+    script_variables_data = (
+        [
+            {"id": v.id, "name": v.name, "expression": v.expression}
+            for v in ScriptVariable.query.filter_by(event=tournament_url)
+            .order_by(ScriptVariable.name)
+            .all()
+        ]
+        if is_to
+        else []
+    )
 
     # Matches
     matches_query = Match.query.filter_by(event=tournament_url).order_by(Match.nominal_start_time).all()

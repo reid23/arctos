@@ -1714,11 +1714,11 @@ class Simplifier:
 # functions, special forms, and the keyword literals.
 RESERVED_IDENTIFIERS = frozenset(Simplifier.BUILTINS) | {"true", "false", "nil"}
 
-# Mirrors the IDENTIFIER terminal in grammar.lark.
+# Mirrors the IDENTIFIER terminal in grammar.lark (including `?` for predicates).
 _IDENTIFIER_RE = re.compile(
     r"-(?![0-9])$"
-    r"|-[a-zA-Z_+*/=><!&][a-zA-Z0-9_\-+*/=><!&]*$"
-    r"|[a-zA-Z_+*/=><!&][a-zA-Z0-9_\-+*/=><!&]*$"
+    r"|-[a-zA-Z_+*/=><!&?][a-zA-Z0-9_\-+*/=><!&?]*$"
+    r"|[a-zA-Z_+*/=><!&?][a-zA-Z0-9_\-+*/=><!&?]*$"
 )
 
 _LARK_PARSER: Lark | None = None
@@ -1741,27 +1741,120 @@ def is_valid_identifier(name: str) -> bool:
     return bool(name) and _IDENTIFIER_RE.fullmatch(name) is not None
 
 
-def _extract_identifier_names(tree) -> set[str]:
-    """Collect every identifier_atom name in a parse tree (minus keyword literals)."""
+def _identifier_atom_name(tree) -> str | None:
+    if isinstance(tree, Tree) and tree.data == "identifier_atom" and tree.children:
+        return tree.children[0].value
+    return None
+
+
+def _list_head_name(tree: Tree) -> str | None:
+    if tree.data != "list" or not tree.children:
+        return None
+    head = tree.children[0]
+    name = _identifier_atom_name(head)
+    if name is not None:
+        return name
+    # Unwrap thin expression/atom wrappers if present.
+    if isinstance(head, Tree) and head.data in {"expression", "atom"} and head.children:
+        return _identifier_atom_name(head.children[0])
+    return None
+
+
+def _lambda_param_names(params_tree) -> set[str]:
+    """Names bound by a lambda parameter list like ``(x y)``."""
     names: set[str] = set()
-    if not isinstance(tree, Tree):
+    if not isinstance(params_tree, Tree):
         return names
-    if tree.data == "identifier_atom" and tree.children:
-        name = tree.children[0].value
-        if name not in ("true", "false", "nil"):
+    node = params_tree
+    if node.data in {"expression", "atom"} and node.children:
+        node = node.children[0]
+    if not isinstance(node, Tree) or node.data != "list":
+        return names
+    for child in node.children:
+        name = _identifier_atom_name(child)
+        if name is None and isinstance(child, Tree) and child.data in {"expression", "atom"}:
+            name = _identifier_atom_name(child.children[0]) if child.children else None
+        if name:
             names.add(name)
-        return names
-    for child in tree.children:
-        names |= _extract_identifier_names(child)
     return names
 
 
-def extract_variable_references(text: str) -> set[str]:
-    """Names of identifiers in `text` that could reference script variables.
+def _let_binding_pairs(bindings_tree) -> list[tuple[str, object]]:
+    """Parse ``((name expr) ...)`` into ``[(name, expr_tree), ...]``."""
+    pairs: list[tuple[str, object]] = []
+    node = bindings_tree
+    if isinstance(node, Tree) and node.data in {"expression", "atom"} and node.children:
+        node = node.children[0]
+    if not isinstance(node, Tree) or node.data != "list":
+        return pairs
+    for binding in node.children:
+        b = binding
+        if isinstance(b, Tree) and b.data in {"expression", "atom"} and b.children:
+            b = b.children[0]
+        if not isinstance(b, Tree) or b.data != "list" or len(b.children) < 2:
+            continue
+        name = _identifier_atom_name(b.children[0])
+        if name is None and isinstance(b.children[0], Tree) and b.children[0].data in {
+            "expression",
+            "atom",
+        }:
+            name = _identifier_atom_name(b.children[0].children[0]) if b.children[0].children else None
+        if name:
+            pairs.append((name, b.children[1]))
+    return pairs
 
-    Builtins and keyword literals are excluded. Lambda parameter names are NOT
-    excluded — a shadowed name is conservatively treated as a reference (this
-    only matters for the write-time cycle check, where it errs on rejection).
+
+def _extract_free_identifiers(tree, bound: frozenset[str] = frozenset()) -> set[str]:
+    """Collect free identifier names (excluding lexical bindings and quoted forms)."""
+    names: set[str] = set()
+    if not isinstance(tree, Tree):
+        return names
+
+    if tree.data == "quoted":
+        # Quoted data is not evaluated — identifiers inside are not references.
+        return names
+
+    if tree.data == "identifier_atom" and tree.children:
+        name = tree.children[0].value
+        if name not in ("true", "false", "nil") and name not in bound:
+            names.add(name)
+        return names
+
+    if tree.data == "list" and tree.children:
+        head = _list_head_name(tree)
+        if head == "quote":
+            return names
+        if head == "lambda" and len(tree.children) >= 3:
+            # Head name "lambda" is a special form, not a free reference.
+            params = _lambda_param_names(tree.children[1])
+            return _extract_free_identifiers(tree.children[2], bound | params)
+        if head == "let" and len(tree.children) >= 3:
+            local = bound
+            for name, expr in _let_binding_pairs(tree.children[1]):
+                names |= _extract_free_identifiers(expr, local)
+                local = local | {name}
+            names |= _extract_free_identifiers(tree.children[2], local)
+            return names
+        # Regular list: head identifier is free if unbound (may be a variable or builtin).
+        for child in tree.children:
+            names |= _extract_free_identifiers(child, bound)
+        return names
+
+    for child in tree.children:
+        names |= _extract_free_identifiers(child, bound)
+    return names
+
+
+def _extract_identifier_names(tree) -> set[str]:
+    """Collect free identifier names in a parse tree (minus keyword literals)."""
+    return _extract_free_identifiers(tree)
+
+
+def extract_variable_references(text: str) -> set[str]:
+    """Names of free identifiers in `text` that could reference script variables.
+
+    Builtins and keyword literals are excluded. Lambda parameters, ``let``
+    bindings, and quoted identifiers are not treated as references.
     Returns an empty set when the expression doesn't parse; the caller
     validates parseability separately.
     """
@@ -1770,6 +1863,18 @@ def extract_variable_references(text: str) -> set[str]:
     except Exception:
         return set()
     return _extract_identifier_names(tree) - RESERVED_IDENTIFIERS
+
+
+def extract_tag_references(text: str) -> set[str]:
+    """Tag names referenced as ``[tag::Name]`` team literals in ``text``."""
+    names: set[str] = set()
+    for inner, _pos in _collect_literals(text or "")[0]:
+        raw = (inner or "").strip()
+        if raw.lower().startswith("tag::"):
+            tag_name = raw[5:].strip()
+            if tag_name:
+                names.add(tag_name)
+    return names
 
 
 def build_variable_env(event: str, parse_team, parse_match) -> dict:

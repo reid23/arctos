@@ -192,7 +192,11 @@ class ScriptVariable(db.Model):
     __tablename__ = "script_variables"
 
     id = db.Column(db.Integer, primary_key=True)
-    event = db.Column(db.String(URL_SLUG_LEN), db.ForeignKey("tournaments.url"), nullable=False)
+    event = db.Column(
+        db.String(URL_SLUG_LEN),
+        db.ForeignKey("tournaments.url", ondelete="CASCADE"),
+        nullable=False,
+    )
     name = db.Column(db.String(SHORT_NAME_LEN), nullable=False)
     expression = db.Column(db.Text, nullable=False)
 

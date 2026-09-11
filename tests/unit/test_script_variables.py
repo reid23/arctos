@@ -219,3 +219,60 @@ class TestScriptVariableCrud:
         data = resp.get_json()
         assert data["valid"] is True
         assert data["result_type"] == ["TEAM"]
+
+    def test_predicate_identifier_with_question_mark_accepted(self):
+        resp = self._create("eligible?", "true")
+        assert resp.status_code == 200, resp.get_json()
+
+    def test_cannot_delete_variable_referenced_by_another(self):
+        assert self._create("base", "1").status_code == 200
+        assert self._create("doubled", "(* base 2)").status_code == 200
+        base_id = ScriptVariable.query.filter_by(event=self.url, name="base").first().id
+        resp = self.client.delete(f"/_api/tournaments/{self.url}/script-variables/{base_id}")
+        assert resp.status_code == 400
+        assert "used" in resp.get_json()["error"]
+
+    def test_cannot_rename_variable_with_consumers(self):
+        assert self._create("base", "1").status_code == 200
+        assert self._create("doubled", "(* base 2)").status_code == 200
+        base_id = ScriptVariable.query.filter_by(event=self.url, name="base").first().id
+        resp = self.client.put(
+            f"/_api/tournaments/{self.url}/script-variables/{base_id}",
+            json={"name": "foundation", "expression": "1"},
+        )
+        assert resp.status_code == 400
+        assert "used" in resp.get_json()["error"]
+
+
+@pytest.mark.unit
+def test_lambda_params_are_not_variable_references():
+    from app.utils.parser import extract_variable_references
+
+    assert extract_variable_references("(lambda (x) (* x x))") == set()
+    assert extract_variable_references("(let ((x 1)) (+ x y))") == {"y"}
+    assert extract_variable_references("(+ eligible? 1)") == {"eligible?"}
+
+
+@pytest.mark.unit
+def test_skip_dependency_analysis_expands_script_variables(test_db, tournament, app):
+    from app.utils.dsl_dependency_analyzer import MatchDependencyAnalyzer
+
+    db.session.add(
+        ScriptVariable(
+            event=tournament.url,
+            name="semi-skipped",
+            expression="(is-skipped {Semi A})",
+        )
+    )
+    db.session.commit()
+    deps = MatchDependencyAnalyzer(tournament.url).analyze("semi-skipped")
+    assert "Semi A" in deps["skip_condition"]
+
+
+@pytest.mark.unit
+def test_toml_variables_entries_must_be_tables():
+    from app.utils.toml_helpers import parse_toml_schedule
+
+    result = parse_toml_schedule("variables = [1]\ntags = []\nfields = []\nmatches = []\n")
+    assert result.is_err()
+    assert "variables[0]" in str(result.unwrap_err())

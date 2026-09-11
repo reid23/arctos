@@ -17,6 +17,7 @@ from models import (
     Match,
     Field,
     Tag,
+    ScriptVariable,
     TeamRegistration,
     PlayerRegistration,
     Team,
@@ -305,6 +306,7 @@ def delete_tournament(tournament_url):
     TeamRegistration.query.filter_by(event=tournament_url).delete(synchronize_session=False)
     Field.query.filter_by(event=tournament_url).delete(synchronize_session=False)
     Tag.query.filter_by(event=tournament_url).delete(synchronize_session=False)
+    ScriptVariable.query.filter_by(event=tournament_url).delete(synchronize_session=False)
     TO.query.filter_by(event=tournament_url).delete(synchronize_session=False)
     # Bracket canvas rows (placements already removed with matches).
     from models import BracketImage, BracketLabeledTeam, BracketText

@@ -64,6 +64,8 @@ def _check_to(tournament_url):
 
 def _tag_usage(tournament_url, tag_name):
     """Return list of human-readable strings describing where tag is used, or empty if not used."""
+    from app.utils.parser import extract_tag_references
+
     tag_ref = f"tag::{tag_name}"
     used = []
     for m in Match.query.filter_by(event=tournament_url).all():
@@ -73,9 +75,45 @@ def _tag_usage(tournament_url, tag_name):
             used.append(f'Team 2 of match "{m.name}"')
         if any(initial == tag_ref for initial in get_match_ref_initials(m)):
             used.append(f'Refs of match "{m.name}"')
-        if m.skip_condition and (tag_ref in m.skip_condition or tag_name in m.skip_condition):
+        if m.skip_condition and tag_name in extract_tag_references(m.skip_condition):
+            used.append(f'Skip condition of match "{m.name}"')
+    for t in Tag.query.filter_by(event=tournament_url).all():
+        if t.name == tag_name:
+            continue
+        expr = (t.expression or "").strip()
+        if expr and tag_name in extract_tag_references(expr):
+            used.append(f'Expression of tag "{t.name}"')
+    for v in ScriptVariable.query.filter_by(event=tournament_url).all():
+        expr = (v.expression or "").strip()
+        if expr and tag_name in extract_tag_references(expr):
+            used.append(f'Expression of variable "{v.name}"')
+    return used
+
+
+def _script_variable_usage(tournament_url, var_name, exclude_id=None):
+    """Where a script variable name is referenced (other vars, tags, skip conditions)."""
+    from app.utils.parser import extract_variable_references
+
+    used = []
+    for v in ScriptVariable.query.filter_by(event=tournament_url).all():
+        if exclude_id is not None and v.id == exclude_id:
+            continue
+        if var_name in extract_variable_references(v.expression or ""):
+            used.append(f'Variable "{v.name}"')
+    for t in Tag.query.filter_by(event=tournament_url).all():
+        if var_name in extract_variable_references(t.expression or ""):
+            used.append(f'Expression of tag "{t.name}"')
+    for m in Match.query.filter_by(event=tournament_url).all():
+        if var_name in extract_variable_references(m.skip_condition or ""):
             used.append(f'Skip condition of match "{m.name}"')
     return used
+
+
+def _recompute_after_script_change(tournament_url: str) -> None:
+    """Reconcile tag-backed slots and refresh schedule after a scripting edit."""
+    from app.utils.scheduling import recompute_all_match_times
+
+    recompute_all_match_times(tournament_url)
 
 
 # Statuses where a match has already started and is no longer editable.
@@ -1352,13 +1390,34 @@ def update_tag_api(tournament_url, tag_id):
     data = request.get_json()
     if not data or "name" not in data:
         return jsonify({"error": "Name required"}), 400
+    new_name = (data.get("name") or "").strip()
+    if not new_name:
+        return jsonify({"error": "Name required"}), 400
+    if "::" in new_name:
+        return jsonify({"error": 'Tag name cannot contain "::"'}), 400
+    if new_name != tag.name:
+        used = _tag_usage(tournament_url, tag.name)
+        if used:
+            return (
+                jsonify(
+                    {
+                        "error": f'Cannot rename tag "{tag.name}": it is used in '
+                        + ", ".join(used[:5])
+                        + (" (and possibly more)" if len(used) > 5 else "")
+                    }
+                ),
+                400,
+            )
+        if Tag.query.filter_by(event=tournament_url, name=new_name).first():
+            return jsonify({"error": "Tag already exists"}), 400
     if "expression" in data:
         expression, err = validate_tag_expression(tournament_url, data.get("expression"))
         if err:
             return jsonify({"error": err}), 400
         tag.expression = expression
-    tag.name = data["name"]
+    tag.name = new_name
     db.session.commit()
+    _recompute_after_script_change(tournament_url)
     return jsonify({"success": True})
 
 
@@ -1458,6 +1517,7 @@ def create_script_variable_api(tournament_url):
     var = ScriptVariable(event=tournament_url, name=name, expression=expression)
     db.session.add(var)
     db.session.commit()
+    _recompute_after_script_change(tournament_url)
     return jsonify({"success": True, "id": var.id})
 
 
@@ -1475,9 +1535,24 @@ def update_script_variable_api(tournament_url, var_id):
     if err:
         return jsonify({"error": err}), 400
 
+    if name != var.name:
+        used = _script_variable_usage(tournament_url, var.name, exclude_id=var.id)
+        if used:
+            return (
+                jsonify(
+                    {
+                        "error": f'Cannot rename variable "{var.name}": it is used in '
+                        + ", ".join(used[:5])
+                        + (" (and possibly more)" if len(used) > 5 else "")
+                    }
+                ),
+                400,
+            )
+
     var.name = name
     var.expression = expression
     db.session.commit()
+    _recompute_after_script_change(tournament_url)
     return jsonify({"success": True})
 
 
@@ -1488,6 +1563,19 @@ def delete_script_variable_api(tournament_url, var_id):
         return jsonify({"error": "Forbidden"}), 403
 
     var = ScriptVariable.query.filter_by(id=var_id, event=tournament_url).first_or_404()
+    used = _script_variable_usage(tournament_url, var.name, exclude_id=var.id)
+    if used:
+        return (
+            jsonify(
+                {
+                    "error": f'Cannot delete variable "{var.name}": it is used in '
+                    + ", ".join(used[:5])
+                    + (" (and possibly more)" if len(used) > 5 else "")
+                }
+            ),
+            400,
+        )
     db.session.delete(var)
     db.session.commit()
+    _recompute_after_script_change(tournament_url)
     return jsonify({"success": True})

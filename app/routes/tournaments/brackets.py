@@ -204,16 +204,18 @@ def _labeled_team_payload(tournament, row: BracketLabeledTeam) -> dict:
     team_id = None
 
     if team_token.lower().startswith("tag::"):
-        tag_name = team_token[5:].strip()
-        tag = Tag.query.filter_by(event=tournament.url, name=tag_name).first()
-        if tag and tag.team:
-            info = _team_display(tournament, tag.team)
+        from app.utils.helpers import resolve_tag_to_team
+
+        resolved_id = resolve_tag_to_team(team_token, tournament.url)
+        if resolved_id:
+            info = _team_display(tournament, resolved_id)
             if info:
                 team_id = info["id"]
                 display_text = info["pseudonym"] or team_id
                 photo = info.get("profile_photo")
                 shortname = info.get("shortname")
         else:
+            tag_name = team_token[5:].strip()
             display_text = f"tag::{tag_name}" if tag_name else team_token
     elif "::" in team_token:
         ref = _parse_match_ref(team_token)
@@ -388,30 +390,31 @@ def _process_legacy_brackets(tournament) -> list:
             match_name = None
 
             if team_ref.lower().startswith("tag::"):
+                from app.utils.helpers import resolve_tag_to_team
+
                 tag_name = team_ref[5:].strip()
-                if tag_name:
-                    tag = Tag.query.filter_by(event=tournament_url, name=tag_name).first()
-                    if tag and tag.team:
-                        team_reg = TeamRegistration.query.filter_by(
-                            event=tournament_url,
-                            team=tag.team,
-                            status=TeamRegistrationStatus.CONFIRMED,
-                        ).first()
-                        if team_reg:
-                            team = Team.query.get(tag.team)
-                            team_info = {
-                                "id": tag.team,
-                                "pseudonym": team_reg.pseudonym,
-                                "shortname": team_reg.shortname,
-                                "profile_photo": team.profile_photo if team else None,
-                                "display_text": team_reg.pseudonym,
-                            }
-                        else:
-                            team_info = {"display_text": f"tag::{tag_name}"}
-                            is_tag = True
-                    elif tag:
+                resolved_id = resolve_tag_to_team(team_ref, tournament_url) if tag_name else None
+                if resolved_id:
+                    team_reg = TeamRegistration.query.filter_by(
+                        event=tournament_url,
+                        team=resolved_id,
+                        status=TeamRegistrationStatus.CONFIRMED,
+                    ).first()
+                    if team_reg:
+                        team = Team.query.get(resolved_id)
+                        team_info = {
+                            "id": resolved_id,
+                            "pseudonym": team_reg.pseudonym,
+                            "shortname": team_reg.shortname,
+                            "profile_photo": team.profile_photo if team else None,
+                            "display_text": team_reg.pseudonym,
+                        }
+                    else:
                         team_info = {"display_text": f"tag::{tag_name}"}
                         is_tag = True
+                elif tag_name:
+                    team_info = {"display_text": f"tag::{tag_name}"}
+                    is_tag = True
             elif "::" in team_ref:
                 parts = team_ref.split("::", 1)
                 match_name = parts[0].strip()
@@ -462,27 +465,29 @@ def _process_legacy_brackets(tournament) -> list:
                         "display_text": team_reg.pseudonym,
                     }
                 else:
-                    tag = Tag.query.filter_by(event=tournament_url, name=team_ref).first()
-                    if tag and tag.team:
+                    from app.utils.helpers import resolve_tag_to_team
+
+                    resolved_id = resolve_tag_to_team(f"tag::{team_ref}", tournament_url)
+                    if resolved_id:
                         team_reg = TeamRegistration.query.filter_by(
                             event=tournament_url,
-                            team=tag.team,
+                            team=resolved_id,
                             status=TeamRegistrationStatus.CONFIRMED,
                         ).first()
                         if team_reg:
-                            team = Team.query.get(tag.team)
+                            team = Team.query.get(resolved_id)
                             team_info = {
-                                "id": tag.team,
+                                "id": resolved_id,
                                 "pseudonym": team_reg.pseudonym,
                                 "shortname": team_reg.shortname,
                                 "profile_photo": team.profile_photo if team else None,
                                 "display_text": team_reg.pseudonym,
                             }
                         else:
-                            team_info = {"display_text": f"tag::{tag.name}"}
+                            team_info = {"display_text": f"tag::{team_ref}"}
                             is_tag = True
-                    elif tag:
-                        team_info = {"display_text": f"tag::{tag.name}"}
+                    elif Tag.query.filter_by(event=tournament_url, name=team_ref).first():
+                        team_info = {"display_text": f"tag::{team_ref}"}
                         is_tag = True
 
             processed_teams.append(
