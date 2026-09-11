@@ -5,6 +5,8 @@ module is the home for small, generally-applicable helpers that don't.
 """
 
 import re
+import threading
+
 from flask_login import current_user
 from app.domain.enums import RegistrationStatus
 from app.services._common import current_user_type
@@ -216,15 +218,68 @@ def get_team_display_name_for_event(tournament_url: str, team_id: str) -> str:
     return team_id
 
 
+# Per-thread state for tag-expression resolution: an in-progress set guards
+# against cyclic tag references ([tag::A] whose expression references
+# [tag::B] whose expression references [tag::A]); a memo cache avoids
+# re-evaluating the same tag repeatedly within one outermost resolution call.
+_tag_resolution_state = threading.local()
+
+
+def _resolve_tag_expression_to_team(tag_name: str, expression: str, tournament_url: str) -> str | None:
+    """Evaluate a tag's ASS expression to a concrete team id, or None.
+
+    A result that is not a concrete Team (symbolic team, wrong type) or any
+    evaluation error resolves to None (unresolved). Cyclic tag references are
+    detected via a thread-local in-progress set and resolve to None instead of
+    recursing forever.
+    """
+    state = _tag_resolution_state
+    stack = getattr(state, "stack", None)
+    if stack is None:
+        stack = state.stack = set()
+        state.cache = {}
+    key = (tournament_url, tag_name)
+    if key in stack:
+        return None  # Cyclic tag reference — unresolved.
+    cache = state.cache
+    if key in cache:
+        return cache[key]
+    outermost = not stack
+    stack.add(key)
+    try:
+        from app.utils.parser import Team, get_parser
+
+        try:
+            parser = get_parser(tournament_url)
+            result = parser.parse(expression)
+        except Exception:
+            result = None
+        team_id = result.obj.id if isinstance(result, Team) else None
+        cache[key] = team_id
+        return team_id
+    finally:
+        stack.discard(key)
+        if outermost:
+            cache.clear()
+
+
 def resolve_tag_to_team(tag_ref: str, tournament_url: str) -> str | None:
-    """Resolve a tag reference (tag::TAG_NAME) to a team ID by querying the Tag table.
+    """Resolve a tag reference (tag::TAG_NAME) to a team ID.
+
+    Resolution order:
+
+    1. The tag's manually assigned ``team`` column (an override).
+    2. Evaluating the tag's ASS ``expression`` to a concrete team.
+    3. Otherwise unresolved (``None``) — includes expressions that are still
+       symbolic (e.g. ``(winner {Semi A})`` before the match completes),
+       evaluation errors, and cyclic tag references.
 
     Args:
         tag_ref: Tag reference string (e.g., "tag::Pool A")
         tournament_url: Tournament URL
 
     Returns:
-        Team ID if tag exists and has a team assigned, None otherwise
+        Team ID if the tag resolves to a team, None otherwise
     """
     from models import Tag
 
@@ -236,9 +291,14 @@ def resolve_tag_to_team(tag_ref: str, tournament_url: str) -> str | None:
         return None
 
     tag = Tag.query.filter_by(event=tournament_url, name=tag_name).first()
-    if tag and tag.team:
+    if not tag:
+        return None
+    if tag.team:
         return tag.team
-    return None
+    expression = (getattr(tag, "expression", None) or "").strip()
+    if not expression:
+        return None
+    return _resolve_tag_expression_to_team(tag.name, expression, tournament_url)
 
 
 def resolve_match_winner_loser_ref(initial: str, tournament_url: str) -> str | None:

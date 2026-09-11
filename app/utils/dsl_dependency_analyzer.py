@@ -61,6 +61,16 @@ class MatchDependencyAnalyzer:
         grammar_path = os.path.join(os.path.dirname(__file__), "grammar.lark")
         with open(grammar_path, "r") as g:
             self.parser = Lark(g, parser="lalr")
+        # Script-variable name → expression; expanded during analysis so a skip
+        # condition of `myVar` whose body is `(is-skipped {Semi A})` still
+        # creates an edge to Semi A.
+        from app.models import ScriptVariable
+
+        self.variable_exprs = {
+            row.name: (row.expression or "").strip()
+            for row in ScriptVariable.query.filter_by(event=event).all()
+            if (row.expression or "").strip()
+        }
 
     def analyze(self, expression: str, visited_matches: Set[str] = None) -> Dict[str, Set[str]]:
         """
@@ -84,7 +94,7 @@ class MatchDependencyAnalyzer:
         try:
             tree = self.parser.parse(expression.strip())
             dependencies = {"direct": set(), "skip_condition": set()}
-            self._visit(tree, dependencies, visited_matches)
+            self._visit(tree, dependencies, visited_matches, set())
             return dependencies
         except Exception:
             # If parsing fails, return empty dependencies
@@ -93,7 +103,29 @@ class MatchDependencyAnalyzer:
             # by the actual parser when it's used
             return {"direct": set(), "skip_condition": set()}
 
-    def _visit(self, tree, dependencies: Dict[str, Set[str]], visited_matches: Set[str]):
+    def _expand_variable(
+        self,
+        name: str,
+        dependencies: Dict[str, Set[str]],
+        visited_matches: Set[str],
+        visited_vars: Set[str],
+    ) -> None:
+        if name not in self.variable_exprs or name in visited_vars:
+            return
+        visited_vars.add(name)
+        try:
+            subtree = self.parser.parse(self.variable_exprs[name])
+        except Exception:
+            return
+        self._visit(subtree, dependencies, visited_matches, visited_vars)
+
+    def _visit(
+        self,
+        tree,
+        dependencies: Dict[str, Set[str]],
+        visited_matches: Set[str],
+        visited_vars: Set[str],
+    ):
         """
         Recursively visit AST nodes to find dependencies.
 
@@ -101,6 +133,7 @@ class MatchDependencyAnalyzer:
             tree: Lark Tree node or Token
             dependencies: Dictionary to accumulate dependencies
             visited_matches: Set of matches already being analyzed (for cycle detection)
+            visited_vars: Script variables already expanded (cycle guard)
         """
         if isinstance(tree, Token):
             return
@@ -110,7 +143,10 @@ class MatchDependencyAnalyzer:
 
         # Handle different node types
         if tree.data == "list":
-            self._visit_list(tree, dependencies, visited_matches)
+            self._visit_list(tree, dependencies, visited_matches, visited_vars)
+        elif tree.data == "identifier_atom":
+            if tree.children and isinstance(tree.children[0], Token):
+                self._expand_variable(tree.children[0].value, dependencies, visited_matches, visited_vars)
         elif tree.data == "match_atom":
             # This is a match reference - it will be used in a function call context
             # The context will determine the dependency type
@@ -133,13 +169,19 @@ class MatchDependencyAnalyzer:
         elif tree.data in {"expression", "atom", "start"}:
             # Visit children (these are wrapper nodes)
             for child in tree.children:
-                self._visit(child, dependencies, visited_matches)
+                self._visit(child, dependencies, visited_matches, visited_vars)
         else:
             # Visit all children for any other node type
             for child in tree.children:
-                self._visit(child, dependencies, visited_matches)
+                self._visit(child, dependencies, visited_matches, visited_vars)
 
-    def _visit_list(self, tree: Tree, dependencies: Dict[str, Set[str]], visited_matches: Set[str]):
+    def _visit_list(
+        self,
+        tree: Tree,
+        dependencies: Dict[str, Set[str]],
+        visited_matches: Set[str],
+        visited_vars: Set[str],
+    ):
         """
         Visit a list/s-expression node.
 
@@ -147,6 +189,7 @@ class MatchDependencyAnalyzer:
             tree: List Tree node
             dependencies: Dictionary to accumulate dependencies
             visited_matches: Set of matches already being analyzed
+            visited_vars: Script variables already expanded
         """
         if not tree.children:
             return
@@ -171,6 +214,11 @@ class MatchDependencyAnalyzer:
         elif isinstance(head, Token):
             function_name = head.value
 
+        # A head that is itself a script variable expands to that variable's body
+        # (e.g. skip condition `myVar` where myVar := (is-skipped {Semi A})).
+        if function_name and function_name in self.variable_exprs:
+            self._expand_variable(function_name, dependencies, visited_matches, visited_vars)
+
         # Check if this is a function that takes match arguments
         # Note: function_name might be None if we couldn't extract it
         if function_name and function_name in self.DIRECT_DEPENDENCY_FUNCTIONS:
@@ -186,7 +234,7 @@ class MatchDependencyAnalyzer:
                     match_atoms = set()
                     self._find_all_match_atoms(arg, match_atoms)
                     dependencies["direct"] |= match_atoms
-                    self._visit(arg, dependencies, visited_matches)
+                    self._visit(arg, dependencies, visited_matches, visited_vars)
             elif function_name in self.DIRECT_DEPENDENCY_FUNCTIONS_MATCH_SECOND:
                 # TEAM first; optional second arg is MATCH or MATCHLIST (list of matches)
                 if len(tree.children) > 2:
@@ -198,10 +246,10 @@ class MatchDependencyAnalyzer:
                     match_atoms = set()
                     self._find_all_match_atoms(arg, match_atoms)
                     dependencies["direct"] |= match_atoms
-                    self._visit(arg, dependencies, visited_matches)
+                    self._visit(arg, dependencies, visited_matches, visited_vars)
                 # Visit first argument (TEAM) for [Match1::winner] style refs
                 if tree.children[1:]:
-                    self._visit(tree.children[1], dependencies, visited_matches)
+                    self._visit(tree.children[1], dependencies, visited_matches, visited_vars)
 
         elif function_name and function_name in self.SKIP_CONDITION_DEPENDENCY_FUNCTIONS:
             # is-skipped(MATCH) needs the match's status; no recursive skip_condition analysis
@@ -211,12 +259,12 @@ class MatchDependencyAnalyzer:
                 for match_name in match_atoms:
                     dependencies["skip_condition"].add(match_name)
 
-                self._visit(arg, dependencies, visited_matches)
+                self._visit(arg, dependencies, visited_matches, visited_vars)
                 dependencies["skip_condition"] -= dependencies["direct"]
 
         # Recursively visit all children (covers let/cond/list/filter/sort-by bodies, etc.)
         for child in tree.children:
-            self._visit(child, dependencies, visited_matches)
+            self._visit(child, dependencies, visited_matches, visited_vars)
 
     def _extract_function_name(self, tree) -> str | None:
         """Extract function name from a tree node."""

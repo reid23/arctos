@@ -671,7 +671,7 @@ fn resolve_team_literal(
         let resolved = tags
             .iter()
             .find(|t| t.name.eq_ignore_ascii_case(name))
-            .and_then(|t| t.team.clone())
+            .and_then(|t| t.team.clone().or_else(|| t.resolved_team.clone()))
             .and_then(|tid| team_options.iter().find(|t| t.id == tid).cloned())
             .map(|t| TeamRefResolved {
                 profile_photo: t.profile_photo.clone(),
@@ -1083,7 +1083,7 @@ fn collect_team_options(
         .map(|tag| AcOption::Tag {
             insert: format!("tag::{}", tag.name),
             display: tag.name.clone(),
-            resolved_team: tag.team.clone(),
+            resolved_team: tag.team.clone().or_else(|| tag.resolved_team.clone()),
         })
         .collect();
     let mut match_ref_opts: Vec<AcOption> = Vec::new();

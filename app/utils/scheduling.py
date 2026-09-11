@@ -10,7 +10,7 @@ FAST = finalize when all dependencies are completed.
 from __future__ import annotations
 
 import threading
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
 from app.domain.enums import (
@@ -160,7 +160,15 @@ def _slot_resolved(
             tag = tag_by_name.get(tag_name)
         else:
             tag = Tag.query.filter_by(event=tournament_url, name=tag_name).first()
-        return bool(tag and getattr(tag, "team", None))
+        if tag is None:
+            return False
+        if getattr(tag, "team", None):
+            return True
+        if (getattr(tag, "expression", None) or "").strip():
+            from app.utils.helpers import resolve_tag_to_team
+
+            return resolve_tag_to_team(f"tag::{tag_name}", tournament_url) is not None
+        return False
     if "::winner" in initial or "::loser" in initial:
         base = initial.split("::")[0].strip()
         dep = name_to_match.get(base)
@@ -464,6 +472,35 @@ def _write_scheduled_to_db(graph: MatchGraph, uuid_to_match: Dict[str, object]) 
                 m.scheduled_start_time = node.scheduled_start_time
 
 
+def reconcile_tag_backed_match_slots(tournament_url: str) -> None:
+    """Write resolved expression-backed tags into match/ref team columns.
+
+    ``READY_TO_START`` promotion and start eligibility both need concrete
+    ``team1`` / ``team2`` / ref ``team_id`` values. Expression tags can resolve
+    in ``_slot_resolved`` without those columns being filled; this pass keeps
+    them in sync (same write-through as the tag-update endpoint).
+    """
+    from app.models.match import Match
+    from app.services.dual_write import get_match_referee_rows
+    from app.utils.helpers import resolve_tag_to_team
+
+    for m in Match.query.filter_by(event=tournament_url).all():
+        if m.status in (
+            MatchStatus.COMPLETED,
+            MatchStatus.SKIPPED,
+            MatchStatus.IN_PROGRESS,
+        ):
+            continue
+        for attr_team, attr_initial in (("team1", "team1_initial"), ("team2", "team2_initial")):
+            initial = (getattr(m, attr_initial, None) or "").strip()
+            if initial.lower().startswith("tag::"):
+                setattr(m, attr_team, resolve_tag_to_team(initial, tournament_url))
+        for row in get_match_referee_rows(m):
+            initial = (row.initial or "").strip()
+            if initial.lower().startswith("tag::"):
+                row.team_id = resolve_tag_to_team(initial, tournament_url)
+
+
 def run_scheduling(tournament_url: str, *, scheduled_pass: bool = False) -> None:
     """
     Single scheduling pass: load all matches, build graph, apply PROCEDURE, write back.
@@ -480,6 +517,12 @@ def run_scheduling(tournament_url: str, *, scheduled_pass: bool = False) -> None
     lock = _get_tournament_lock(tournament_url)
     lock.acquire()
     try:
+        if not scheduled_pass:
+            # Fill tag-backed team/ref columns before status promotion so
+            # READY_TO_START stays consistent with start eligibility.
+            reconcile_tag_backed_match_slots(tournament_url)
+            db.session.flush()
+
         all_matches = Match.query.filter_by(event=tournament_url).all()
         tags = Tag.query.filter_by(event=tournament_url).all()
         tag_by_name = {t.name: t for t in tags}
@@ -547,18 +590,28 @@ _STARTED_STATUSES = (
 )
 
 
-def push_back_unstarted_matches(tournament_url: str, minutes: int) -> int:
-    """Shift plan anchors for unstarted STATIC and future STATBREAK rows, then recompute.
+def push_back_unstarted_matches(
+    tournament_url: str,
+    minutes: int,
+    day: date,
+    tz_offset_minutes: int = 0,
+) -> int:
+    """Shift plan anchors for unstarted STATIC and future STATBREAK rows on *day*.
 
-    Unstarted means anything not in progress / completed / skipped, including
-    ``READY_TO_START`` and ``TIME_FINALIZED``. STATIC anchors always move when
-    unstarted. STATBREAK anchors move only when their start has not yet passed
-    (same edit-lock rule as the break-group endpoints). Dynamic matches
-    re-derive both timelines from the new anchors.
+    Only anchors whose plan start falls on ``day`` in the viewer's local timezone
+    (``local = utc + tz_offset_minutes``) are moved. Unstarted means anything not
+    in progress / completed / skipped, including ``READY_TO_START`` and
+    ``TIME_FINALIZED``. STATIC anchors always move when unstarted. STATBREAK
+    anchors move only when their start has not yet passed (same edit-lock rule
+    as the break-group endpoints). Dynamic matches re-derive both timelines
+    from the new anchors via a full recompute.
 
     Args:
         tournament_url: Tournament URL slug.
         minutes: Signed minute delta to apply to plan anchors.
+        day: Local calendar day to push (the schedule viewer's current day).
+        tz_offset_minutes: Minutes to add to stored UTC to get local time
+            (same convention as the schedule frontend).
 
     Returns:
         Number of anchors whose times were shifted.
@@ -570,6 +623,7 @@ def push_back_unstarted_matches(tournament_url: str, minutes: int) -> int:
         return 0
 
     delta = timedelta(minutes=minutes)
+    tz_delta = timedelta(minutes=tz_offset_minutes)
     matches = Match.query.filter_by(event=tournament_url).filter(~Match.status.in_(_STARTED_STATUSES)).all()
     updated = 0
     now = now_utc_naive()
@@ -581,6 +635,11 @@ def push_back_unstarted_matches(tournament_url: str, minutes: int) -> int:
             if start is not None and now >= start:
                 continue  # past-start STATBREAKs are locked history
         else:
+            continue
+        start = m.nominal_start_time or m.scheduled_start_time
+        if start is None:
+            continue
+        if (start + tz_delta).date() != day:
             continue
         shifted = False
         if m.scheduled_start_time is not None:
