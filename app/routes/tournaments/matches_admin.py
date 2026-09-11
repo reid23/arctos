@@ -257,11 +257,7 @@ def update_match_api(tournament_url, match_id):
             team2_input is not None and str(team2_input).strip()
         ):
             return (
-                jsonify(
-                    {
-                        "error": "Breaks and joins cannot have team requirements; they only occupy fields."
-                    }
-                ),
+                jsonify({"error": "Breaks and joins cannot have team requirements; they only occupy fields."}),
                 400,
             )
         if refs is not None:
@@ -272,11 +268,7 @@ def update_match_api(tournament_url, match_id):
                 has_refs = bool(str(refs).strip())
             if has_refs:
                 return (
-                    jsonify(
-                        {
-                            "error": "Breaks and joins cannot have team requirements; they only occupy fields."
-                        }
-                    ),
+                    jsonify({"error": "Breaks and joins cannot have team requirements; they only occupy fields."}),
                     400,
                 )
         if skip_condition is not None and str(skip_condition).strip():
@@ -570,9 +562,13 @@ def create_match_api(tournament_url):
         refs = data.get("refs")
         if refs:
             if isinstance(refs, list) and any(str(r or "").strip() for r in refs):
-                return jsonify({"error": "Breaks and joins cannot have team requirements; they only occupy fields."}), 400
+                return jsonify(
+                    {"error": "Breaks and joins cannot have team requirements; they only occupy fields."}
+                ), 400
             if isinstance(refs, str) and refs.strip():
-                return jsonify({"error": "Breaks and joins cannot have team requirements; they only occupy fields."}), 400
+                return jsonify(
+                    {"error": "Breaks and joins cannot have team requirements; they only occupy fields."}
+                ), 400
         if (data.get("skip_condition") or "").strip():
             return jsonify({"error": "Breaks and joins cannot have a skip condition."}), 400
         if match.schedule_type == ScheduleType.JOIN:
@@ -818,9 +814,7 @@ def _structural_name_collision(tournament_url: str, name: str, field_name: str) 
     )
 
 
-def _structural_name_type_conflict(
-    tournament_url: str, name: str, schedule_type: ScheduleType
-) -> Match | None:
+def _structural_name_type_conflict(tournament_url: str, name: str, schedule_type: ScheduleType) -> Match | None:
     """Existing same-name structural row with a different schedule type, or ``None``.
 
     Display name is the group key, so BREAK ``Lunch`` and JOIN ``Lunch`` must
