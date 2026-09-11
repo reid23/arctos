@@ -594,7 +594,7 @@ class TestPlanAnchorWritePaths:
             from app.utils.scheduling import push_back_unstarted_matches
 
             delta = timedelta(minutes=30)
-            push_back_unstarted_matches(tournament_url, 30)
+            push_back_unstarted_matches(tournament_url, 30, base.date())
 
             db.session.refresh(anchor)
             db.session.refresh(m2)
@@ -627,7 +627,7 @@ class TestPlanAnchorWritePaths:
             db.session.add(anchor)
             db.session.commit()
 
-            push_back_unstarted_matches(tournament_url, 15)
+            push_back_unstarted_matches(tournament_url, 15, base.date())
             db.session.refresh(anchor)
             assert _aware_utc(anchor.scheduled_start_time) == _aware_utc(base + timedelta(minutes=15))
             assert _aware_utc(anchor.nominal_start_time) == _aware_utc(base + timedelta(minutes=15))
@@ -665,11 +665,52 @@ class TestPlanAnchorWritePaths:
             db.session.commit()
             past_start = past.scheduled_start_time
 
-            push_back_unstarted_matches(tournament_url, 20)
+            # Both anchors share a calendar day here; one push must move only the
+            # future STATBREAK while the past-start lock keeps the other put.
+            push_back_unstarted_matches(tournament_url, 20, (base + timedelta(hours=2)).date())
             db.session.refresh(future)
             db.session.refresh(past)
             assert _aware_utc(future.scheduled_start_time) == _aware_utc(base + timedelta(hours=2, minutes=20))
             assert _aware_utc(past.scheduled_start_time) == _aware_utc(past_start)
+
+    @pytest.mark.unit
+    def test_push_back_only_affects_requested_day(self, app, test_db, tournament):
+        """Anchors on other calendar days stay put when pushing a single day."""
+        from app.domain.enums import ScheduleType
+        from app.utils.scheduling import push_back_unstarted_matches
+
+        tournament_url = tournament.url
+        with app.app_context():
+            day1 = datetime(2030, 6, 1, 15, 0, 0)
+            day2 = datetime(2030, 6, 2, 15, 0, 0)
+            a1 = Match(
+                name="Day1Anchor",
+                event=tournament_url,
+                field="Field 1",
+                nominal_start_time=day1,
+                scheduled_start_time=day1,
+                schedule_type=ScheduleType.STATIC,
+                nominal_length=60,
+                status=MatchStatus.NOT_STARTED,
+            )
+            a2 = Match(
+                name="Day2Anchor",
+                event=tournament_url,
+                field="Field 1",
+                nominal_start_time=day2,
+                scheduled_start_time=day2,
+                schedule_type=ScheduleType.STATIC,
+                nominal_length=60,
+                status=MatchStatus.NOT_STARTED,
+            )
+            db.session.add_all([a1, a2])
+            db.session.commit()
+
+            push_back_unstarted_matches(tournament_url, 30, day1.date())
+            db.session.refresh(a1)
+            db.session.refresh(a2)
+            assert _aware_utc(a1.scheduled_start_time) == _aware_utc(day1 + timedelta(minutes=30))
+            assert _aware_utc(a2.scheduled_start_time) == _aware_utc(day2)
 
     @pytest.mark.unit
     def test_live_pass_after_late_finish_does_not_move_plan(self, app, test_db, tournament):

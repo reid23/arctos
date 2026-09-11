@@ -287,7 +287,7 @@ TO-only full-width editor. Public schedule views stay read-only.
 | Drag BREAK / JOIN | Disabled — edit via the group card so multi-field rows stay in sync |
 | Drag SAFE / FAST | Snap after a previous match on the destination field |
 | Bulk change length | Multi-select; BREAK/STATBREAK selections expand to the whole same-name group; past-start STATBREAKs are locked |
-| Push back day | Shifts **STATIC** and **future STATBREAK** plan anchors by N minutes; dynamic matches re-solve |
+| Push back day | Push back all non-started matches on the currently viewed day: shifts **STATIC** and **future STATBREAK** plan anchors by N minutes; dynamic matches re-solve |
 
 Break/join create from a drag sends a per-field `previous_match` map so rows
 land at the drop position rather than always at each field's chain tail.

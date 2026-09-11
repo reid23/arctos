@@ -700,9 +700,17 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
     let mut bulk_mode = use_signal(|| false);
     let mut bulk_selected = use_signal(Vec::<String>::new);
     let mut bulk_length_input = use_signal(|| 30u32);
-    // "Push back day" tool: shift every not-yet-started match's plan by N minutes.
+    // "Push back day" tool: shift unstarted plan anchors on the viewed day by N minutes.
     let mut push_back_open = use_signal(|| false);
     let mut push_back_minutes = use_signal(|| 30i32);
+    // Local calendar day currently shown in the timeline (`YYYY-MM-DD`); the
+    // timeline writes this as the user navigates days.
+    let mut viewed_day = use_signal(|| {
+        let today = (chrono::Utc::now()
+            + chrono::Duration::minutes(schedule_tz_offset_minutes()))
+        .date_naive();
+        today.format("%Y-%m-%d").to_string()
+    });
     // Inline error affordance for drag-move / bulk failures (dismissible alert near the toolbar).
     let mut edit_error = use_signal(|| None::<String>);
     // Prefill for the create-match card when opened from a drag-to-create gesture.
@@ -1279,7 +1287,7 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                                             button { class: "btn btn-sm btn-outline-secondary", onclick: move |_| active_modal.set("toml_import".to_string()), "Import TOML" }
                                             button {
                                                 class: if push_back_open() { "btn btn-sm btn-primary" } else { "btn btn-sm btn-outline-primary" },
-                                                title: "Shift STATIC and future STATBREAK plan anchors by N minutes; dynamic matches re-solve (e.g. the day started late)",
+                                                title: "Push back all non-started matches on the currently viewed day",
                                                 onclick: move |_| push_back_open.set(!push_back_open()),
                                                 "Push back day…"
                                             }
@@ -1345,7 +1353,7 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                                 div { class: "card-body py-2 d-flex flex-wrap align-items-center gap-2",
                                     strong { class: "small", "Push back day:" }
                                     span { class: "small text-muted",
-                                        "shifts STATIC and future STATBREAK plan anchors; dynamic matches re-solve (negative pulls the day forward)"
+                                        "push back all non-started matches on {viewed_day()}"
                                     }
                                     label { class: "small mb-0 ms-2", "Minutes" }
                                     input {
@@ -1360,14 +1368,21 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                                     }
                                     button {
                                         class: "btn btn-sm btn-success",
-                                        disabled: push_back_minutes() == 0,
+                                        disabled: push_back_minutes() == 0 || viewed_day().is_empty(),
                                         onclick: {
                                             let u = url.clone();
                                             move |_| {
                                                 let u = u.clone();
                                                 let minutes = push_back_minutes();
+                                                let day = viewed_day();
+                                                let tz_offset_minutes =
+                                                    schedule_tz_offset_minutes() as i32;
                                                 spawn(async move {
-                                                    let req = PushBackRequest { minutes };
+                                                    let req = PushBackRequest {
+                                                        minutes,
+                                                        day,
+                                                        tz_offset_minutes,
+                                                    };
                                                     match api::push_back_matches(&u, &req).await {
                                                         Ok(_) => {
                                                             edit_error.set(None);
@@ -1496,6 +1511,7 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                             },
                             tournament_url: url.clone(),
                             editor: editor && view_mode() == "timeline",
+                            viewed_day: viewed_day,
                             bulk_select_active: bulk_mode(),
                             selected_ids: bulk_selected(),
                             // Pending-create placeholder: stays visible while the create card
@@ -4513,6 +4529,9 @@ fn ScheduleTimeline(
     /// Edit-page interactions: drag-to-create, drag-to-move, alt-hover dependency lines.
     #[props(default = false)]
     editor: bool,
+    /// Shared with the parent toolbar so "push back day" targets this day (`YYYY-MM-DD`).
+    #[props(default)]
+    viewed_day: Signal<String>,
     /// Bulk-length selection mode is active (drags disabled; clicks toggle selection).
     #[props(default = false)]
     bulk_select_active: bool,
@@ -4766,6 +4785,15 @@ fn ScheduleTimeline(
             dates_with_matches.first().copied().unwrap_or(today_local)
         }
     });
+
+    // Keep the parent toolbar's push-back day in sync with the timeline cursor.
+    {
+        let mut viewed_day = viewed_day;
+        use_effect(move || {
+            let day = visible_date_signal();
+            viewed_day.set(day.format("%Y-%m-%d").to_string());
+        });
+    }
 
     // When filters change the day list, keep the cursor on a day that still has events.
     {

@@ -1592,6 +1592,10 @@ pub struct CreateTagResponse {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PushBackRequest {
     pub minutes: i32,
+    /// Local calendar day to push (`YYYY-MM-DD`), matching the schedule viewer.
+    pub day: String,
+    /// Minutes to add to stored UTC to get local time (same as the schedule UI).
+    pub tz_offset_minutes: i32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

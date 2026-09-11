@@ -10,7 +10,7 @@ FAST = finalize when all dependencies are completed.
 from __future__ import annotations
 
 import threading
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
 from app.domain.enums import (
@@ -547,18 +547,28 @@ _STARTED_STATUSES = (
 )
 
 
-def push_back_unstarted_matches(tournament_url: str, minutes: int) -> int:
-    """Shift plan anchors for unstarted STATIC and future STATBREAK rows, then recompute.
+def push_back_unstarted_matches(
+    tournament_url: str,
+    minutes: int,
+    day: date,
+    tz_offset_minutes: int = 0,
+) -> int:
+    """Shift plan anchors for unstarted STATIC and future STATBREAK rows on *day*.
 
-    Unstarted means anything not in progress / completed / skipped, including
-    ``READY_TO_START`` and ``TIME_FINALIZED``. STATIC anchors always move when
-    unstarted. STATBREAK anchors move only when their start has not yet passed
-    (same edit-lock rule as the break-group endpoints). Dynamic matches
-    re-derive both timelines from the new anchors.
+    Only anchors whose plan start falls on ``day`` in the viewer's local timezone
+    (``local = utc + tz_offset_minutes``) are moved. Unstarted means anything not
+    in progress / completed / skipped, including ``READY_TO_START`` and
+    ``TIME_FINALIZED``. STATIC anchors always move when unstarted. STATBREAK
+    anchors move only when their start has not yet passed (same edit-lock rule
+    as the break-group endpoints). Dynamic matches re-derive both timelines
+    from the new anchors via a full recompute.
 
     Args:
         tournament_url: Tournament URL slug.
         minutes: Signed minute delta to apply to plan anchors.
+        day: Local calendar day to push (the schedule viewer's current day).
+        tz_offset_minutes: Minutes to add to stored UTC to get local time
+            (same convention as the schedule frontend).
 
     Returns:
         Number of anchors whose times were shifted.
@@ -570,6 +580,7 @@ def push_back_unstarted_matches(tournament_url: str, minutes: int) -> int:
         return 0
 
     delta = timedelta(minutes=minutes)
+    tz_delta = timedelta(minutes=tz_offset_minutes)
     matches = Match.query.filter_by(event=tournament_url).filter(~Match.status.in_(_STARTED_STATUSES)).all()
     updated = 0
     now = now_utc_naive()
@@ -581,6 +592,11 @@ def push_back_unstarted_matches(tournament_url: str, minutes: int) -> int:
             if start is not None and now >= start:
                 continue  # past-start STATBREAKs are locked history
         else:
+            continue
+        start = m.nominal_start_time or m.scheduled_start_time
+        if start is None:
+            continue
+        if (start + tz_delta).date() != day:
             continue
         shifted = False
         if m.scheduled_start_time is not None:
