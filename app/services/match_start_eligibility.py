@@ -202,7 +202,7 @@ def _reasons_status_and_deps(tournament_url: str, match) -> List[str]:
     prev_uuid = getattr(match, "previous_match", None)
     if prev_uuid:
         prev = Match.query.filter_by(uuid=prev_uuid, event=tournament_url).first()
-        if prev and prev.status not in (MatchStatus.COMPLETED, MatchStatus.SKIPPED):
+        if prev and prev.effective_status not in (MatchStatus.COMPLETED, MatchStatus.SKIPPED):
             reasons.append(f"Previous match '{getattr(prev, 'name', prev_uuid)}' is not completed.")
 
     if getattr(match, "schedule_type", None) != ScheduleType.STATIC:
@@ -211,7 +211,7 @@ def _reasons_status_and_deps(tournament_url: str, match) -> List[str]:
         except Exception:
             deps = []
         if deps:
-            not_finished = [d for d in deps if d.status not in (MatchStatus.COMPLETED, MatchStatus.SKIPPED)]
+            not_finished = [d for d in deps if d.effective_status not in (MatchStatus.COMPLETED, MatchStatus.SKIPPED)]
             if not_finished and not (getattr(match, "ready_to_start", False)):
                 names = [getattr(d, "name", d.uuid) for d in not_finished]
                 reasons.append(f"Dependency match(es) not completed: {', '.join(names)}.")

@@ -8,8 +8,9 @@ from typing import Optional
 def match_name_char_error(name: str) -> Optional[str]:
     """Return an error message if *name* contains characters forbidden in match names.
 
-    Match names must not contain ``","`` (used as a separator in CSV columns)
-    or ``"::"`` (reserved for winner/loser reference syntax).
+    Match names must not contain ``","`` (used as a separator in CSV columns),
+    ``"::"`` (reserved for winner/loser reference syntax), or ``"/"`` (path
+    separator in break-group API routes).
 
     Args:
         name: The candidate match name.
@@ -22,6 +23,8 @@ def match_name_char_error(name: str) -> Optional[str]:
         return 'Match names cannot contain ",".'
     if "::" in name:
         return 'Match names cannot contain "::".'
+    if "/" in name:
+        return 'Match names cannot contain "/".'
     return None
 
 

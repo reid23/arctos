@@ -224,3 +224,42 @@ Same as on match start/end, but:
    (`recompute_scheduled_and_nominal_times`).
 3. Finalize status on matches that should be finalized from the beginning
    (live PROCEDURE).
+
+---
+
+## Structural types: BREAK, STATBREAK, JOIN
+
+These are schedule structure, not games. They occupy fields only (no playing
+teams, no refs) and are unique per `(name, event, field)`.
+
+### Same-name grouping (solver)
+
+- **BREAK**: same-name rows across fields sync their start — the solver
+  unions their dependency edges so every field's Lunch starts together.
+- **JOIN**: same-name rows collapse to one logical graph node (union of
+  predecessors); the day cannot advance past the join until every field's
+  predecessor has finished.
+- **STATBREAK**: same-name rows share a user-supplied start time; the
+  solver never moves them, so no edge-union is needed.
+
+Display name is still the solver's sync key. Unrelated groups should use
+distinct names if they must not sync. Match names cannot contain `/` so
+break-group edit/delete routes can key on the name
+(`/_api/tournaments/.../break-groups/<name>`). Mixed schedule types that
+share a name are rejected on create and edit.
+
+### STATBREAK lifecycle
+
+| Aspect | Behavior |
+|--------|----------|
+| Start time | User-supplied; written to both `scheduled_start_time` and `nominal_start_time` |
+| Solver | Never moves the start |
+| Predecessor | Optional (like STATIC) — not required; group create does not auto-chain |
+| Stored `status` | Ignored / left `NOT_STARTED` — the solver does not write it |
+| `effective_status` | `COMPLETED` once the **start** has passed; else `NOT_STARTED` |
+| Dependents | Treat STATBREAK as a schedule-dependency terminal; may become `READY_TO_START` once the start has passed (early start OK). Planned times still use the break **end** (`start + length`) |
+| Edit lock | Locked once the **start** has passed (same moment as completion) |
+
+Completing at the start (not the end) lets the next match become ready early
+while the break window is still open; the chain still places that match at
+`start + nominal_length`.
