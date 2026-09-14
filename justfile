@@ -126,6 +126,13 @@ dev:
 frontend:
     @cd frontend && dx serve
 
+# Run frontend unit tests on the host target (`.cargo/config.toml` defaults to wasm32).
+frontend-test:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    host="$(rustc -vV | sed -n 's/^host: //p')"
+    cd frontend && cargo test --target "$host"
+
 # ── Database ──────────────────────────────────────────────────────────────────
 
 # One-shot: stamp an existing database at the current alembic head.

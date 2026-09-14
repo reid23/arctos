@@ -14,7 +14,6 @@ rather than raising.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Iterable, List, Optional
 
@@ -92,7 +91,7 @@ class MatchService:
             :class:`~app.models.match.Match`, or
             :class:`~app.error_values.Err` wrapping a domain error.
         """
-        from models import Match, Field, db
+        from models import Match, db
         from app.services._common import get_tournament_or_err
         from app.domain.enums import MatchStatus
         from app.utils.scheduling import recompute_all_match_times
@@ -157,16 +156,6 @@ class MatchService:
                 spp = match.stones_per_set or 100
             match.stones_per_set = spp
             match.stones_remaining = spp
-
-        # Get camera stream start times for all cameras on this field
-        if match.field:
-            field_obj = Field.query.filter_by(event=tournament_url, name=match.field).first()
-            if field_obj and field_obj.camera:
-                from app.utils.camera_helpers import get_all_camera_stream_starts
-
-                stream_starts = get_all_camera_stream_starts(field_obj)
-                if stream_starts:
-                    match.camera_stream_starts = json.dumps(stream_starts)
 
         db.session.commit()
 

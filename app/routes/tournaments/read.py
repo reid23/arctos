@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 import collections
 import json
 
-from flask import current_app, jsonify, request
+from flask import jsonify, request
 from flask_login import current_user, login_required
 from sqlalchemy import func
 
@@ -50,7 +50,6 @@ from app.services.registration_resolver import (
 )
 from app.services.team_stats_service import compute_team_stats
 from app.services.tournament_service import TournamentService
-from app.utils.camera_helpers import parse_camera_urls
 from app.utils.datetime_helpers import to_iso_z
 from app.utils.helpers import (
     can_head_ref_match,
@@ -62,7 +61,6 @@ from app.utils.helpers import (
 from app.utils.player_helpers import (
     get_player_display_from_registration,
 )
-from app.utils.recording_retry import current_user_can_retry_finalization
 from app.utils.user_helpers import is_player, is_team
 from models import (
     Camera,
@@ -73,6 +71,7 @@ from models import (
     Player,
     PlayerRegistration,
     Point,
+    ScriptVariable,
     Tag,
     Team,
     TeamRegistration,
@@ -473,7 +472,6 @@ def tournament_detail(tournament_url):
             "is_current_team_registered": is_current_team_registered,
             "is_current_player_registered": is_current_player_registered,
             "penalty_types": penalty_types_data,
-            "manual_footage_uploads_enabled": bool(current_app.config.get("ENABLE_MANUAL_FOOTAGE_UPLOADS", False)),
         }
     )
 
@@ -645,7 +643,9 @@ def tournament_schedule(tournament_url):
                 "team2": m.team2,
                 "team1_initial": m.team1_initial,
                 "team2_initial": m.team2_initial,
-                "status": (m.status.value if hasattr(m.status, "value") else str(m.status)),
+                "status": (
+                    m.effective_status.value if hasattr(m.effective_status, "value") else str(m.effective_status)
+                ),
                 "scheduled_start_time": dt_iso(m.scheduled_start_time),
                 "nominal_start_time": dt_iso(m.nominal_start_time),
                 "confirmed_start_time": dt_iso(m.confirmed_start_time),
@@ -744,7 +744,7 @@ def tournament_fields(tournament_url):
     if err:
         return jsonify({"error": "Not found"}), err
     fields = Field.query.filter_by(event=tournament_url).order_by(Field.name).all()
-    return jsonify({"fields": [{"id": f.id, "name": f.name, "camera": f.camera} for f in fields]})
+    return jsonify({"fields": [{"id": f.id, "name": f.name} for f in fields]})
 
 
 @bp.route("/tournaments/<tournament_url>/schedule-setup", methods=["GET"])
@@ -764,23 +764,34 @@ def tournament_schedule_setup(tournament_url):
 
     # Fields
     fields_query = Field.query.filter_by(event=tournament_url).order_by(Field.name).all()
-    fields_data = []
-    for f in fields_query:
-        camera_urls = []
-        if f.camera:
-            try:
-                loaded = json.loads(f.camera)
-                if isinstance(loaded, list):
-                    camera_urls = loaded
-                else:
-                    camera_urls = [f.camera]
-            except:
-                camera_urls = [f.camera]
-        fields_data.append({"id": f.id, "name": f.name, "camera_urls": camera_urls})
+    fields_data = [{"id": f.id, "name": f.name} for f in fields_query]
 
-    # Tags
+    # Tags. `resolved_team` is the effective resolution: manual override if
+    # set, else the tag's ASS expression evaluated to a concrete team.
+    from app.utils.helpers import resolve_tag_to_team
+
     tags_query = Tag.query.filter_by(event=tournament_url).order_by(Tag.name).all()
-    tags_data = [{"id": t.id, "name": t.name, "team": t.team} for t in tags_query]
+    tags_data = [
+        {
+            "id": t.id,
+            "name": t.name,
+            "team": t.team,
+            # Raw expression is organizer-only; public viewers get resolved_team.
+            "expression": t.expression if is_to else None,
+            "resolved_team": resolve_tag_to_team(f"tag::{t.name}", tournament_url),
+        }
+        for t in tags_query
+    ]
+
+    # Tournament-scoped ASS script variables (organizer scripting UI only).
+    script_variables_data = (
+        [
+            {"id": v.id, "name": v.name, "expression": v.expression}
+            for v in ScriptVariable.query.filter_by(event=tournament_url).order_by(ScriptVariable.name).all()
+        ]
+        if is_to
+        else []
+    )
 
     # Matches
     matches_query = Match.query.filter_by(event=tournament_url).order_by(Match.nominal_start_time).all()
@@ -795,7 +806,9 @@ def tournament_schedule_setup(tournament_url):
                 "team2": m.team2,
                 "team1_initial": m.team1_initial,
                 "team2_initial": m.team2_initial,
-                "status": (m.status.value if hasattr(m.status, "value") else str(m.status)),
+                "status": (
+                    m.effective_status.value if hasattr(m.effective_status, "value") else str(m.effective_status)
+                ),
                 "scheduled_start_time": dt_iso(m.scheduled_start_time),
                 "nominal_start_time": dt_iso(m.nominal_start_time),
                 "confirmed_start_time": dt_iso(m.confirmed_start_time),
@@ -840,6 +853,7 @@ def tournament_schedule_setup(tournament_url):
             "matches": match_list,
             "fields": fields_data,
             "tags": tags_data,
+            "script_variables": script_variables_data,
             "team_options": team_options,
             "is_to": is_to,
         }
@@ -900,24 +914,7 @@ def tournament_match_detail(tournament_url):
         except (json.JSONDecodeError, TypeError):
             pass
 
-    # 1) YouTube livestream cameras from Field configuration (source of truth initially).
-    camera_urls: list[str] = []
-    if match.field:
-        field_obj = Field.query.filter_by(event=tournament_url, name=match.field).first()
-        if field_obj and field_obj.camera:
-            camera_urls = parse_camera_urls(field_obj.camera)
-            for idx, url in enumerate(camera_urls):
-                available_cameras.append(
-                    {
-                        "index": idx,
-                        "url": url,
-                        "stream_start_time": None,
-                        "type": "youtube",
-                        "status": "SUCCESS",
-                    }
-                )
-
-    # 2) Match-scoped cameras from the new Camera table.
+    # Match-scoped cameras from the Camera table.
     camera_rows = (
         Camera.query.filter_by(match_uuid=match.uuid).filter_by(event=tournament_url).order_by(Camera.name.asc()).all()
     )
@@ -930,31 +927,11 @@ def tournament_match_detail(tournament_url):
         # Only provide YouTube URL/id once upload succeeded.
         url = cam.link if cam.status == "SUCCESS" else None
 
-        # FAILED downloads:
-        # - if `file` is a local static/ path, frontend can link directly
-        # - if `file` looks like an S3 key, return a presigned URL instead
         video_path = cam.file
-        if cam.status == "FAILED" and video_path and not video_path.startswith("static/"):
-            bucket = current_app.config.get("S3_VIDEO_BUCKET")
-            if bucket:
-                from app.utils.s3_video import get_presigned_url
-
-                region = (current_app.config.get("AWS_REGION") or "us-east-1") or "us-east-1"
-                expiry = current_app.config.get("S3_PRESIGNED_EXPIRY_SECONDS", 3600)
-                endpoint_url = current_app.config.get("S3_ENDPOINT_URL")
-                playable_url = get_presigned_url(
-                    bucket,
-                    video_path,
-                    region=region,
-                    expiry_seconds=expiry,
-                    endpoint_url=endpoint_url,
-                )
-                if playable_url:
-                    video_path = playable_url
 
         available_cameras.append(
             {
-                "index": len(camera_urls) + idx,
+                "index": idx,
                 "url": url,
                 "stream_start_time": None,
                 "type": cam_type,
@@ -973,8 +950,6 @@ def tournament_match_detail(tournament_url):
         first_cam = available_cameras[0]
         if first_cam.get("type") == "youtube":
             camera_url = first_cam.get("url")
-
-    can_retry_finalization = current_user_can_retry_finalization(current_user)
 
     # Get match notes
     initial_notes = match.initial_notes or ""
@@ -1231,7 +1206,12 @@ def tournament_match_detail(tournament_url):
                 "team2_shortname": team2_shortname,
                 "team1_initial": match.team1_initial,
                 "team2_initial": match.team2_initial,
-                "status": (match.status.value if hasattr(match.status, "value") else str(match.status)),
+                "status": (
+                    match.effective_status.value
+                    if hasattr(match.effective_status, "value")
+                    else str(match.effective_status)
+                ),
+                "scheduled_start_time": dt_iso(match.scheduled_start_time),
                 "nominal_start_time": dt_iso(match.nominal_start_time),
                 "confirmed_start_time": dt_iso(match.confirmed_start_time),
                 "completed_time": dt_iso(match.completed_time),
@@ -1257,7 +1237,6 @@ def tournament_match_detail(tournament_url):
             "match_notes": match_notes,
             "point_notes_map": point_notes_map,
             "is_head_ref": is_head_ref,
-            "can_retry_finalization": can_retry_finalization,
             "can_start": can_start,
             "block_reasons": block_reasons,
             "why_sections": why_sections_to_dict(why_sections),
@@ -1316,7 +1295,11 @@ def tournament_match_state(tournament_url):
     return jsonify(
         {
             "match_id": match.uuid,
-            "status": (match.status.value if hasattr(match.status, "value") else str(match.status)),
+            "status": (
+                match.effective_status.value
+                if hasattr(match.effective_status, "value")
+                else str(match.effective_status)
+            ),
             "team1_score": team1_score,
             "team2_score": team2_score,
             "scores_by_set": scores_by_set,
@@ -1337,19 +1320,7 @@ def get_field(tournament_url, field_id):
         return jsonify({"error": "Forbidden"}), 403
     field = Field.query.filter_by(id=field_id, event=tournament_url).first_or_404()
 
-    # Parse camera JSON if needed, or return as is
-    camera_urls = []
-    if field.camera:
-        try:
-            data = json.loads(field.camera)
-            if isinstance(data, list):
-                camera_urls = data
-            else:
-                camera_urls = [field.camera]
-        except:
-            camera_urls = [field.camera]
-
-    return jsonify({"id": field.id, "name": field.name, "camera_urls": camera_urls})
+    return jsonify({"id": field.id, "name": field.name})
 
 
 @bp.route("/tournaments/<tournament_url>/tags", methods=["GET"])
@@ -1358,4 +1329,13 @@ def list_tags(tournament_url):
     if not _check_to(tournament_url):
         return jsonify({"error": "Forbidden"}), 403
     tags = Tag.query.filter_by(event=tournament_url).order_by(Tag.name).all()
-    return jsonify({"tags": [{"id": t.id, "name": t.name, "team": t.team} for t in tags]})
+    return jsonify({"tags": [{"id": t.id, "name": t.name, "team": t.team, "expression": t.expression} for t in tags]})
+
+
+@bp.route("/tournaments/<tournament_url>/script-variables", methods=["GET"])
+@login_required
+def list_script_variables(tournament_url):
+    if not _check_to(tournament_url):
+        return jsonify({"error": "Forbidden"}), 403
+    variables = ScriptVariable.query.filter_by(event=tournament_url).order_by(ScriptVariable.name).all()
+    return jsonify({"script_variables": [{"id": v.id, "name": v.name, "expression": v.expression} for v in variables]})

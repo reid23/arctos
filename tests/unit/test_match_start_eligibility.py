@@ -13,7 +13,7 @@ def test_can_start_true_when_ref_ready_no_conflict(app, test_db, tournament, hea
     with app.app_context():
         t = db.session.merge(tournament)
         ref = db.session.merge(head_ref_player)
-        field = Field(event=t.url, name="Field 1", camera=None)
+        field = Field(event=t.url, name="Field 1")
         db.session.add(field)
         m = Match(
             name="Ready",
@@ -40,7 +40,7 @@ def test_can_start_false_field_busy(app, test_db, tournament, head_ref_player, s
     with app.app_context():
         t = db.session.merge(tournament)
         ref = db.session.merge(head_ref_player)
-        field = Field(event=t.url, name="Field 1", camera=None)
+        field = Field(event=t.url, name="Field 1")
         db.session.add(field)
         other = Match(
             name="Other",
@@ -80,7 +80,7 @@ def test_can_start_false_user_not_ref(app, test_db, tournament, player, seeded_t
     with app.app_context():
         t = db.session.merge(tournament)
         p = db.session.merge(player)
-        field = Field(event=t.url, name="Field 1", camera=None)
+        field = Field(event=t.url, name="Field 1")
         db.session.add(field)
         m = Match(
             name="Ready",
@@ -109,7 +109,7 @@ def test_can_start_false_status_not_ready(app, test_db, tournament, head_ref_pla
     with app.app_context():
         t = db.session.merge(tournament)
         ref = db.session.merge(head_ref_player)
-        field = Field(event=t.url, name="Field 1", camera=None)
+        field = Field(event=t.url, name="Field 1")
         db.session.add(field)
         m = Match(
             name="Not Ready",

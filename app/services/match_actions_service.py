@@ -7,7 +7,6 @@ then map Result -> JSON.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
@@ -166,7 +165,7 @@ class MatchActionsService:
             :class:`~app.error_values.Ok` wrapping the new point's UUID and
             metadata, or :class:`~app.error_values.Err`.
         """
-        from models import Field, Point, db
+        from models import Point, db
         from app.utils.datetime_helpers import to_iso_z
 
         match = MatchActionsService._require_match(tournament_url, match_id).Q()
@@ -195,26 +194,6 @@ class MatchActionsService:
                 new_point.stones_at_start = stones_at_start
             else:
                 new_point.stones_at_start = match.stones_remaining
-
-        # Camera timestamp calculation (best-effort; preserves prior behavior).
-        if match.field:
-            field_obj = Field.query.filter_by(event=tournament_url, name=match.field).first()
-            if field_obj and field_obj.camera and match.camera_stream_starts:
-                from app.utils.camera_helpers import (
-                    calculate_stream_timestamp,
-                    parse_camera_urls,
-                )
-
-                try:
-                    stream_starts = json.loads(match.camera_stream_starts)
-                    camera_urls = parse_camera_urls(field_obj.camera)
-                    if "0" in stream_starts and len(camera_urls) > 0:
-                        stream_timestamp = calculate_stream_timestamp(new_point.stamp, stream_starts["0"])
-                        if stream_timestamp is not None:
-                            new_point.camera_index = 0
-                            new_point.stream_timestamp = stream_timestamp
-                except (json.JSONDecodeError, KeyError, ValueError):
-                    pass
 
         db.session.add(new_point)
         db.session.commit()

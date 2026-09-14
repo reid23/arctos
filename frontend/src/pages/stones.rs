@@ -1,7 +1,6 @@
 //! Stones Player: globally synchronized stones using a Bayesian filter for time offset.
 
 use crate::api;
-use crate::stones_filter::BayesianOffsetFilter;
 use crate::types::StonesResponse;
 use dioxus::prelude::*;
 
@@ -15,10 +14,19 @@ use std::rc::Rc;
 use wasm_bindgen::JsCast;
 
 const BEAT_INTERVAL: f64 = 1.5;
-const SYNC_INTERVAL_MS: u32 = 997;
-const SCHEDULE_INTERVAL_MS: u32 = 500;
+// Kept short so that after a calibration change clears the queue, the loop
+// re-queues quickly and the new timing lands on the next stone.
+const SCHEDULE_INTERVAL_MS: u32 = 200;
 const SCHEDULE_AHEAD_SEC: f64 = 7.0;
 const MIN_GAP_SEC: f64 = 1.0;
+// Visual metronome: how long the flash stays lit, and a floor gap afterward so
+// we never busy-loop if the next boundary computes as essentially now.
+const BEAT_FLASH_MS: u32 = 120;
+const BEAT_MIN_GAP_MS: u32 = 50;
+// Step 2 of calibration: after resetting the estimate, poll this often and wait
+// at most this long for it to settle before letting the user tune the offset.
+const STEP2_POLL_MS: u32 = 100;
+const STEP2_MAX_SYNC_MS: u32 = 3000;
 
 #[component]
 pub fn Stones() -> Element {
@@ -52,9 +60,19 @@ pub fn Stones() -> Element {
 fn StonesPlayerWasm(stones_val: ReadSignal<Option<Result<StonesResponse, String>>>) -> Element {
     let mut is_playing = use_signal(|| false);
     let mut selected_index = use_signal(|| 0usize);
-    let mut filter = use_signal(|| BayesianOffsetFilter::default());
-    let rtt_ms = use_signal(|| Option::<f64>::None);
+    let mut time_sync = crate::time_sync::use_time_sync();
     let mut custom_status = use_signal(|| Option::<String>::None);
+    // Pulses true (briefly) on each server beat, driving the visual metronome
+    // shown inside the calibration walkthrough.
+    let beat_flash = use_signal(|| false);
+    // Calibration walkthrough: 0 = closed, 1 = audio-delay step, 2 = clock-offset step.
+    let mut calibration_step = use_signal(|| 0u8);
+    let mut calibration_snapshot = use_signal(|| crate::time_sync::SyncSnapshot {
+        calibration: crate::time_sync::Calibration::default(),
+        mean_ms: 0.0,
+        variance_ms2: 0.0,
+    });
+    let step2_syncing = use_signal(|| false);
 
     let mut audio_ctx = use_signal(|| Option::<web_sys::AudioContext>::None);
     let mut audio_buffer = use_signal(|| Option::<web_sys::AudioBuffer>::None);
@@ -68,37 +86,22 @@ fn StonesPlayerWasm(stones_val: ReadSignal<Option<Result<StonesResponse, String>
         }))
     });
 
-    // Sync loop
-    use_effect(move || {
-        let mut filter = filter.clone();
-        let mut rtt_ms = rtt_ms.clone();
-        spawn(async move {
-            loop {
-                let client_send = js_sys::Date::now() / 1000.0;
-                if let Ok(res) = api::server_time().await {
-                    let client_receive = js_sys::Date::now() / 1000.0;
-                    let rtt = client_receive - client_send;
-                    let offset = res.server_time - client_receive + (rtt / 2.0);
-                    filter.write().update(offset);
-                    rtt_ms.set(Some(rtt * 1000.0));
-                }
-                gloo_timers::future::TimeoutFuture::new(SYNC_INTERVAL_MS).await;
-            }
-        });
-    });
-
     // Schedule loop when playing
     use_effect(move || {
         if !is_playing() {
             return;
         }
         let is_playing_sig = is_playing.clone();
-        let filter_sig = filter.clone();
         let audio_ctx_sig = audio_ctx.clone();
         let audio_buffer_sig = audio_buffer.clone();
         let ctx_start_time_sig = ctx_start_time.clone();
         let schedule_rc = schedule_state.read().clone();
         spawn(async move {
+            // Only clear on manual calibration edits — not on every filter mean
+            // update from probing (that re-churned the MediaStream and pitch-bent).
+            let mut last_audio = time_sync.calibration().audio_delay_ms;
+            let mut last_locked = time_sync.calibration().locked_offset_ms;
+            let mut last_lock = time_sync.calibration().offset_locked;
             while is_playing_sig() {
                 let ctx = audio_ctx_sig.read().clone();
                 let buf = audio_buffer_sig.read().clone();
@@ -106,19 +109,30 @@ fn StonesPlayerWasm(stones_val: ReadSignal<Option<Result<StonesResponse, String>
                 if let (Some(ref ctx), Some(ref buf), Some(_start)) =
                     (ctx, buf, *start_time)
                 {
-                    let now = js_sys::Date::now() / 1000.0;
+                    let cal = time_sync.calibration();
+                    if cal.audio_delay_ms != last_audio
+                        || cal.locked_offset_ms != last_locked
+                        || cal.offset_locked != last_lock
+                    {
+                        clear_future_scheduled(schedule_rc.clone(), ctx);
+                        last_audio = cal.audio_delay_ms;
+                        last_locked = cal.locked_offset_ms;
+                        last_lock = cal.offset_locked;
+                    }
                     let audio_now = ctx.current_time();
-                    let mean = filter_sig.read().get_mean();
-                    let mut beat_time = next_beat_time(now, mean);
-                    let max_wall = now + SCHEDULE_AHEAD_SEC;
+                    let server_now = time_sync.server_now_secs();
+                    let audio_delay = time_sync.audio_delay_secs();
+                    let mut next_server_beat =
+                        crate::time_sync::next_beat_boundary(server_now, BEAT_INTERVAL);
                     let mut scheduled = 0u32;
-                    while beat_time <= max_wall && scheduled < 5 {
+                    while next_server_beat - server_now <= SCHEDULE_AHEAD_SEC && scheduled < 5 {
                         if !is_playing_sig() {
                             break;
                         }
-                        let delay = beat_time - now;
+                        let delay = next_server_beat - server_now;
                         if delay > 0.05 && delay < 60.0 {
-                            let audio_time = audio_now + delay;
+                            // Signed audio offset: positive schedules later, negative earlier.
+                            let audio_time = audio_now + delay + audio_delay;
                             if schedule_sound_at(
                                 ctx.clone(),
                                 buf.clone(),
@@ -128,7 +142,7 @@ fn StonesPlayerWasm(stones_val: ReadSignal<Option<Result<StonesResponse, String>
                                 scheduled += 1;
                             }
                         }
-                        beat_time += BEAT_INTERVAL;
+                        next_server_beat += BEAT_INTERVAL;
                     }
                 }
                 gloo_timers::future::TimeoutFuture::new(SCHEDULE_INTERVAL_MS).await;
@@ -136,54 +150,56 @@ fn StonesPlayerWasm(stones_val: ReadSignal<Option<Result<StonesResponse, String>
         });
     });
 
-    let on_play_pause = move |_| {
+    // Visual beat loop: pulse `beat_flash` on every server beat (clock-offset
+    // adjusted grid, so it moves with the offset slider). Drives the metronome
+    // dot shown inside the calibration walkthrough.
+    use_effect(move || {
+        let mut beat_flash = beat_flash;
+        spawn(async move {
+            loop {
+                let server_now = time_sync.server_now_secs();
+                let next_beat = crate::time_sync::next_beat_boundary(server_now, BEAT_INTERVAL);
+                let wait_ms = ((next_beat - server_now) * 1000.0).max(0.0);
+                gloo_timers::future::TimeoutFuture::new(wait_ms as u32).await;
+                beat_flash.set(true);
+                gloo_timers::future::TimeoutFuture::new(BEAT_FLASH_MS).await;
+                beat_flash.set(false);
+                gloo_timers::future::TimeoutFuture::new(BEAT_MIN_GAP_MS).await;
+            }
+        });
+    });
+
+    use_effect(move || {
+        if calibration_step() != 2 {
+            return;
+        }
+        let mut time_sync = time_sync;
+        let mut step2_syncing = step2_syncing;
+        spawn(async move {
+            time_sync.begin_clock_calibration();
+            step2_syncing.set(true);
+            let mut waited = 0u32;
+            while waited < STEP2_MAX_SYNC_MS {
+                if time_sync.quality().converged {
+                    break;
+                }
+                gloo_timers::future::TimeoutFuture::new(STEP2_POLL_MS).await;
+                waited += STEP2_POLL_MS;
+            }
+            step2_syncing.set(false);
+        });
+    });
+
+    let on_play_pause = use_callback(move |_: ()| {
         if is_playing() {
             is_playing.set(false);
-            clear_scheduled(schedule_state.read().clone());
-            // Stop the hidden audio element immediately so mobile doesn't keep playing
-            // buffered MediaStream data or loop a segment.
+            if let Some(ctx) = audio_ctx.read().clone() {
+                clear_future_scheduled(schedule_state.read().clone(), &ctx);
+            }
             pause_audio_stream_element();
+            set_media_session_playing(false);
         } else {
             custom_status.set(None);
-            // Create/resume AudioContext synchronously while we're still in the user gesture (required by browsers)
-            let existing_ctx = audio_ctx.read().clone();
-            let ctx = match existing_ctx {
-                Some(c) => c,
-                None => {
-                    let opts = web_sys::AudioContextOptions::new();
-                    let c = match web_sys::AudioContext::new_with_context_options(&opts) {
-                        Ok(c) => c,
-                        Err(_) => {
-                            custom_status.set(Some("Could not create audio context. Try again.".into()));
-                            return;
-                        }
-                    };
-                    ctx_start_time.set(Some(js_sys::Date::now() / 1000.0));
-                    audio_ctx.set(Some(c.clone()));
-                    // On first creation, also create a MediaStream destination and hook it to a hidden audio element.
-                    #[cfg(target_arch = "wasm32")]
-                    {
-                        ensure_media_destination(&c, schedule_state.clone());
-                    }
-                    if c.state() != web_sys::AudioContextState::Running {
-                        if c.resume().is_err() {
-                            custom_status.set(Some("Could not start audio. Click Play again.".into()));
-                            return;
-                        }
-                    }
-                    c
-                }
-            };
-            if ctx.state() != web_sys::AudioContextState::Running {
-                let _ = ctx.resume();
-            }
-            #[cfg(target_arch = "wasm32")]
-            {
-                // Ensure MediaStreamDestination is present even if context already existed.
-                ensure_media_destination(&ctx, schedule_state.clone());
-                // Start (or resume) the hidden audio element so mobile plays through it.
-                play_audio_stream_element();
-            }
             let stones_opt = stones_val.read().as_ref().and_then(|r| r.as_ref().ok()).cloned();
             let idx = selected_index();
             let stones_len = stones_opt.as_ref().map(|s| s.stones.len()).unwrap_or(0);
@@ -192,109 +208,96 @@ fn StonesPlayerWasm(stones_val: ReadSignal<Option<Result<StonesResponse, String>
                 custom_status.set(Some("Please upload a custom audio file first.".into()));
                 return;
             }
+            let ctx = match prepare_playback_context(
+                audio_ctx,
+                ctx_start_time,
+                schedule_state.clone(),
+            ) {
+                Ok(c) => c,
+                Err(msg) => {
+                    custom_status.set(Some(msg));
+                    return;
+                }
+            };
+            if !play_audio_stream_element() {
+                custom_status.set(Some(
+                    "Could not start media playback. Tap Play again.".into(),
+                ));
+                return;
+            }
+            set_media_session_playing(true);
             spawn(async move {
                 init_and_start_playback(
                     is_playing,
-                    audio_ctx,
                     audio_buffer,
                     custom_buffer,
                     stones_opt,
                     idx,
                     custom_status,
+                    ctx,
+                    schedule_state,
                 )
                 .await;
             });
         }
+    });
+
+    let on_reset_sync = move |_| {
+        time_sync.reset_sync();
     };
 
-    let on_reset = move |_| {
-        filter.write().reset();
+    let on_open_calibration = move |_| {
+        calibration_snapshot.set(time_sync.snapshot());
+        calibration_step.set(1);
+    };
+
+    let on_calibration_next = move |_| {
+        let step = calibration_step();
+        if step == 1 {
+            calibration_step.set(2);
+        } else if step >= 2 {
+            time_sync.set_offset_ms(time_sync.quality().offset_ms);
+            calibration_step.set(0);
+        }
+    };
+
+    let on_calibration_cancel = move |_| {
+        let snap = *calibration_snapshot.read();
+        time_sync.restore_snapshot(snap);
+        calibration_step.set(0);
+    };
+
+    let mut nudge_audio_delay = move |delta_ms: f64| {
+        let cur = time_sync.calibration().audio_delay_ms;
+        let next = (cur + delta_ms).clamp(-750.0, 750.0);
+        time_sync.set_audio_delay_ms(next);
+        set_range_input_value("stones-audio-offset", -next);
+    };
+
+    let mut nudge_clock_offset = move |delta_ms: f64| {
+        let cur = time_sync.quality().offset_ms;
+        let next = (cur + delta_ms).clamp(-750.0, 750.0);
+        time_sync.set_offset_ms(next);
+        set_range_input_value("stones-clock-offset", next);
     };
 
     let stones_ok = stones_val.read().as_ref().and_then(|r| r.as_ref().ok()).cloned();
     let stones_len = stones_ok.as_ref().map(|s| s.stones.len()).unwrap_or(0);
     let base_url = api::base_url();
-    let offset_str = format!("{:.6}", filter.read().get_mean());
-    let var_str = format!("{:.6}", filter.read().get_variance());
-    let rtt_display = match *rtt_ms.read() {
+    let quality = time_sync.quality();
+    let calibration = time_sync.calibration();
+    let offset_str = format!("{:.1} ms", quality.offset_ms);
+    let offset_locked = calibration.offset_locked;
+    let var_str = format!("{:.1} ms\u{00B2}", quality.variance_ms2);
+    let converged_str = if quality.converged { "yes" } else { "not yet" };
+    let rtt_display = match quality.rtt_ms {
         Some(ms) => format!("{:.1} ms", ms),
         None => "-".to_string(),
     };
-
-    #[cfg(target_arch = "wasm32")]
-    fn ensure_media_destination(
-        ctx: &web_sys::AudioContext,
-        mut schedule_state: Signal<Rc<RefCell<ScheduleState>>>,
-    ) {
-        use wasm_bindgen::JsCast;
-        use wasm_bindgen::JsValue;
-
-        // If we already have a destination, nothing to do.
-        if schedule_state
-            .read()
-            .borrow()
-            .media_dest
-            .as_ref()
-            .is_some()
-        {
-            return;
-        }
-
-        let dest = match ctx.create_media_stream_destination() {
-            Ok(d) => d,
-            Err(_) => return,
-        };
-
-        if let Some(window) = web_sys::window() {
-            if let Some(doc) = window.document() {
-                if let Some(el) = doc.get_element_by_id("audio-stream") {
-                    if let Ok(audio) = el.dyn_into::<web_sys::HtmlAudioElement>() {
-                        // audio.srcObject = dest.stream;
-                        if let Ok(stream) = js_sys::Reflect::get(
-                            &JsValue::from(dest.clone()),
-                            &JsValue::from_str("stream"),
-                        ) {
-                            let _ = js_sys::Reflect::set(
-                                &audio,
-                                &JsValue::from_str("srcObject"),
-                                &stream,
-                            );
-                        }
-                        audio.set_autoplay(true);
-                        let _ = audio.play();
-                    }
-                }
-            }
-        }
-
-        schedule_state.write().borrow_mut().media_dest = Some(dest);
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn pause_audio_stream_element() {
-        if let Some(window) = web_sys::window() {
-            if let Some(doc) = window.document() {
-                if let Some(el) = doc.get_element_by_id("audio-stream") {
-                    if let Ok(audio) = el.dyn_into::<web_sys::HtmlAudioElement>() {
-                        let _ = audio.pause();
-                    }
-                }
-            }
-        }
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn play_audio_stream_element() {
-        if let Some(window) = web_sys::window() {
-            if let Some(doc) = window.document() {
-                if let Some(el) = doc.get_element_by_id("audio-stream") {
-                    if let Ok(audio) = el.dyn_into::<web_sys::HtmlAudioElement>() {
-                        let _ = audio.play();
-                    }
-                }
-            }
-        }
-    }
+    let clock_offset_val = format!("{:.0}", quality.offset_ms);
+    let audio_delay_val = format!("{:.0}", calibration.audio_delay_ms);
+    // Mirrored so the range track matches endpoint labels (left=later, right=earlier).
+    let audio_slider_val = format!("{:.0}", -calibration.audio_delay_ms);
 
     #[derive(Clone)]
     struct SoundBtn {
@@ -320,6 +323,18 @@ fn StonesPlayerWasm(stones_val: ReadSignal<Option<Result<StonesResponse, String>
         .unwrap_or_default();
 
     rsx! {
+        style { r#"
+        .stones-beat-dot {{
+            width: 44px; height: 44px; border-radius: 50%;
+            background: #3a3f44; border: 2px solid #555;
+            flex: 0 0 auto; transition: background 90ms ease-out, box-shadow 90ms ease-out, transform 90ms ease-out;
+        }}
+        .stones-beat-dot-on {{
+            background: #4ecdc4; border-color: #4ecdc4;
+            box-shadow: 0 0 18px 4px rgba(78, 205, 196, 0.8);
+            transform: scale(1.12);
+        }}
+        "# }
         div { class: "container mt-4",
             div { class: "row",
                 div { class: "col-12",
@@ -330,9 +345,8 @@ fn StonesPlayerWasm(stones_val: ReadSignal<Option<Result<StonesResponse, String>
                     p { strong { "Important Notes:" } }
                     ul {
                         li { "The speed of sound is about 343 m/s (~110 ms to cross a 40 m field). If stones sound out of sync, try standing equidistant from speakers." }
-                        li { "It should only take a few (3–5) stones to sync. If not syncing, click \"Reset Sync\" on all devices at roughly the same time." }
-                        li { "Bluetooth can add up to ~250 ms delay; prefer wired connections if latency differs between devices." }
-                        li { "When changing the audio device, the first few stones may be out of sync while the buffer clears." }
+                        li { "It should only take a few (3–5) stones to sync." }
+                        li { "Bluetooth can add up to ~250 ms delay; if you are using bluetooth, click \"calibrate manually\" to compensate for this delay." }
                         li { "Custom files: keep them under 1.5 s and avoid dead space at the start." }
                     }
 
@@ -354,7 +368,9 @@ fn StonesPlayerWasm(stones_val: ReadSignal<Option<Result<StonesResponse, String>
                                                     key: "{key_name}",
                                                     class: if is_selected { "btn btn-primary" } else { "btn btn-outline-primary" },
                                                     onclick: move |_| {
-                                                        clear_scheduled(schedule_state.read().clone());
+                                                        if let Some(ctx) = audio_ctx.read().clone() {
+                                                            clear_future_scheduled(schedule_state.read().clone(), &ctx);
+                                                        }
                                                         selected_index.set(idx);
                                                         audio_buffer.set(None);
                                                         let base = base_url.clone();
@@ -378,7 +394,9 @@ fn StonesPlayerWasm(stones_val: ReadSignal<Option<Result<StonesResponse, String>
                                     button {
                                         class: if selected_index() >= stones_len { "btn btn-primary" } else { "btn btn-outline-primary" },
                                         onclick: move |_| {
-                                            clear_scheduled(schedule_state.read().clone());
+                                            if let Some(ctx) = audio_ctx.read().clone() {
+                                                clear_future_scheduled(schedule_state.read().clone(), &ctx);
+                                            }
                                             selected_index.set(stones_len);
                                             audio_buffer.set(custom_buffer.read().clone());
                                         },
@@ -419,12 +437,12 @@ fn StonesPlayerWasm(stones_val: ReadSignal<Option<Result<StonesResponse, String>
                             div { class: "mb-3",
                                 button {
                                     class: if is_playing() { "btn btn-warning btn-lg mb-3" } else { "btn btn-primary btn-lg mb-3" },
-                                    onclick: on_play_pause,
+                                    onclick: move |_| on_play_pause.call(()),
                                     if is_playing() { "Pause" } else { "Play" }
                                 }
                                 button {
                                     class: "btn btn-danger mb-3 ms-2",
-                                    onclick: on_reset,
+                                    onclick: on_reset_sync,
                                     "Reset Sync"
                                 }
                                 if let Some(ref msg) = *custom_status.read() {
@@ -432,19 +450,44 @@ fn StonesPlayerWasm(stones_val: ReadSignal<Option<Result<StonesResponse, String>
                                 }
                             }
 
-                        // Hidden audio element used as a MediaStream sink so that
-                        // mobile browsers treat playback as regular media and keep
-                        // playing reliably when the screen locks or app is backgrounded.
+                            div { class: "mb-3",
+                                p { class: "form-text mb-1", "Something doesn't look or sound right?" }
+                                button {
+                                    class: "btn btn-outline-secondary",
+                                    onclick: on_open_calibration,
+                                    "Calibrate manually"
+                                }
+                            }
+
                         audio {
                             id: "audio-stream",
                             autoplay: true,
-                            style: "display: none;",
+                            preload: "auto",
+                            style: "position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;left:-9999px;bottom:0;",
                         }
 
                             div { class: "mb-3",
                                 h5 { "Stats" }
-                                p { "Offset (x\u{0302}): {offset_str} s" }
-                                p { "Variance (P): {var_str} s\u{00B2}" }
+                                p { "Offset (x\u{0302}): {offset_str}" }
+                                div { class: "form-check mb-2",
+                                    input {
+                                        id: "stones-offset-lock",
+                                        class: "form-check-input",
+                                        r#type: "checkbox",
+                                        checked: offset_locked,
+                                        onchange: move |evt| {
+                                            time_sync.set_offset_locked(evt.checked());
+                                        },
+                                    }
+                                    label {
+                                        class: "form-check-label",
+                                        r#for: "stones-offset-lock",
+                                        if offset_locked { "Offset locked (filter paused)" }
+                                        else { "Lock offset (stop auto-adjust)" }
+                                    }
+                                }
+                                p { "Variance (P): {var_str}" }
+                                p { "Converged: {converged_str}" }
                                 p { "Round trip time: {rtt_display}" }
                             }
                         }
@@ -456,13 +499,161 @@ fn StonesPlayerWasm(stones_val: ReadSignal<Option<Result<StonesResponse, String>
         if let Some(Err(e)) = stones_val.read().as_ref() {
             p { class: "text-danger", "{e}" }
         }
-    }
-}
 
-fn next_beat_time(now: f64, offset: f64) -> f64 {
-    let server_now = now + offset;
-    let next_server = (server_now / BEAT_INTERVAL).ceil() * BEAT_INTERVAL;
-    next_server - offset
+        if calibration_step() != 0 {
+            div { class: "modal show", style: "display: block;",
+                div { class: "modal-dialog modal-dialog-centered",
+                    div { class: "modal-content",
+                        div { class: "modal-header",
+                            h5 { class: "modal-title",
+                                if calibration_step() == 1 { "Calibrate — Step 1 of 2: Audio offset" }
+                                else { "Calibrate — Step 2 of 2: Clock offset" }
+                            }
+                            button { r#type: "button", class: "btn-close", onclick: on_calibration_cancel }
+                        }
+                        div { class: "modal-body",
+                            div { class: "d-flex flex-column align-items-center mb-3",
+                                div {
+                                    class: if beat_flash() { "stones-beat-dot stones-beat-dot-on" } else { "stones-beat-dot" },
+                                }
+                                span { class: "form-text mt-2 text-center", "this should light up on the stone beat" }
+                            }
+
+                            if calibration_step() == 1 {
+                                p {
+                                    "Press Play, then drag the slider until the stones you hear from "
+                                    strong { "this device" }
+                                    " line up with the flashing indicator above."
+                                }
+                                p { class: "form-text",
+                                    "If you're not playing stones from this device, you can skip this step — just press Next."
+                                }
+                                div { class: "mb-3",
+                                    button {
+                                        r#type: "button",
+                                        class: if is_playing() { "btn btn-warning" } else { "btn btn-primary" },
+                                        onclick: move |_| on_play_pause.call(()),
+                                        if is_playing() { "Pause" } else { "Play" }
+                                    }
+                                }
+                                label { class: "form-label d-flex justify-content-between",
+                                    span { "Audio offset" }
+                                    strong { class: "ms-2", "{audio_delay_val} ms" }
+                                }
+                                // Slider is mirrored vs stored ms so left = later, right = earlier.
+                                input {
+                                    id: "stones-audio-offset",
+                                    r#type: "range",
+                                    class: "form-range",
+                                    min: "-750",
+                                    max: "750",
+                                    step: "10",
+                                    value: "{audio_slider_val}",
+                                    onmounted: move |evt: Event<MountedData>| {
+                                        set_input_value_on_mount(
+                                            &evt.data(),
+                                            -time_sync.calibration().audio_delay_ms,
+                                        );
+                                    },
+                                    oninput: move |evt| {
+                                        if let Ok(v) = evt.value().parse::<f64>() {
+                                            time_sync.set_audio_delay_ms(-v);
+                                        }
+                                    },
+                                }
+                                div { class: "d-flex justify-content-between align-items-center mt-1",
+                                    button {
+                                        r#type: "button",
+                                        class: "btn btn-sm btn-outline-secondary",
+                                        onclick: move |_| nudge_audio_delay(10.0),
+                                        "+10 ms"
+                                    }
+                                    span { class: "form-text", "play later ← → play earlier" }
+                                    button {
+                                        r#type: "button",
+                                        class: "btn btn-sm btn-outline-secondary",
+                                        onclick: move |_| nudge_audio_delay(-10.0),
+                                        "-10 ms"
+                                    }
+                                }
+                            } else {
+                                if step2_syncing() {
+                                    div { class: "d-flex align-items-center gap-2 mb-2",
+                                        div { class: "spinner-border spinner-border-sm", role: "status" }
+                                        span { "Re-syncing the clock… (up to 3 seconds)" }
+                                    }
+                                } else {
+                                    p {
+                                        "Drag the slider until the flashing indicator lines up with the stones playing from "
+                                        strong { "another already-synced device" }
+                                        " nearby."
+                                    }
+                                    p { class: "form-text",
+                                        "This adjusts this device's whole sense of server time, so it also fixes the live stone counter when you run a match."
+                                    }
+                                    div { class: "mb-3",
+                                        button {
+                                            r#type: "button",
+                                            class: if is_playing() { "btn btn-warning" } else { "btn btn-primary" },
+                                            onclick: move |_| on_play_pause.call(()),
+                                            if is_playing() { "Pause" } else { "Play" }
+                                        }
+                                    }
+                                    label { class: "form-label d-flex justify-content-between",
+                                        span { "Clock offset" }
+                                        strong { class: "ms-2", "{clock_offset_val} ms" }
+                                    }
+                                    input {
+                                        id: "stones-clock-offset",
+                                        r#type: "range",
+                                        class: "form-range",
+                                        min: "-750",
+                                        max: "750",
+                                        step: "10",
+                                        value: "{clock_offset_val}",
+                                        onmounted: move |evt: Event<MountedData>| {
+                                            set_input_value_on_mount(&evt.data(), time_sync.quality().offset_ms);
+                                        },
+                                        oninput: move |evt| {
+                                            if let Ok(v) = evt.value().parse::<f64>() {
+                                                time_sync.set_offset_ms(v);
+                                            }
+                                        },
+                                    }
+                                    div { class: "d-flex justify-content-between align-items-center mt-1",
+                                        button {
+                                            r#type: "button",
+                                            class: "btn btn-sm btn-outline-secondary",
+                                            onclick: move |_| nudge_clock_offset(-10.0),
+                                            "-10 ms"
+                                        }
+                                        span { class: "form-text", "earlier ← → later" }
+                                        button {
+                                            r#type: "button",
+                                            class: "btn btn-sm btn-outline-secondary",
+                                            onclick: move |_| nudge_clock_offset(10.0),
+                                            "+10 ms"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        div { class: "modal-footer",
+                            button { r#type: "button", class: "btn btn-secondary", onclick: on_calibration_cancel, "Cancel" }
+                            button {
+                                r#type: "button",
+                                class: "btn btn-primary",
+                                disabled: calibration_step() == 2 && step2_syncing(),
+                                onclick: on_calibration_next,
+                                if calibration_step() == 1 { "Next" } else { "Done" }
+                            }
+                        }
+                    }
+                }
+            }
+            div { class: "modal-backdrop show" }
+        }
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -470,6 +661,196 @@ struct ScheduleState {
     times: HashSet<i64>,
     sources: HashMap<i64, web_sys::AudioBufferSourceNode>,
     media_dest: Option<web_sys::MediaStreamAudioDestinationNode>,
+}
+
+#[cfg(target_arch = "wasm32")]
+fn prepare_playback_context(
+    mut audio_ctx: Signal<Option<web_sys::AudioContext>>,
+    mut ctx_start_time: Signal<Option<f64>>,
+    schedule_state: Signal<Rc<RefCell<ScheduleState>>>,
+) -> Result<web_sys::AudioContext, String> {
+    let existing = audio_ctx.read().clone();
+    let needs_new = match &existing {
+        None => true,
+        Some(c) => c.state() == web_sys::AudioContextState::Closed,
+    };
+    let ctx = if needs_new {
+        schedule_state.read().borrow_mut().media_dest = None;
+        let opts = web_sys::AudioContextOptions::new();
+        let c = web_sys::AudioContext::new_with_context_options(&opts)
+            .map_err(|_| "Could not create audio context. Try again.".to_string())?;
+        ctx_start_time.set(Some(js_sys::Date::now() / 1000.0));
+        audio_ctx.set(Some(c.clone()));
+        c
+    } else {
+        existing.unwrap()
+    };
+    if ctx.state() != web_sys::AudioContextState::Running {
+        let _ = ctx.resume();
+    }
+    ensure_media_destination(&ctx, schedule_state, needs_new);
+    Ok(ctx)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn ensure_media_destination(
+    ctx: &web_sys::AudioContext,
+    mut schedule_state: Signal<Rc<RefCell<ScheduleState>>>,
+    force_rebind: bool,
+) {
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen::JsValue;
+
+    let stream_ok = schedule_state
+        .read()
+        .borrow()
+        .media_dest
+        .as_ref()
+        .and_then(|d| {
+            js_sys::Reflect::get(&JsValue::from(d.clone()), &JsValue::from_str("stream")).ok()
+        })
+        .and_then(|s| s.dyn_into::<web_sys::MediaStream>().ok())
+        .map(|s| s.active())
+        .unwrap_or(false);
+
+    if schedule_state.read().borrow().media_dest.is_some() && stream_ok && !force_rebind {
+        return;
+    }
+
+    let dest = match ctx.create_media_stream_destination() {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+
+    if let Some(window) = web_sys::window() {
+        if let Some(doc) = window.document() {
+            if let Some(el) = doc.get_element_by_id("audio-stream") {
+                if let Ok(audio) = el.dyn_into::<web_sys::HtmlAudioElement>() {
+                    if let Ok(stream) = js_sys::Reflect::get(
+                        &JsValue::from(dest.clone()),
+                        &JsValue::from_str("stream"),
+                    ) {
+                        let _ = js_sys::Reflect::set(
+                            &audio,
+                            &JsValue::from_str("srcObject"),
+                            &stream,
+                        );
+                    }
+                    audio.set_autoplay(true);
+                    let _ = js_sys::Reflect::set(
+                        &audio,
+                        &JsValue::from_str("playsInline"),
+                        &JsValue::TRUE,
+                    );
+                }
+            }
+        }
+    }
+
+    schedule_state.write().borrow_mut().media_dest = Some(dest);
+}
+
+#[cfg(target_arch = "wasm32")]
+fn pause_audio_stream_element() {
+    if let Some(window) = web_sys::window() {
+        if let Some(doc) = window.document() {
+            if let Some(el) = doc.get_element_by_id("audio-stream") {
+                if let Ok(audio) = el.dyn_into::<web_sys::HtmlAudioElement>() {
+                    let _ = audio.pause();
+                }
+            }
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn play_audio_stream_element() -> bool {
+    let Some(window) = web_sys::window() else {
+        return false;
+    };
+    let Some(doc) = window.document() else {
+        return false;
+    };
+    let Some(el) = doc.get_element_by_id("audio-stream") else {
+        return false;
+    };
+    let Ok(audio) = el.dyn_into::<web_sys::HtmlAudioElement>() else {
+        return false;
+    };
+    audio.play().is_ok()
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn play_audio_stream_element_async() -> bool {
+    let Some(window) = web_sys::window() else {
+        return false;
+    };
+    let Some(doc) = window.document() else {
+        return false;
+    };
+    let Some(el) = doc.get_element_by_id("audio-stream") else {
+        return false;
+    };
+    let Ok(audio) = el.dyn_into::<web_sys::HtmlAudioElement>() else {
+        return false;
+    };
+    let Ok(promise) = audio.play() else {
+        return false;
+    };
+    wasm_bindgen_futures::JsFuture::from(promise).await.is_ok()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn set_media_session_playing(playing: bool) {
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen::JsValue;
+
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let nav = window.navigator();
+    let Ok(session) = js_sys::Reflect::get(&nav, &JsValue::from_str("mediaSession")) else {
+        return;
+    };
+    if session.is_undefined() || session.is_null() {
+        return;
+    }
+    if playing {
+        if let Ok(ctor) = js_sys::Reflect::get(&window, &JsValue::from_str("MediaMetadata")) {
+            if let Ok(ctor_fn) = ctor.dyn_into::<js_sys::Function>() {
+                let init = js_sys::Object::new();
+                let _ = js_sys::Reflect::set(
+                    &init,
+                    &JsValue::from_str("title"),
+                    &JsValue::from_str("Stones"),
+                );
+                let _ = js_sys::Reflect::set(
+                    &init,
+                    &JsValue::from_str("artist"),
+                    &JsValue::from_str("Arctos"),
+                );
+                let _ = js_sys::Reflect::set(
+                    &init,
+                    &JsValue::from_str("album"),
+                    &JsValue::from_str("Synchronized Stones"),
+                );
+                if let Ok(meta) = js_sys::Reflect::construct(&ctor_fn, &js_sys::Array::of1(&init)) {
+                    let _ = js_sys::Reflect::set(&session, &JsValue::from_str("metadata"), &meta);
+                }
+            }
+        }
+        let _ = js_sys::Reflect::set(
+            &session,
+            &JsValue::from_str("playbackState"),
+            &JsValue::from_str("playing"),
+        );
+    } else {
+        let _ = js_sys::Reflect::set(
+            &session,
+            &JsValue::from_str("playbackState"),
+            &JsValue::from_str("paused"),
+        );
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -529,14 +910,57 @@ fn schedule_sound_at(
     true
 }
 
+/// Force a range/number input's value on mount. Range inputs clamp an
+/// un-applied value to the track midpoint, so a stored calibration would show
+/// as 0 without this; setting the DOM value directly reflects the real value.
 #[cfg(target_arch = "wasm32")]
-fn clear_scheduled(state_rc: Rc<RefCell<ScheduleState>>) {
-    // Drain sources and clear times inside the borrow, then stop/disconnect
-    // outside so that any onended callback can safely borrow the RefCell.
+fn set_input_value_on_mount(event: &MountedData, value: f64) {
+    use dioxus_web::WebEventExt;
+    if let Some(el) = event.try_as_web_event() {
+        if let Ok(input) = el.dyn_into::<web_sys::HtmlInputElement>() {
+            input.set_value(&format!("{value:.0}"));
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn set_range_input_value(id: &str, value: f64) {
+    if let Some(window) = web_sys::window() {
+        if let Some(doc) = window.document() {
+            if let Some(el) = doc.get_element_by_id(id) {
+                if let Ok(input) = el.dyn_into::<web_sys::HtmlInputElement>() {
+                    input.set_value(&format!("{value:.0}"));
+                }
+            }
+        }
+    }
+}
+
+/// Cancel only sources whose scheduled start is still in the future, leaving
+/// any currently-sounding stone to finish. Cutting the source that is actively
+/// feeding the live MediaStream starves it, and the browser time-stretches the
+/// gap and drops the pitch — so pause, sound changes, and calibration tweaks
+/// all clear this way and let the in-flight stone play out.
+#[cfg(target_arch = "wasm32")]
+fn clear_future_scheduled(state_rc: Rc<RefCell<ScheduleState>>, ctx: &web_sys::AudioContext) {
+    // A source is "playing" (do not touch) if it started at or before now; a
+    // small margin keeps one that is about to start from being cut mid-attack.
+    let cutoff_ms = ((ctx.current_time() + 0.05) * 1000.0) as i64;
     let to_stop: Vec<web_sys::AudioBufferSourceNode> = {
         let mut state = state_rc.borrow_mut();
-        state.times.clear();
-        state.sources.drain().map(|(_, s)| s).collect()
+        let future: Vec<i64> = state
+            .times
+            .iter()
+            .copied()
+            .filter(|&t_ms| t_ms > cutoff_ms)
+            .collect();
+        for t_ms in &future {
+            state.times.remove(t_ms);
+        }
+        future
+            .iter()
+            .filter_map(|t_ms| state.sources.remove(t_ms))
+            .collect()
     };
     for source in to_stop {
         #[allow(deprecated)]
@@ -548,33 +972,36 @@ fn clear_scheduled(state_rc: Rc<RefCell<ScheduleState>>) {
 #[cfg(target_arch = "wasm32")]
 async fn init_and_start_playback(
     mut is_playing: Signal<bool>,
-    audio_ctx: Signal<Option<web_sys::AudioContext>>,
     mut audio_buffer: Signal<Option<web_sys::AudioBuffer>>,
     custom_buffer: Signal<Option<web_sys::AudioBuffer>>,
     stones: Option<StonesResponse>,
     selected_index: usize,
     mut custom_status: Signal<Option<String>>,
+    ctx: web_sys::AudioContext,
+    schedule_state: Signal<Rc<RefCell<ScheduleState>>>,
 ) {
-    let ctx = match audio_ctx.read().clone() {
-        Some(c) => c,
-        None => {
-            custom_status.set(Some("Audio context not ready. Click Play again.".into()));
-            return;
-        }
-    };
-    // Ensure context is running (resume() is async; without awaiting, scheduling can fail silently)
     if ctx.state() != web_sys::AudioContextState::Running {
         let promise = match ctx.resume() {
             Ok(p) => p,
             Err(_) => {
                 custom_status.set(Some("Could not resume audio.".into()));
+                set_media_session_playing(false);
                 return;
             }
         };
         if wasm_bindgen_futures::JsFuture::from(promise).await.is_err() {
             custom_status.set(Some("Could not start audio.".into()));
+            set_media_session_playing(false);
             return;
         }
+    }
+    ensure_media_destination(&ctx, schedule_state, false);
+    if !play_audio_stream_element_async().await {
+        custom_status.set(Some(
+            "Could not start media playback. Tap Play again.".into(),
+        ));
+        set_media_session_playing(false);
+        return;
     }
     let stones_len = stones.as_ref().map(|s| s.stones.len()).unwrap_or(0);
     let buf = if selected_index >= stones_len {
@@ -588,12 +1015,14 @@ async fn init_and_start_playback(
                     Ok(b) => Some(b),
                     Err(e) => {
                         custom_status.set(Some(format!("Failed to load audio: {}", e)));
+                        set_media_session_playing(false);
                         return;
                     }
                 }
             }
             None => {
                 custom_status.set(Some("No sound selected.".into()));
+                set_media_session_playing(false);
                 return;
             }
         }
@@ -602,6 +1031,7 @@ async fn init_and_start_playback(
         audio_buffer.set(Some(b));
         custom_status.set(None);
         is_playing.set(true);
+        set_media_session_playing(true);
     }
 }
 

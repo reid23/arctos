@@ -96,6 +96,20 @@ def test_dynamic_cycle_node_falls_back_to_previous_match_end_time(app, test_db, 
 
 
 @pytest.mark.unit
+def test_cycle_path_clears_ready_to_start(app, test_db, tournament):
+    """A previously READY match that becomes cyclic must not stay startable."""
+    with app.app_context():
+        a = _mk(tournament.url, "A", team1_initial="B::winner")
+        b = _mk(tournament.url, "B", team1_initial="A::winner")
+        a.status = MatchStatus.READY_TO_START
+        db.session.commit()
+
+        recompute_all_match_times(tournament.url)
+        db.session.refresh(a)
+        assert a.status == MatchStatus.NOT_STARTED
+
+
+@pytest.mark.unit
 def test_static_cycle_node_keeps_user_supplied_start_time(app, test_db, tournament):
     """A STATIC match in a cycle keeps its user-supplied nominal_start_time."""
     with app.app_context():

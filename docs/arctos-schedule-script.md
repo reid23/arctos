@@ -222,6 +222,49 @@ Given environment bindings `teamlist` and `matchlist` (or literal lists):
 Higher wins first; ties broken by points won; remaining ties keep
 original order (stable sort).
 
+## Tags as Expressions
+
+Besides assigning a team to a tag by hand, a tag can be defined by an
+ASS expression whose result is a team, for example:
+
+```
+(winner {Semi A})
+```
+
+The tag then resolves automatically: once `{Semi A}` completes,
+`[tag::...]` references to it (in match slots, ref slots, and other
+expressions) resolve to the winning team. Until then the tag stays
+unresolved. A manually assigned team acts as an *override* — if both
+are set, the manual team wins. Tag expressions may reference other
+tags; circular references simply never resolve.
+
+Edit tag expressions from the **Tags** modal on the schedule edit
+page.
+
+## Variables
+
+Tournament-wide variables can be defined in the **Scripting** modal on
+the schedule edit page. A variable has a name (a plain identifier,
+e.g. `threshold` — it can't collide with builtin function names) and
+an ASS expression. The variable can then be used by name in any
+expression in the tournament:
+
+```
+(> (wins [ursae]) threshold)
+```
+
+Variables may reference other variables (circular definitions are
+rejected), can hold any type — including functions:
+
+```
+; variable double-wins:
+(lambda (t) (* 2 (wins t)))
+; used in a skip condition:
+(> (double-wins [ursae]) 4)
+```
+
+They work in skip conditions, tag expressions, and other variables.
+
 ## When are things evaluated?
 
 Everything is evaluated when a match's last dependency becomes

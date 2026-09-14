@@ -175,8 +175,6 @@ pub struct TournamentDetailResponse {
     pub is_current_player_registered: bool,
     #[serde(default)]
     pub penalty_types: Vec<PenaltyType>,
-    #[serde(default)]
-    pub manual_footage_uploads_enabled: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -696,6 +694,9 @@ pub struct MatchDetailData {
     pub team1_initial: Option<String>,
     pub team2_initial: Option<String>,
     pub status: String,
+    /// Stable planned start (does not move when the live schedule slips).
+    #[serde(default)]
+    pub scheduled_start_time: Option<String>,
     pub nominal_start_time: Option<String>,
     pub confirmed_start_time: Option<String>,
     pub completed_time: Option<String>,
@@ -784,63 +785,25 @@ pub struct CameraData {
     pub point_timestamps: Option<Vec<PointTimestamp>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct FieldOption {
-    pub id: u32,
-    pub name: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct UserUploadPlanningField {
-    pub id: u32,
-    pub name: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct UserUploadPlanningPoint {
-    pub uuid: String,
-    pub index: u32,
-    pub stamp: Option<String>,
-    pub end_stamp: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct UserUploadPlanningMatch {
-    pub uuid: String,
-    pub name: String,
-    pub field_name: String,
-    #[serde(default)]
-    pub points: Vec<UserUploadPlanningPoint>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct UserUploadPlanningResponse {
-    pub field: UserUploadPlanningField,
-    #[serde(default)]
-    pub matches: Vec<UserUploadPlanningMatch>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct UserUploadedCameraRow {
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct FootageCameraRow {
     pub uuid: String,
     pub match_uuid: String,
     pub match_name: String,
     pub field_name: String,
     pub camera_name: String,
     pub status: String,
+    #[serde(default)]
     pub user: Option<String>,
+    #[serde(default)]
     pub world_start_timestamp: Option<String>,
+    #[serde(default)]
     pub link: Option<String>,
-    pub file: Option<String>,
-    pub uploaded_by_user_id: Option<String>,
-    pub uploaded_by_user_type: Option<String>,
-    pub manifest_only: Option<bool>,
-    pub error: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct UserUploadedCamerasResponse {
-    pub cameras: Vec<UserUploadedCameraRow>,
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct FootageListResponse {
+    pub cameras: Vec<FootageCameraRow>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -907,8 +870,6 @@ pub struct MatchDetailResponse {
     pub match_notes: Vec<MatchNoteData>,
     pub point_notes_map: std::collections::HashMap<String, Vec<MatchNoteData>>,
     pub is_head_ref: bool,
-    #[serde(default)]
-    pub can_retry_finalization: bool,
     #[serde(default)]
     pub can_start: bool,
     #[serde(default)]
@@ -1347,10 +1308,6 @@ pub struct GoogleCompleteProfileRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UpdateFieldRequest {
     pub name: String,
-    pub camera_urls: Vec<String>,
-    /// Per-camera stream start times (ISO UTC). None = no change; Some(None) = clear; Some(Some(s)) = set.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stream_start_times: Option<Vec<Option<String>>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1445,6 +1402,8 @@ pub struct ScheduleSetupResponse {
     pub matches: Vec<MatchSetupData>,
     pub fields: Vec<FieldSetupData>,
     pub tags: Vec<TagSetupData>,
+    #[serde(default)]
+    pub script_variables: Vec<ScriptVariableData>,
     pub team_options: Vec<TeamOption>,
     pub is_to: bool,
 }
@@ -1482,15 +1441,29 @@ pub struct MatchSetupData {
 pub struct FieldSetupData {
     pub id: u32,
     pub name: String,
-    pub camera_urls: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct TagSetupData {
     pub id: u32,
     pub name: String,
+    /// Manually assigned team (an override for `expression`).
     #[serde(default)]
     pub team: Option<String>,
+    /// ASS expression resolving to a TEAM, used when `team` is unset.
+    #[serde(default)]
+    pub expression: Option<String>,
+    /// Effective resolution: `team` if set, else the evaluated expression.
+    #[serde(default)]
+    pub resolved_team: Option<String>,
+}
+
+/// A tournament-scoped ASS script variable (identifier + expression).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ScriptVariableData {
+    pub id: u32,
+    pub name: String,
+    pub expression: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1515,6 +1488,71 @@ pub struct CreateMatchRequest {
 pub struct CreateMatchResponse {
     pub success: bool,
     pub uuid: String,
+}
+
+/// Create one BREAK/STATBREAK/JOIN row per field, sharing name/length.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateBreakGroupRequest {
+    pub name: String,
+    /// "BREAK", "STATBREAK", or "JOIN".
+    pub schedule_type: String,
+    /// Minutes; must be 0 for JOIN.
+    pub length: u32,
+    /// Field names to place the break/join on (one row per field).
+    pub fields: Vec<String>,
+    /// Required for STATBREAK groups; ignored for BREAK.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_time: Option<String>,
+    /// Per-field previous-match UUID (BREAK/JOIN). Empty map = chain-tail default.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub previous_match: std::collections::HashMap<String, String>,
+}
+
+/// Edit every same-name break row at once. `None` fields are left unchanged.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BulkMatchLengthRequest {
+    pub match_ids: Vec<String>,
+    pub length: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BulkMatchLengthResultEntry {
+    pub match_id: String,
+    pub status: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BulkMatchLengthResponse {
+    pub success: bool,
+    #[serde(default)]
+    pub updated: u32,
+    #[serde(default)]
+    pub results: Vec<BulkMatchLengthResultEntry>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UpdateBreakGroupRequest {
+    /// Whole-group conversion; only BREAK↔JOIN is accepted by the server.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schedule_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub length: Option<u32>,
+    /// STATBREAK groups only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_time: Option<String>,
+    /// New field membership: rows are created/deleted to match.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fields: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateBreakGroupResponse {
+    pub success: bool,
+    pub name: String,
+    #[serde(default)]
+    pub uuids: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -1549,7 +1587,6 @@ pub struct ValidateDslResponse {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreateFieldRequest {
     pub name: String,
-    pub camera_urls: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1561,6 +1598,8 @@ pub struct CreateFieldResponse {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreateTagRequest {
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expression: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1569,16 +1608,42 @@ pub struct CreateTagResponse {
     pub id: u32,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PushBackRequest {
     pub minutes: i32,
+    /// Local calendar day to push (`YYYY-MM-DD`), matching the schedule viewer.
+    pub day: String,
+    /// Minutes to add to stored UTC to get local time (same as the schedule UI).
+    pub tz_offset_minutes: i32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UpdateTagsRequest {
     pub tag_id: u32,
-    pub team_id: String,
+    /// Manual team override ("" clears it). Omitted → unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub team_id: Option<String>,
+    /// ASS expression ("" clears it). Omitted → unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expression: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateScriptVariableRequest {
+    pub name: String,
+    pub expression: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateScriptVariableResponse {
+    pub success: bool,
+    pub id: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UpdateScriptVariableRequest {
+    pub name: String,
+    pub expression: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1591,26 +1656,10 @@ pub struct ImportScheduleRequest {
     pub toml: String,
 }
 
-// Record page API
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct RecordMatchStatusResponse {
-    pub hasActiveMatch: bool,
-    pub match_id: Option<String>,
-    pub match_name: Option<String>,
-    pub start_time: Option<String>,
-    pub status: Option<String>,
-    pub points: Option<Vec<RecordPointData>>,
-    pub reason: Option<String>,
-    /// True when a TO has requested preview for this field; record page should send preview frames.
+pub struct ImportScheduleResponse {
     #[serde(default)]
-    pub preview_requested: bool,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct RecordPointData {
-    pub uuid: String,
-    pub stamp: Option<String>,
-    pub end_stamp: Option<String>,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -43,6 +43,7 @@ Types: INT, NIL, BOOL, MATCH, TEAM, LIST, FUNC
 RANGE_MAX = 10_000
 
 import difflib
+import re
 
 from lark import Lark, Tree
 from lark.exceptions import LarkError, UnexpectedInput
@@ -492,10 +493,15 @@ def parse_team_literal(literal: str, event: str):
                 suggestion = _suggest_function(qualifier, known)
                 hint = f" Did you mean 'tag::{suggestion}'?" if suggestion else ""
                 raise DSLValidationError(f"Tag '{qualifier}' does not exist.{hint}")
-            if not tag.team:
-                # Tag exists but its team isn't assigned yet — stay symbolic.
+            # Effective resolution: manual team override, else the tag's ASS
+            # expression (cycle-guarded), else unresolved.
+            from app.utils.helpers import resolve_tag_to_team
+
+            team_id = resolve_tag_to_team(f"tag::{qualifier}", event)
+            if not team_id:
+                # Tag exists but doesn't resolve to a team yet — stay symbolic.
                 return SymbolicTeam(literal, event)
-            team_obj = TeamDB.query.filter_by(id=tag.team).first()
+            team_obj = TeamDB.query.filter_by(id=team_id).first()
             if team_obj:
                 return Team(team_obj, event)
             # Tag's team id refers to a deleted team — stay symbolic.
@@ -1700,6 +1706,236 @@ class Simplifier:
         return min_elem
 
 
+# --------------------------------------------------------------------------
+# Script variables (tournament-scoped ASS variables)
+# --------------------------------------------------------------------------
+
+# Identifier names that can never be used as script-variable names: builtin
+# functions, special forms, and the keyword literals.
+RESERVED_IDENTIFIERS = frozenset(Simplifier.BUILTINS) | {"true", "false", "nil"}
+
+# Mirrors the IDENTIFIER terminal in grammar.lark (including `?` for predicates).
+_IDENTIFIER_RE = re.compile(
+    r"-(?![0-9])$"
+    r"|-[a-zA-Z_+*/=><!&?][a-zA-Z0-9_\-+*/=><!&?]*$"
+    r"|[a-zA-Z_+*/=><!&?][a-zA-Z0-9_\-+*/=><!&?]*$"
+)
+
+_LARK_PARSER: Lark | None = None
+
+
+def _get_lark() -> Lark:
+    """Shared Lark instance for utility parsing (identifier extraction, env building)."""
+    global _LARK_PARSER
+    if _LARK_PARSER is None:
+        import os
+
+        grammar_path = os.path.join(os.path.dirname(__file__), "grammar.lark")
+        with open(grammar_path, "r") as g:
+            _LARK_PARSER = Lark(g, parser="lalr")
+    return _LARK_PARSER
+
+
+def is_valid_identifier(name: str) -> bool:
+    """True when `name` matches the ASS IDENTIFIER token exactly."""
+    return bool(name) and _IDENTIFIER_RE.fullmatch(name) is not None
+
+
+def _identifier_atom_name(tree) -> str | None:
+    if isinstance(tree, Tree) and tree.data == "identifier_atom" and tree.children:
+        return tree.children[0].value
+    return None
+
+
+def _list_head_name(tree: Tree) -> str | None:
+    if tree.data != "list" or not tree.children:
+        return None
+    head = tree.children[0]
+    name = _identifier_atom_name(head)
+    if name is not None:
+        return name
+    # Unwrap thin expression/atom wrappers if present.
+    if isinstance(head, Tree) and head.data in {"expression", "atom"} and head.children:
+        return _identifier_atom_name(head.children[0])
+    return None
+
+
+def _lambda_param_names(params_tree) -> set[str]:
+    """Names bound by a lambda parameter list like ``(x y)``."""
+    names: set[str] = set()
+    if not isinstance(params_tree, Tree):
+        return names
+    node = params_tree
+    if node.data in {"expression", "atom"} and node.children:
+        node = node.children[0]
+    if not isinstance(node, Tree) or node.data != "list":
+        return names
+    for child in node.children:
+        name = _identifier_atom_name(child)
+        if name is None and isinstance(child, Tree) and child.data in {"expression", "atom"}:
+            name = _identifier_atom_name(child.children[0]) if child.children else None
+        if name:
+            names.add(name)
+    return names
+
+
+def _let_binding_pairs(bindings_tree) -> list[tuple[str, object]]:
+    """Parse ``((name expr) ...)`` into ``[(name, expr_tree), ...]``."""
+    pairs: list[tuple[str, object]] = []
+    node = bindings_tree
+    if isinstance(node, Tree) and node.data in {"expression", "atom"} and node.children:
+        node = node.children[0]
+    if not isinstance(node, Tree) or node.data != "list":
+        return pairs
+    for binding in node.children:
+        b = binding
+        if isinstance(b, Tree) and b.data in {"expression", "atom"} and b.children:
+            b = b.children[0]
+        if not isinstance(b, Tree) or b.data != "list" or len(b.children) < 2:
+            continue
+        name = _identifier_atom_name(b.children[0])
+        if (
+            name is None
+            and isinstance(b.children[0], Tree)
+            and b.children[0].data
+            in {
+                "expression",
+                "atom",
+            }
+        ):
+            name = _identifier_atom_name(b.children[0].children[0]) if b.children[0].children else None
+        if name:
+            pairs.append((name, b.children[1]))
+    return pairs
+
+
+def _extract_free_identifiers(tree, bound: frozenset[str] = frozenset()) -> set[str]:
+    """Collect free identifier names (excluding lexical bindings and quoted forms)."""
+    names: set[str] = set()
+    if not isinstance(tree, Tree):
+        return names
+
+    if tree.data == "quoted":
+        # Quoted data is not evaluated — identifiers inside are not references.
+        return names
+
+    if tree.data == "identifier_atom" and tree.children:
+        name = tree.children[0].value
+        if name not in ("true", "false", "nil") and name not in bound:
+            names.add(name)
+        return names
+
+    if tree.data == "list" and tree.children:
+        head = _list_head_name(tree)
+        if head == "quote":
+            return names
+        if head == "lambda" and len(tree.children) >= 3:
+            # Head name "lambda" is a special form, not a free reference.
+            params = _lambda_param_names(tree.children[1])
+            return _extract_free_identifiers(tree.children[2], bound | params)
+        if head == "let" and len(tree.children) >= 3:
+            local = bound
+            for name, expr in _let_binding_pairs(tree.children[1]):
+                names |= _extract_free_identifiers(expr, local)
+                local = local | {name}
+            names |= _extract_free_identifiers(tree.children[2], local)
+            return names
+        # Regular list: head identifier is free if unbound (may be a variable or builtin).
+        for child in tree.children:
+            names |= _extract_free_identifiers(child, bound)
+        return names
+
+    for child in tree.children:
+        names |= _extract_free_identifiers(child, bound)
+    return names
+
+
+def _extract_identifier_names(tree) -> set[str]:
+    """Collect free identifier names in a parse tree (minus keyword literals)."""
+    return _extract_free_identifiers(tree)
+
+
+def extract_variable_references(text: str) -> set[str]:
+    """Names of free identifiers in `text` that could reference script variables.
+
+    Builtins and keyword literals are excluded. Lambda parameters, ``let``
+    bindings, and quoted identifiers are not treated as references.
+    Returns an empty set when the expression doesn't parse; the caller
+    validates parseability separately.
+    """
+    try:
+        tree = _get_lark().parse((text or "").strip())
+    except Exception:
+        return set()
+    return _extract_identifier_names(tree) - RESERVED_IDENTIFIERS
+
+
+def extract_tag_references(text: str) -> set[str]:
+    """Tag names referenced as ``[tag::Name]`` team literals in ``text``."""
+    names: set[str] = set()
+    for inner, _pos in _collect_literals(text or "")[0]:
+        raw = (inner or "").strip()
+        if raw.lower().startswith("tag::"):
+            tag_name = raw[5:].strip()
+            if tag_name:
+                names.add(tag_name)
+    return names
+
+
+def build_variable_env(event: str, parse_team, parse_match) -> dict:
+    """Evaluate this tournament's script variables into an interpreter env.
+
+    Variables may reference other variables, so they're evaluated eagerly in
+    topological order (Kahn). Variables that don't parse, participate in a
+    reference cycle, or fail evaluation are simply left unbound — using them
+    then behaves like any unknown identifier. Write-time validation is what
+    rejects cycles/bad expressions; this function just needs to never blow up.
+    """
+    from app.models import ScriptVariable
+
+    rows = ScriptVariable.query.filter_by(event=event).all()
+    if not rows:
+        return {}
+    lark = _get_lark()
+    trees: dict[str, Tree] = {}
+    deps: dict[str, set[str]] = {}
+    for row in rows:
+        expr = (row.expression or "").strip()
+        if not expr:
+            continue
+        try:
+            tree = lark.parse(expr)
+        except Exception:
+            continue
+        trees[row.name] = tree
+        deps[row.name] = _extract_identifier_names(tree) - RESERVED_IDENTIFIERS
+
+    # Kahn's algorithm over references to other *defined* variables. Nodes in a
+    # cycle (including self-loops) never reach in-degree 0 and stay unbound.
+    indegree: dict[str, int] = {}
+    dependents: dict[str, set[str]] = {}
+    for name in trees:
+        refs = {d for d in deps[name] if d in trees}
+        indegree[name] = len(refs)
+        for d in refs:
+            dependents.setdefault(d, set()).add(name)
+    queue = [n for n, d in indegree.items() if d == 0]
+    env: dict = {}
+    while queue:
+        name = queue.pop()
+        try:
+            env[name] = Simplifier(parse_team, parse_match, env=env).visit(trees[name])
+        except Exception:
+            # Leave unbound; downstream dependents still get evaluated (their
+            # reference to this name then stays an unresolved identifier).
+            pass
+        for m in dependents.get(name, ()):
+            indegree[m] -= 1
+            if indegree[m] == 0:
+                queue.append(m)
+    return env
+
+
 def _collect_literals(text: str):
     """Pull out raw team and match literals for a quick reference-existence check.
 
@@ -1791,7 +2027,7 @@ def _check_references(text: str, event: str) -> list[str]:
     return warnings
 
 
-def get_parser(event: str, match_resolver=None, env=None):
+def get_parser(event: str, match_resolver=None, env=None, include_variables: bool = True):
     """
     Create a parser for the given event (tournament URL).
 
@@ -1800,7 +2036,12 @@ def get_parser(event: str, match_resolver=None, env=None):
     or SymbolicMatch. This avoids DB reads when matches are already in memory.
 
     ``env`` is an optional dict of pre-bound identifiers (e.g. future
-    per-tournament globals like ``teamlist`` / ``matchlist``).
+    per-tournament globals like ``teamlist`` / ``matchlist``); it takes
+    precedence over same-named script variables.
+
+    Unless ``include_variables`` is False, the tournament's script variables
+    are evaluated (lazily, on the first parse) and bound into the interpreter
+    environment so any expression can reference them by name.
     """
     import os
 
@@ -1810,6 +2051,24 @@ def get_parser(event: str, match_resolver=None, env=None):
 
         parse_match = match_resolver if match_resolver is not None else (lambda x: parse_match_literal(x, event))
         base_env = dict(env) if env is not None else {}
+
+        parse_team = lambda x: parse_team_literal(x, event)  # noqa: E731
+
+        # Script-variable env, built once per parser on first use. Building it
+        # runs DB queries and evaluates every variable, so skip it for
+        # parsers that never parse (static_check-only use).
+        env_cache: dict = {}
+
+        def variable_env() -> dict:
+            if "env" not in env_cache:
+                if include_variables:
+                    try:
+                        env_cache["env"] = build_variable_env(event, parse_team, parse_match)
+                    except Exception:
+                        env_cache["env"] = {}
+                else:
+                    env_cache["env"] = {}
+            return env_cache["env"]
 
         def parse(text):
             # Cheap structural check first — gives clean position-aware errors before Lark tries.
@@ -1835,9 +2094,11 @@ def get_parser(event: str, match_resolver=None, env=None):
             except LarkError as e:
                 raise DSLValidationError(f"Parse error: {e}") from e
             interpreter = Simplifier(
-                lambda x: parse_team_literal(x, event),
+                parse_team,
                 parse_match,
-                env=dict(base_env),
+                # Script variables first, explicit caller env on top (callers
+                # binding globals shouldn't be shadowed by user variables).
+                env={**variable_env(), **base_env},
             )
             return interpreter.visit(tree)
 

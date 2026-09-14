@@ -116,19 +116,6 @@ def create_app(config: dict | None = None) -> Flask:
     app.config["GOOGLE_CLIENT_ID"] = os.environ.get("GOOGLE_CLIENT_ID", "")
     app.config["GOOGLE_CLIENT_SECRET"] = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 
-    # S3 video storage: when S3_VIDEO_BUCKET is set, finalization uploads finished videos to S3.
-    app.config["S3_VIDEO_BUCKET"] = os.environ.get("S3_VIDEO_BUCKET", "").strip() or None
-    app.config["S3_ENDPOINT_URL"] = os.environ.get("S3_ENDPOINT_URL", "").strip() or None
-    app.config["AWS_REGION"] = os.environ.get("AWS_REGION", "us-east-1").strip()
-    app.config["S3_VIDEO_PREFIX"] = os.environ.get("S3_VIDEO_PREFIX", "").strip() or None
-    app.config["S3_PRESIGNED_EXPIRY_SECONDS"] = int(os.environ.get("S3_PRESIGNED_EXPIRY_SECONDS", "3600"))
-    app.config["RECORDING_ARTIFACTS_AFTER_UPLOAD"] = (
-        os.environ.get("RECORDING_ARTIFACTS_AFTER_UPLOAD", "delete").strip().lower() or "delete"
-    )
-    app.config["ENABLE_MANUAL_FOOTAGE_UPLOADS"] = os.environ.get(
-        "ENABLE_MANUAL_FOOTAGE_UPLOADS", ""
-    ).strip().lower() in ("1", "true", "yes", "on")
-
     # Handle subpath deployment
     if "SCRIPT_NAME" in os.environ:
         app.config["APPLICATION_ROOT"] = os.environ["SCRIPT_NAME"]

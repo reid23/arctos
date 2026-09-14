@@ -3,7 +3,6 @@ use crate::api;
 use crate::components::{PenaltyDisplay, all_tokens_known, resolve_value_to_team_ids};
 use crate::display::short_or_truncate;
 use crate::pages::TeamSelectionField;
-use crate::stones_filter::BayesianOffsetFilter;
 use crate::time_format::format_match_display_local;
 use crate::types::{
     ConflictingMatchInfo, ForceStartMatchRequest, MatchDetailData, PointData, PointTimestamp,
@@ -341,7 +340,7 @@ fn parse_iso_to_secs(s: &str) -> Option<f64> {
 fn compute_stones_elapsed(
     start_stamp: Option<&str>,
     end_stamp: Option<&str>,
-    filter: &Signal<BayesianOffsetFilter>,
+    time_sync: &crate::time_sync::TimeSync,
 ) -> String {
     const BEAT: f64 = 1.5;
 
@@ -352,10 +351,7 @@ fn compute_stones_elapsed(
 
     let end = match end_stamp.and_then(|s| parse_iso_to_secs(s)) {
         Some(secs) => secs,
-        None => {
-            let client_time = js_sys::Date::now() / 1000.0;
-            client_time + filter.read().get_mean()
-        }
+        None => time_sync.server_now_secs(),
     };
 
     let start_beat = (start / BEAT).floor() as i64;
@@ -368,7 +364,7 @@ fn compute_stones_elapsed(
 #[cfg(target_arch = "wasm32")]
 fn compute_stones_remaining(
     points: &[&crate::types::PointData],
-    filter: &Signal<BayesianOffsetFilter>,
+    time_sync: &crate::time_sync::TimeSync,
 ) -> String {
     if points.is_empty() {
         return "??".to_string();
@@ -382,7 +378,7 @@ fn compute_stones_remaining(
     if last_point_is_ongoing {
         if let Some(stones_at_start) = last_point.stones_at_start {
             if let Some(start_stamp) = &last_point.stamp {
-                let elapsed_str = compute_stones_elapsed(Some(start_stamp), None, filter);
+                let elapsed_str = compute_stones_elapsed(Some(start_stamp), None, time_sync);
                 if let Ok(elapsed) = elapsed_str.parse::<u32>() {
                     let remaining = stones_at_start.saturating_sub(elapsed);
                     return remaining.to_string();
@@ -397,7 +393,7 @@ fn compute_stones_remaining(
             if let Some(stones_at_start) = pt.stones_at_start {
                 if let (Some(start_stamp), Some(end_stamp)) = (&pt.stamp, &pt.end_stamp) {
                     let elapsed_str =
-                        compute_stones_elapsed(Some(start_stamp), Some(end_stamp), filter);
+                        compute_stones_elapsed(Some(start_stamp), Some(end_stamp), time_sync);
                     if let Ok(elapsed) = elapsed_str.parse::<u32>() {
                         let remaining = stones_at_start.saturating_sub(elapsed);
                         return remaining.to_string();
@@ -921,34 +917,10 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
     // User info for permissions
     let user_info = use_resource(move || async move { api::me().await.ok() });
 
-    // Bayesian filter for server time sync (for stones elapsed calculation)
-    #[cfg(target_arch = "wasm32")]
-    let time_filter = use_signal(|| BayesianOffsetFilter::default());
-
-    #[cfg(target_arch = "wasm32")]
-    {
-        use_effect(move || {
-            if let Some(Ok(d)) = data.value().read().as_ref() {
-                if d.match_data.status == "IN_PROGRESS"
-                    && d.match_data.set_type.as_deref() == Some("STONES")
-                {
-                    let mut filter = time_filter;
-                    spawn(async move {
-                        loop {
-                            let client_send = js_sys::Date::now() / 1000.0;
-                            if let Ok(res) = api::server_time().await {
-                                let client_receive = js_sys::Date::now() / 1000.0;
-                                let rtt = client_receive - client_send;
-                                let offset = res.server_time - client_receive + (rtt / 2.0);
-                                filter.write().update(offset);
-                            }
-                            gloo_timers::future::TimeoutFuture::new(997).await;
-                        }
-                    });
-                }
-            }
-        });
-    }
+    // Shared client-server time sync (converges to the server clock; the probe
+    // loop lives in the module).
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
+    let time_sync = crate::time_sync::use_time_sync();
 
     // Stones elapsed update interval (for ongoing points)
     #[cfg(target_arch = "wasm32")]
@@ -993,16 +965,9 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
     let mut last_frame_step_time_ms = use_signal(|| 0.0f64);
     // When switching camera, seek to this time (secs) once the new video is ready.
     let mut pending_seek_time = use_signal(|| None::<f64>);
-    // Fetched YouTube stream start times per camera index (when API does not provide them).
-    let fetched_stream_starts = use_signal(|| Vec::<Option<String>>::new());
-    // Match UUID we have already triggered stream-start fetches for (so we only query once per load).
-    let stream_starts_fetched_for_match = use_signal(|| None::<String>);
     let mut penalty_desc_modal = use_signal(|| None::<String>);
     let mut why_modal_show = use_signal(|| false);
     let mut force_start_modal_show = use_signal(|| false);
-    let retry_finalization_pending = use_signal(|| false);
-    let retry_finalization_message = use_signal(|| None::<String>);
-    let retry_finalization_error = use_signal(|| None::<String>);
 
     // Reset per-page player/camera state when navigating to a different match.
     {
@@ -1048,62 +1013,6 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
         }
     });
 
-    // Fetch YouTube stream start for each camera that has a URL but no stream_start_time from API.
-    // Only runs once when the match page loads (keyed by match uuid).
-    #[cfg(target_arch = "wasm32")]
-    {
-        let val_fetch = val.clone();
-        let mut fetched_stream_starts = fetched_stream_starts;
-        let mut stream_starts_fetched_for_match = stream_starts_fetched_for_match;
-        use_effect(move || {
-            let match_uuid = val_fetch
-                .read()
-                .as_ref()
-                .and_then(|r| r.as_ref().ok())
-                .map(|d| d.match_data.uuid.clone());
-            let Some(match_uuid) = match_uuid else { return };
-            if stream_starts_fetched_for_match().as_deref() == Some(match_uuid.as_str()) {
-                return;
-            }
-            stream_starts_fetched_for_match.set(Some(match_uuid.clone()));
-            let cameras = val_fetch
-                .read()
-                .as_ref()
-                .and_then(|r| r.as_ref().ok())
-                .map(|d| d.available_cameras.clone());
-            let Some(cameras) = cameras else { return };
-            let n = cameras.len();
-            if n == 0 {
-                fetched_stream_starts.set(vec![]);
-                return;
-            }
-            let mut current = vec![None::<String>; n];
-            fetched_stream_starts.set(current.clone());
-            for (idx, cam) in cameras.iter().enumerate() {
-                let url = match &cam.url {
-                    Some(u) if !u.trim().is_empty() => u.clone(),
-                    _ => continue,
-                };
-                if cam.stream_start_time.is_some() {
-                    continue;
-                }
-                if cam.camera_type == "recorded" {
-                    continue;
-                }
-                let mut set_fetched = fetched_stream_starts;
-                spawn(async move {
-                    if let Ok(Some(iso)) = api::youtube_stream_start(&url).await {
-                        let mut v = set_fetched();
-                        if v.len() <= idx {
-                            v.resize(idx + 1, None);
-                        }
-                        v[idx] = Some(iso);
-                        set_fetched.set(v);
-                    }
-                });
-            }
-        });
-    }
 
     // When switching camera with pending same-time seek, poll video until ready then seek.
     #[cfg(target_arch = "wasm32")]
@@ -1242,7 +1151,6 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
         let val_live = val.clone();
         use_effect(move || {
             let _ = selected_camera_idx();
-            let _ = fetched_stream_starts();
             if let Some(Ok(d)) = val_live.read().as_ref() {
                 if d.match_data.status == "COMPLETED" {
                     return;
@@ -1254,8 +1162,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                 };
                 let stream_start = cam
                     .stream_start_time
-                    .clone()
-                    .or_else(|| fetched_stream_starts().get(idx).cloned().flatten());
+                    .clone();
                 let Some(stream_start) = stream_start else {
                     return;
                 };
@@ -1351,8 +1258,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                         let stamp = d.points.get(pi).and_then(|p| p.stamp.as_deref());
                         let stream_start_time: Option<String> = cam
                             .stream_start_time
-                            .clone()
-                            .or_else(|| fetched_stream_starts().get(idx).cloned().flatten());
+                            .clone();
                         if let Some(secs) = in_video_start_for_world_stamp_interpolated(
                             stamp,
                             cam.time_world.as_ref(),
@@ -1379,8 +1285,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                         let stamp = d.points.get(new_idx).and_then(|p| p.stamp.as_deref());
                         let stream_start_time: Option<String> = cam
                             .stream_start_time
-                            .clone()
-                            .or_else(|| fetched_stream_starts().get(idx).cloned().flatten());
+                            .clone();
                         if let Some(secs) = in_video_start_for_world_stamp_interpolated(
                             stamp,
                             cam.time_world.as_ref(),
@@ -1408,8 +1313,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                         let stamp = d.points.get(new_idx).and_then(|p| p.stamp.as_deref());
                         let stream_start_time: Option<String> = cam
                             .stream_start_time
-                            .clone()
-                            .or_else(|| fetched_stream_starts().get(idx).cloned().flatten());
+                            .clone();
                         if let Some(secs) = in_video_start_for_world_stamp_interpolated(
                             stamp,
                             cam.time_world.as_ref(),
@@ -1499,7 +1403,6 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                 let has_cameras = d.available_cameras.len() > 0 || d.camera_url.is_some();
                 let cameras = d.available_cameras.clone();
                 let points_for_footage: Vec<PointData> = live_points_signal().clone().unwrap_or_else(|| d.points.clone());
-                let base_url_footage = base_url.clone();
                 let footage_section = has_cameras.then(move || {
                     let points = points_for_footage.clone();
                     let points_go = points.clone();
@@ -1511,8 +1414,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                         .and_then(|c| c.status.clone())
                         .unwrap_or_else(|| "SUCCESS".to_string());
                     let stream_start_time = current
-                        .and_then(|c| c.stream_start_time.clone())
-                        .or_else(|| fetched_stream_starts().get(idx).cloned().flatten());
+                        .and_then(|c| c.stream_start_time.clone());
                     let stream_start_go = stream_start_time.clone();
                     let stream_start_prev = stream_start_time.clone();
                     let stream_start_next = stream_start_time.clone();
@@ -1523,18 +1425,6 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                     let time_world_next = time_world_go.clone();
                     let time_video_next = time_video_go.clone();
 
-                    let failed_download_url = current
-                        .and_then(|c| c.video_path.clone())
-                        .and_then(|p| {
-                            let p = p.as_str().to_string();
-                            if p.starts_with("http://") || p.starts_with("https://") {
-                                Some(p)
-                            } else {
-                                let base = base_url_footage.trim_end_matches('/');
-                                let p = p.trim_start_matches('/');
-                                Some(format!("{}/{}", base, p))
-                            }
-                        });
                     rsx! {
                         div { class: "card mt-3",
                         div { class: "card-header d-flex justify-content-between align-items-center",
@@ -1617,10 +1507,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                 if status == "UPLOADING" {
                                     p { class: "text-muted", "Video is still processing." }
                                 } else if status == "FAILED" {
-                                    p { class: "text-danger", "error processing video. click here to download source." }
-                                    if let Some(ref href) = failed_download_url {
-                                        a { href: "{href}", class: "btn btn-sm btn-outline-danger ms-2", "Download source" }
-                                    }
+                                    p { class: "text-danger", "error processing video." }
                                 } else {
                                     div {
                                         id: "youtube-player-container",
@@ -1777,6 +1664,9 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                 Link {
                                     to: Route::Schedule {
                                         url: url.clone(),
+                                        view: String::new(),
+                                        team: String::new(),
+                                        field: String::new(),
                                     },
                                     "Schedule"
                                 }
@@ -1912,7 +1802,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                     }
                                 }
                                 div { class: "col-md-4",
-                                    div { class: "d-flex align-items-center mb-2",
+                                    div { class: "d-flex align-items-center mb-2 flex-wrap gap-1",
                                         strong { class: "me-2", "Status:" }
                                         span {
                                             id: "match-status",
@@ -1920,16 +1810,38 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                                 "badge {}",
                                                 match d.match_data.status.as_str() {
                                                     "COMPLETED" => "bg-success",
-                                                    "IN_PROGRESS" => "bg-warning",
-                                                    _ => "bg-secondary",
+                                                    "IN_PROGRESS" => "bg-warning text-dark",
+                                                    "READY_TO_START" => "bg-primary",
+                                                    "TIME_FINALIZED" => "bg-secondary",
+                                                    "SKIPPED" => "bg-dark",
+                                                    _ => "bg-info text-dark",
                                                 },
                                             ),
                                             {
                                                 match d.match_data.status.as_str() {
                                                     "COMPLETED" => "Completed",
                                                     "IN_PROGRESS" => "In Progress",
-                                                    _ => "Scheduled",
+                                                    "READY_TO_START" => "Ready to Start",
+                                                    "TIME_FINALIZED" => "Time Finalized",
+                                                    "NOT_STARTED" => "Not Started",
+                                                    "SKIPPED" => "Skipped",
+                                                    other => other,
                                                 }
+                                            }
+                                        }
+                                        details { class: "ms-1",
+                                            summary {
+                                                class: "small text-muted",
+                                                style: "cursor: pointer; list-style: none;",
+                                                "What does this mean?"
+                                            }
+                                            div { class: "small border rounded p-2 mt-1 bg-light",
+                                                p { class: "mb-1", strong { "Not Started" } " — Match exists; start time may still move (dynamic schedule)." }
+                                                p { class: "mb-1", strong { "Time Finalized" } " — Live start time is locked; waiting until it can be started." }
+                                                p { class: "mb-1", strong { "Ready to Start" } " — Dependencies done and teams/refs resolved; can be started." }
+                                                p { class: "mb-1", strong { "In Progress" } " — Match has been started." }
+                                                p { class: "mb-1", strong { "Completed" } " — Match finished and finalized." }
+                                                p { class: "mb-0", strong { "Skipped" } " — Match was skipped by the schedule rules." }
                                             }
                                         }
                                     }
@@ -1939,12 +1851,13 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                             span { "{field}" }
                                         }
                                     }
+                                    // Planned start is always the published contract of the day (#196).
                                     div { class: "d-flex align-items-center mb-2",
-                                        strong { class: "me-2", "Start:" }
+                                        strong { class: "me-2", "Planned start:" }
                                         span {
                                             {
                                                 match d.match_data
-                                                    .confirmed_start_time
+                                                    .scheduled_start_time
                                                     .as_deref()
                                                     .or(d.match_data.nominal_start_time.as_deref())
                                                 {
@@ -1952,6 +1865,39 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                                     Some(t) => format_match_display_local(t),
                                                 }
                                             }
+                                        }
+                                    }
+                                    // SAFE only: also show start deadline (live nominal). STATIC/FAST: planned only (#196).
+                                    {
+                                        let is_safe = d.match_data.schedule_type.as_deref() == Some("SAFE");
+                                        let planned = d.match_data.scheduled_start_time.as_deref();
+                                        let nominal = d.match_data.nominal_start_time.as_deref();
+                                        let show_deadline = is_safe && nominal.is_some();
+                                        rsx! {
+                                            if show_deadline {
+                                                div {
+                                                    class: "d-flex align-items-center mb-2",
+                                                    title: "For SAFE matches this is the live start deadline from the scheduler (may move if earlier games run long).",
+                                                    strong { class: "me-2", "Start deadline:" }
+                                                    span {
+                                                        {
+                                                            // Prefer showing nominal; if identical to planned the label still clarifies semantics.
+                                                            let t = nominal.or(planned).unwrap_or("");
+                                                            if t.is_empty() {
+                                                                "TBA".to_string()
+                                                            } else {
+                                                                format_match_display_local(t)
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if let Some(t) = d.match_data.confirmed_start_time.as_deref() {
+                                        div { class: "d-flex align-items-center mb-2",
+                                            strong { class: "me-2", "Actual start:" }
+                                            span { "{format_match_display_local(t)}" }
                                         }
                                     }
                                     div { class: "d-flex align-items-center mb-2",
@@ -2030,57 +1976,6 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                 }
                             }
 
-                            if d.can_retry_finalization {
-                                div { class: "row mt-3",
-                                    div { class: "col-12",
-                                        div { class: "d-flex gap-2 align-items-center flex-wrap",
-                                            button {
-                                                class: "btn btn-outline-secondary",
-                                                disabled: retry_finalization_pending(),
-                                                onclick: {
-                                                    let url = url.clone();
-                                                    let match_id = d.match_data.uuid.clone();
-                                                    let mut retry_finalization_pending = retry_finalization_pending;
-                                                    let mut retry_finalization_message = retry_finalization_message;
-                                                    let mut retry_finalization_error = retry_finalization_error;
-                                                    let mut data = data.clone();
-                                                    move |_| {
-                                                        if retry_finalization_pending() {
-                                                            return;
-                                                        }
-                                                        let url = url.clone();
-                                                        let match_id = match_id.clone();
-                                                        retry_finalization_pending.set(true);
-                                                        retry_finalization_message.set(None);
-                                                        retry_finalization_error.set(None);
-                                                        spawn(async move {
-                                                            match api::retry_match_finalization(&url, &match_id).await {
-                                                                Ok(msg) => {
-                                                                    retry_finalization_message.set(Some(msg));
-                                                                    data.restart();
-                                                                }
-                                                                Err(err) => retry_finalization_error.set(Some(err)),
-                                                            }
-                                                            retry_finalization_pending.set(false);
-                                                        });
-                                                    }
-                                                },
-                                                if retry_finalization_pending() {
-                                                    "Retrying..."
-                                                } else {
-                                                    "Retry Finalization"
-                                                }
-                                            }
-                                            if let Some(msg) = retry_finalization_message() {
-                                                span { class: "text-success small", "{msg}" }
-                                            }
-                                            if let Some(err) = retry_finalization_error() {
-                                                span { class: "text-danger small", "{err}" }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
                         }
                     }
 
@@ -2121,12 +2016,12 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                         let between_points = !points_refs.is_empty() && !last_ongoing;
                                         if between_points {
                                         if let Some(Ok(state)) = state_signal.read().as_ref() {
-                                            state.get("stones_remaining").and_then(|v| v.as_u64()).map(|s| s.to_string()).unwrap_or_else(|| compute_stones_remaining(&points_refs, &time_filter))
+                                            state.get("stones_remaining").and_then(|v| v.as_u64()).map(|s| s.to_string()).unwrap_or_else(|| compute_stones_remaining(&points_refs, &time_sync))
                                         } else {
-                                            compute_stones_remaining(&points_refs, &time_filter)
+                                            compute_stones_remaining(&points_refs, &time_sync)
                                         }
                                         } else {
-                                            compute_stones_remaining(&points_refs, &time_filter)
+                                            compute_stones_remaining(&points_refs, &time_sync)
                                         }
                                     };
                                     #[cfg(not(target_arch = "wasm32"))]
@@ -2317,7 +2212,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                                                                     compute_stones_elapsed(
                                                                                         pt.stamp.as_deref(),
                                                                                         pt.end_stamp.as_deref(),
-                                                                                        &time_filter,
+                                                                                        &time_sync,
                                                                                     )
                                                                                 }
                                                                                 #[cfg(not(target_arch = "wasm32"))] { "0" }

@@ -10,15 +10,21 @@ FAST = finalize when all dependencies are completed.
 from __future__ import annotations
 
 import threading
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
-from app.domain.enums import MatchStatus, ScheduleType
+from app.domain.enums import (
+    STRUCTURAL_SCHEDULE_TYPES,
+    MatchStatus,
+    ScheduleType,
+)
 from app.models.base import db
 from app.utils.MatchGraph import (
     MatchGraph,
     MatchGraphNode,
+    _match_participant_team_ids,
     build_match_graph,
+    referee_team_ids_by_match_uuid,
 )
 from app.utils.name_validation import match_name_char_error
 from app.utils.datetime_helpers import now_utc_naive
@@ -50,50 +56,29 @@ def _now_utc() -> datetime:
     return now_utc_naive()
 
 
-def _csv_tokens(raw: Optional[str]) -> List[str]:
-    """Split a comma-separated string into a stripped, non-empty token list.
-
-    Args:
-        raw: Comma-separated string, or ``None``.
-
-    Returns:
-        List of non-empty stripped tokens.
-    """
-    if not raw:
-        return []
-    return [part.strip() for part in str(raw).split(",") if part.strip()]
-
-
-def _match_participant_team_ids(match: object) -> set[str]:
-    """Return the set of team IDs actively assigned to a match.
-
-    Includes ``team1``, ``team2``, and all non-empty ``refs`` tokens.
-
-    Args:
-        match: Any object with ``team1``, ``team2``, and ``refs`` attributes.
-
-    Returns:
-        Set of non-empty team ID strings.
-    """
-    participants = set()
-    for team_id in (getattr(match, "team1", None), getattr(match, "team2", None)):
-        if team_id and str(team_id).strip():
-            participants.add(str(team_id).strip())
-    participants.update(_csv_tokens(getattr(match, "refs", None)))
-    return participants
-
-
-def _matches_share_any_team(match_a: object, match_b: object) -> bool:
+def _matches_share_any_team(
+    match_a: object,
+    match_b: object,
+    ref_team_ids_by_uuid: Optional[Dict[str, set]] = None,
+) -> bool:
     """Return ``True`` if *match_a* and *match_b* share at least one team/ref.
+
+    Participant sets come from :func:`app.utils.MatchGraph._match_participant_team_ids`,
+    which reads referee assignments from the ``match_referees`` table (optionally
+    via a pre-fetched *ref_team_ids_by_uuid* map).
 
     Args:
         match_a: First match object.
         match_b: Second match object.
+        ref_team_ids_by_uuid: Optional pre-fetched uuid → referee-team-ids map.
 
     Returns:
         ``True`` if the participant team-ID sets intersect.
     """
-    return bool(_match_participant_team_ids(match_a) & _match_participant_team_ids(match_b))
+    return bool(
+        _match_participant_team_ids(match_a, ref_team_ids_by_uuid)
+        & _match_participant_team_ids(match_b, ref_team_ids_by_uuid)
+    )
 
 
 def _intervals_overlap(
@@ -175,7 +160,15 @@ def _slot_resolved(
             tag = tag_by_name.get(tag_name)
         else:
             tag = Tag.query.filter_by(event=tournament_url, name=tag_name).first()
-        return bool(tag and getattr(tag, "team", None))
+        if tag is None:
+            return False
+        if getattr(tag, "team", None):
+            return True
+        if (getattr(tag, "expression", None) or "").strip():
+            from app.utils.helpers import resolve_tag_to_team
+
+            return resolve_tag_to_team(f"tag::{tag_name}", tournament_url) is not None
+        return False
     if "::winner" in initial or "::loser" in initial:
         base = initial.split("::")[0].strip()
         dep = name_to_match.get(base)
@@ -194,10 +187,8 @@ def _all_participating_teams_resolved(
     each slot is either a concrete team ID, or a tag:: ref with the tag assigned to a team,
     or a MatchName::winner/loser ref whose match is completed.
     """
-    from app.domain.enums import ScheduleType
-
     schedule_type = getattr(match, "schedule_type", None)
-    if schedule_type in (ScheduleType.BREAK, ScheduleType.JOIN):
+    if schedule_type in STRUCTURAL_SCHEDULE_TYPES:
         return True
 
     if not _slot_resolved(
@@ -240,12 +231,61 @@ def _procedure_with_match(
 
     Mutates node (nominal_start_time, status). No callbacks.
     """
-    if node.status in (
+    if node.schedule_type == ScheduleType.STATBREAK:
+        # Statically-scheduled break: the solver never moves its time and never
+        # writes its status. STATBREAK status is derived from the current time
+        # when read (Match.effective_status: COMPLETED once the start has
+        # passed), so the stored status stays NOT_STARTED. Downstream matches
+        # treat STATBREAK as a schedule-dependency terminal (not walked
+        # through): once the start has passed they may become READY_TO_START
+        # early, while their planned times still use the break end
+        # (start + length) as the dependency end time.
+        return
+
+    # Real-world facts are never recomputed: a started/finished/skipped match
+    # stays that way. BREAK/JOIN are exempt from the COMPLETED early-return —
+    # their COMPLETED is solver-derived (nothing else can set it on structural
+    # rows), so it must be re-earned each pass like any other solver status.
+    if node.schedule_type not in (ScheduleType.BREAK, ScheduleType.JOIN) and node.status in (
         MatchStatus.COMPLETED,
         MatchStatus.IN_PROGRESS,
         MatchStatus.SKIPPED,
     ):
         return
+
+    # --- Downgrade pass -----------------------------------------------------
+    # Solver-earned statuses must be re-earned on every solve: schedule edits
+    # (reordering, retargeted previous-match links, new dependencies, tag
+    # unassignment) can invalidate a previously-correct TIME_FINALIZED /
+    # READY_TO_START / structural COMPLETED. Reset such nodes to their type's
+    # floor here; the earn logic below re-grants whatever still holds. This
+    # runs before the time computation so a downgraded SAFE/FAST node (now
+    # NOT_STARTED again) also gets its nominal recomputed this pass.
+    # Dependencies were already processed (topological order), so their
+    # downgraded statuses are visible and downgrades cascade down chains.
+    deps_started = _all_schedule_deps_in(node, (MatchStatus.IN_PROGRESS, MatchStatus.COMPLETED, MatchStatus.SKIPPED))
+    deps_complete = _all_schedule_deps_in(node, (MatchStatus.COMPLETED, MatchStatus.SKIPPED))
+    if node.status == MatchStatus.READY_TO_START:
+        ready_still_valid = deps_complete and _all_participating_teams_resolved(
+            name_to_match[node.name], tournament_url, name_to_match, tag_by_name
+        )
+        if not ready_still_valid:
+            if node.schedule_type == ScheduleType.STATIC:
+                # A STATIC match's time is finalized by definition.
+                node.status = MatchStatus.TIME_FINALIZED
+            elif node.schedule_type == ScheduleType.SAFE and deps_started:
+                node.status = MatchStatus.TIME_FINALIZED
+            else:
+                node.status = MatchStatus.NOT_STARTED
+    elif node.status == MatchStatus.TIME_FINALIZED:
+        if node.schedule_type == ScheduleType.SAFE and not deps_started:
+            node.status = MatchStatus.NOT_STARTED
+        # STATIC TIME_FINALIZED is the floor; FAST never earns TIME_FINALIZED.
+    elif node.status == MatchStatus.COMPLETED:
+        # Only reachable for BREAK/JOIN (see early-return above).
+        if not deps_complete:
+            node.status = MatchStatus.NOT_STARTED
+    # -------------------------------------------------------------------------
 
     nominal_start_if_skipped: Optional[datetime] = None
 
@@ -316,8 +356,8 @@ def _procedure_for_cycle_node(
       ``nominal_start_time`` alone — the operator can fix the cycle from the
       Schedule Warnings modal.
 
-    Status is left at ``NOT_STARTED`` because in a cycle we can't honestly
-    say the schedule is finalised.
+    Solver-earned statuses (``READY_TO_START`` / ``TIME_FINALIZED``) are reset
+    to the type floor: a cycle cannot honestly keep a match startable.
     """
     from app.utils.MatchGraph import _node_end_time
 
@@ -327,9 +367,20 @@ def _procedure_for_cycle_node(
         MatchStatus.SKIPPED,
     ):
         return
+
+    # Downgrade solver-earned statuses — READY cannot be re-earned in a cycle.
+    if node.status in (MatchStatus.READY_TO_START, MatchStatus.TIME_FINALIZED):
+        if node.schedule_type == ScheduleType.STATIC:
+            node.status = MatchStatus.TIME_FINALIZED
+        else:
+            node.status = MatchStatus.NOT_STARTED
+
     if node.schedule_type == ScheduleType.STATIC:
         if node.status == MatchStatus.NOT_STARTED:
             node.status = MatchStatus.TIME_FINALIZED
+        return
+    if node.schedule_type == ScheduleType.STATBREAK:
+        # Statically scheduled: keep the user-supplied time even inside a cycle.
         return
 
     match_obj = uuid_to_match.get(node.uuid)
@@ -355,9 +406,9 @@ def _scheduled_procedure(node: MatchGraphNode) -> None:
     times and match status entirely. Never reads or writes status, and never
     touches nominal_start_time.
 
-    STATIC matches keep their user-set scheduled_start_time anchor.
+    STATIC and STATBREAK matches keep their user-set scheduled_start_time anchor.
     """
-    if node.schedule_type == ScheduleType.STATIC:
+    if node.schedule_type in (ScheduleType.STATIC, ScheduleType.STATBREAK):
         return
     latest = node.get_direct_deps_latest_scheduled_end_time()
     if latest is not None:
@@ -373,11 +424,11 @@ def _scheduled_procedure_for_cycle_node(
 
     Mirrors :func:`_procedure_for_cycle_node` but on the planned timeline: fall
     back to the doubly-linked-list previous match's scheduled end time. STATIC
-    matches keep their anchor. No status is read or written.
+    and STATBREAK matches keep their anchor. No status is read or written.
     """
     from app.utils.MatchGraph import _node_scheduled_end_time
 
-    if node.schedule_type == ScheduleType.STATIC:
+    if node.schedule_type in (ScheduleType.STATIC, ScheduleType.STATBREAK):
         return
     match_obj = uuid_to_match.get(node.uuid)
     prev_uuid = getattr(match_obj, "previous_match", None) if match_obj is not None else None
@@ -395,14 +446,20 @@ def _scheduled_procedure_for_cycle_node(
 
 
 def _write_graph_to_db(graph: MatchGraph, uuid_to_match: Dict[str, object]) -> None:
-    """Persist graph state to in-memory Match objects (no DB read). Caller commits once."""
+    """Persist graph state to in-memory Match objects (no DB read). Caller commits once.
+
+    STATBREAK statuses are never written: they're derived from the current time
+    at read time (``Match.effective_status``), and the graph node carries that
+    derived value, not the stored one.
+    """
     for node in graph.get_all_nodes():
         uuids_to_update = list(node.component_uuids) if node.component_uuids else [node.uuid]
         for uid in uuids_to_update:
             m = uuid_to_match.get(uid)
             if m is not None:
                 m.nominal_start_time = node.nominal_start_time
-                m.status = node.status
+                if node.schedule_type != ScheduleType.STATBREAK:
+                    m.status = node.status
 
 
 def _write_scheduled_to_db(graph: MatchGraph, uuid_to_match: Dict[str, object]) -> None:
@@ -413,6 +470,35 @@ def _write_scheduled_to_db(graph: MatchGraph, uuid_to_match: Dict[str, object]) 
             m = uuid_to_match.get(uid)
             if m is not None:
                 m.scheduled_start_time = node.scheduled_start_time
+
+
+def reconcile_tag_backed_match_slots(tournament_url: str) -> None:
+    """Write resolved expression-backed tags into match/ref team columns.
+
+    ``READY_TO_START`` promotion and start eligibility both need concrete
+    ``team1`` / ``team2`` / ref ``team_id`` values. Expression tags can resolve
+    in ``_slot_resolved`` without those columns being filled; this pass keeps
+    them in sync (same write-through as the tag-update endpoint).
+    """
+    from app.models.match import Match
+    from app.services.dual_write import get_match_referee_rows
+    from app.utils.helpers import resolve_tag_to_team
+
+    for m in Match.query.filter_by(event=tournament_url).all():
+        if m.status in (
+            MatchStatus.COMPLETED,
+            MatchStatus.SKIPPED,
+            MatchStatus.IN_PROGRESS,
+        ):
+            continue
+        for attr_team, attr_initial in (("team1", "team1_initial"), ("team2", "team2_initial")):
+            initial = (getattr(m, attr_initial, None) or "").strip()
+            if initial.lower().startswith("tag::"):
+                setattr(m, attr_team, resolve_tag_to_team(initial, tournament_url))
+        for row in get_match_referee_rows(m):
+            initial = (row.initial or "").strip()
+            if initial.lower().startswith("tag::"):
+                row.team_id = resolve_tag_to_team(initial, tournament_url)
 
 
 def run_scheduling(tournament_url: str, *, scheduled_pass: bool = False) -> None:
@@ -431,6 +517,12 @@ def run_scheduling(tournament_url: str, *, scheduled_pass: bool = False) -> None
     lock = _get_tournament_lock(tournament_url)
     lock.acquire()
     try:
+        if not scheduled_pass:
+            # Fill tag-backed team/ref columns before status promotion so
+            # READY_TO_START stays consistent with start eligibility.
+            reconcile_tag_backed_match_slots(tournament_url)
+            db.session.flush()
+
         all_matches = Match.query.filter_by(event=tournament_url).all()
         tags = Tag.query.filter_by(event=tournament_url).all()
         tag_by_name = {t.name: t for t in tags}
@@ -489,6 +581,86 @@ def recompute_scheduled_and_nominal_times(tournament_url: str) -> None:
     """
     run_scheduling(tournament_url, scheduled_pass=True)
     run_scheduling(tournament_url, scheduled_pass=False)
+
+
+_STARTED_STATUSES = (
+    MatchStatus.IN_PROGRESS,
+    MatchStatus.COMPLETED,
+    MatchStatus.SKIPPED,
+)
+
+
+def push_back_unstarted_matches(
+    tournament_url: str,
+    minutes: int,
+    day: date,
+    tz_offset_minutes: int = 0,
+) -> int:
+    """Shift plan anchors for unstarted STATIC and future STATBREAK rows on *day*.
+
+    Only anchors whose plan start falls on ``day`` in the viewer's local timezone
+    (``local = utc + tz_offset_minutes``) are moved. Unstarted means anything not
+    in progress / completed / skipped, including ``READY_TO_START`` and
+    ``TIME_FINALIZED``. STATIC anchors always move when unstarted. STATBREAK
+    anchors move only when their start has not yet passed (same edit-lock rule
+    as the break-group endpoints). Dynamic matches re-derive both timelines
+    from the new anchors via a full recompute.
+
+    Args:
+        tournament_url: Tournament URL slug.
+        minutes: Signed minute delta to apply to plan anchors.
+        day: Local calendar day to push (the schedule viewer's current day).
+        tz_offset_minutes: Minutes to add to stored UTC to get local time
+            (same convention as the schedule frontend).
+
+    Returns:
+        Number of anchors whose times were shifted.
+    """
+    from app.models.match import Match
+    from app.utils.datetime_helpers import now_utc_naive
+
+    if not minutes:
+        return 0
+
+    delta = timedelta(minutes=minutes)
+    tz_delta = timedelta(minutes=tz_offset_minutes)
+    matches = Match.query.filter_by(event=tournament_url).filter(~Match.status.in_(_STARTED_STATUSES)).all()
+    updated = 0
+    now = now_utc_naive()
+    for m in matches:
+        if m.schedule_type == ScheduleType.STATIC:
+            pass
+        elif m.schedule_type == ScheduleType.STATBREAK:
+            start = m.nominal_start_time or m.scheduled_start_time
+            if start is not None and now >= start:
+                continue  # past-start STATBREAKs are locked history
+        else:
+            continue
+        start = m.nominal_start_time or m.scheduled_start_time
+        if start is None:
+            continue
+        if (start + tz_delta).date() != day:
+            continue
+        shifted = False
+        if m.scheduled_start_time is not None:
+            m.scheduled_start_time = m.scheduled_start_time + delta
+            shifted = True
+        if m.nominal_start_time is not None:
+            m.nominal_start_time = m.nominal_start_time + delta
+            shifted = True
+        if m.confirmed_start_time is not None:
+            m.confirmed_start_time = m.confirmed_start_time + delta
+            shifted = True
+        if m.scheduled_start_time is None and m.nominal_start_time is not None:
+            m.scheduled_start_time = m.nominal_start_time
+        if m.nominal_start_time is None and m.scheduled_start_time is not None:
+            m.nominal_start_time = m.scheduled_start_time
+        if shifted:
+            updated += 1
+
+    db.session.commit()
+    recompute_scheduled_and_nominal_times(tournament_url)
+    return updated
 
 
 def get_match_dependencies(match, tournament_url: str) -> List:
@@ -554,10 +726,15 @@ def validate_match_input(match, tournament_url: str) -> Tuple[bool, Optional[str
         event=tournament_url,
         name=match.name.strip(),
     )
-    # For BREAK/JOIN, only check uniqueness on the same field and same type
-    if schedule_type in (ScheduleType.BREAK, ScheduleType.JOIN):
+    # For BREAK/STATBREAK/JOIN, only check uniqueness on the same field within the
+    # structural group (mirrors the `unique_with_field` partial index, which spans
+    # all structural types).
+    if schedule_type in STRUCTURAL_SCHEDULE_TYPES:
         field = (getattr(match, "field", None) or "").strip()
-        existing = existing.filter(Match.field == field, Match.schedule_type == schedule_type)
+        existing = existing.filter(
+            Match.field == field,
+            Match.schedule_type.in_(STRUCTURAL_SCHEDULE_TYPES),
+        )
     if match.uuid:
         existing = existing.filter(Match.uuid != match.uuid)
     if existing.first():
@@ -686,7 +863,7 @@ def validate_match_warnings(tournament_url: str) -> List[dict]:
         return None
 
     for m in matches:
-        if m.schedule_type in (ScheduleType.BREAK, ScheduleType.JOIN):
+        if m.schedule_type in STRUCTURAL_SCHEDULE_TYPES:
             continue
         for slot, team_id, initial in (
             ("team1", m.team1, m.team1_initial),
@@ -700,8 +877,9 @@ def validate_match_warnings(tournament_url: str) -> List[dict]:
                 )
 
     # Duplicate-team within a single match (same id or same `_initial` token in 2+ slots).
+    # Structural matches have no team or ref slots, so skip them.
     for m in matches:
-        if m.schedule_type in (ScheduleType.BREAK, ScheduleType.JOIN):
+        if m.schedule_type in STRUCTURAL_SCHEDULE_TYPES:
             continue
         slot_entries: list[tuple[str, str]] = []
         for slot, team_id, initial in (
@@ -775,9 +953,10 @@ def validate_match_warnings(tournament_url: str) -> List[dict]:
     # means the conflict only shows up on the planned timeline — that's the timeline
     # we check here. Two matches sharing a team whose scheduled intervals overlap are
     # double-booked, regardless of field or schedule type.
+    ref_ids_by_uuid = referee_team_ids_by_match_uuid(matches)
     for i, m in enumerate(matches):
         for other in matches[i + 1 :]:
-            if not _matches_share_any_team(m, other):
+            if not _matches_share_any_team(m, other, ref_ids_by_uuid):
                 continue
             if _intervals_overlap(
                 m.scheduled_start_time,

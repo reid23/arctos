@@ -38,8 +38,11 @@ web-sys = { version = "0.3", features = [
     "MediaDeviceInfo", "MediaStreamTrack",
     "Storage",
     "StorageManager",
+    "StorageEvent",
 ] }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+dioxus-web = "0.7"
+futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 gloo-timers = { version = "0.3", features = ["futures"] }
 idb = "0.6"
 js-sys = "0.3"

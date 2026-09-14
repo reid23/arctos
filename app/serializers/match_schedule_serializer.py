@@ -30,7 +30,7 @@ class MatchScheduleSerializer:
             tag: The :class:`~app.models.tournament.Tag` ORM instance.
 
         Returns:
-            Dict with up to three keys: ``id``, ``name``, ``team``.
+            Dict with up to four keys: ``id``, ``name``, ``team``, ``expression``.
         """
         result = {}
         if tag.id is not None:
@@ -39,7 +39,57 @@ class MatchScheduleSerializer:
             result["name"] = tag.name
         if getattr(tag, "team", None):
             result["team"] = tag.team
+        if getattr(tag, "expression", None):
+            result["expression"] = tag.expression
         return result
+
+    @staticmethod
+    def script_variable_to_dict(variable) -> dict[str, Any]:
+        """Serialise a :class:`~app.models.tournament.ScriptVariable` to a TOML-compatible dict.
+
+        Variables are reconciled by name on import (unique per event), so no
+        ``id`` is exported.
+
+        Args:
+            variable: The :class:`~app.models.tournament.ScriptVariable` ORM
+                instance.
+
+        Returns:
+            Dict with ``name`` and ``expression`` keys.
+        """
+        result = {}
+        if variable.name:
+            result["name"] = variable.name
+        if variable.expression:
+            result["expression"] = variable.expression
+        return result
+
+    @staticmethod
+    def script_variable_from_dict(data: dict[str, Any], tournament_url: str) -> Result[dict[str, Any], ValidationError]:
+        """Convert a TOML ``[[variables]]`` dict to ScriptVariable creation data.
+
+        Only checks presence / non-emptiness of ``name`` and ``expression``;
+        identifier, reserved-name, cycle, and expression validation happen in
+        the import service (mirroring the CRUD endpoint's rules).
+        """
+        if "name" not in data:
+            return Err(ValidationError("Script variable missing required field: name"))
+
+        name = str(data["name"]).strip()
+        if not name:
+            return Err(ValidationError("Script variable name cannot be empty"))
+
+        expression = str(data.get("expression", "")).strip()
+        if not expression:
+            return Err(ValidationError(f"Script variable '{name}' missing required field: expression"))
+
+        return Ok(
+            {
+                "event": tournament_url,
+                "name": name,
+                "expression": expression,
+            }
+        )
 
     @staticmethod
     def field_to_dict(field) -> dict[str, Any]:
@@ -51,15 +101,13 @@ class MatchScheduleSerializer:
             field: The :class:`~app.models.tournament.Field` ORM instance.
 
         Returns:
-            Dict with up to three keys: ``id``, ``name``, ``camera``.
+            Dict with up to two keys: ``id``, ``name``.
         """
         result = {}
         if field.id is not None:
             result["id"] = field.id
         if field.name:
             result["name"] = field.name
-        if field.camera:
-            result["camera"] = field.camera
         return result
 
     @staticmethod
@@ -143,7 +191,12 @@ class MatchScheduleSerializer:
         if match.ribbon:
             result["ribbon"] = True
 
-        # Datetime - only include if present
+        # Datetimes — export both timelines when present.
+        # scheduled_start_time is the plan anchor (STATIC user time / planned pass);
+        # nominal_start_time is the live estimate. On re-import, STATIC anchors need
+        # scheduled_start_time so the planned pass does not lose the published times.
+        if match.scheduled_start_time:
+            result["scheduled_start_time"] = match.scheduled_start_time
         if match.nominal_start_time:
             result["nominal_start_time"] = match.nominal_start_time
 
@@ -163,6 +216,7 @@ class MatchScheduleSerializer:
             "event": tournament_url,
             "name": name,
             "team": str(data.get("team", "")).strip() or None,
+            "expression": str(data.get("expression", "")).strip() or None,
         }
 
         # Include id if present (for same-tournament updates)
@@ -187,7 +241,6 @@ class MatchScheduleSerializer:
         result = {
             "event": tournament_url,
             "name": name,
-            "camera": str(data.get("camera", "")).strip() or None,
         }
 
         # Include id if present (for same-tournament updates)
@@ -276,19 +329,41 @@ class MatchScheduleSerializer:
             "next_match": None,
         }
 
-        # Handle datetime
-        if "nominal_start_time" in data and data["nominal_start_time"]:
-            dt_value = data["nominal_start_time"]
+        # Handle datetimes (planned + live). Accept either field; seed the other when
+        # only one is present so STATIC anchors always land in scheduled_start_time.
+        def _parse_dt(field_name: str, dt_value: object) -> Result[datetime, ValidationError]:
             if isinstance(dt_value, datetime):
-                result["nominal_start_time"] = dt_value
-            elif isinstance(dt_value, str):
+                return Ok(dt_value)
+            if isinstance(dt_value, str):
                 try:
-                    # Try parsing ISO format
-                    result["nominal_start_time"] = datetime.fromisoformat(dt_value.replace("Z", "+00:00"))
+                    return Ok(datetime.fromisoformat(dt_value.replace("Z", "+00:00")))
                 except ValueError:
-                    return Err(ValidationError(f"Invalid datetime format: {dt_value}"))
-            else:
-                return Err(ValidationError(f"Invalid nominal_start_time type: {type(dt_value)}"))
+                    return Err(ValidationError(f"Invalid datetime format for {field_name}: {dt_value}"))
+            return Err(ValidationError(f"Invalid {field_name} type: {type(dt_value)}"))
+
+        scheduled_dt = None
+        nominal_dt = None
+        if data.get("scheduled_start_time"):
+            parsed = _parse_dt("scheduled_start_time", data["scheduled_start_time"])
+            if isinstance(parsed, Err):
+                return parsed
+            scheduled_dt = parsed.val
+        if data.get("nominal_start_time"):
+            parsed = _parse_dt("nominal_start_time", data["nominal_start_time"])
+            if isinstance(parsed, Err):
+                return parsed
+            nominal_dt = parsed.val
+
+        if scheduled_dt is None and nominal_dt is not None:
+            # Legacy TOML / exports that only had nominal: treat it as the plan anchor.
+            scheduled_dt = nominal_dt
+        if nominal_dt is None and scheduled_dt is not None:
+            nominal_dt = scheduled_dt
+
+        if scheduled_dt is not None:
+            result["scheduled_start_time"] = scheduled_dt
+        if nominal_dt is not None:
+            result["nominal_start_time"] = nominal_dt
 
         # Helper function to resolve match name to UUID
         def resolve_match_name(match_name: str, current_field: str | None) -> str | None:

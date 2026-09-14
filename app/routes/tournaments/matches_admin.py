@@ -7,13 +7,17 @@ defined in :mod:`app.routes.tournaments.__init__`.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import json
 
 from flask import jsonify, request
 from flask_login import current_user, login_required
 from sqlalchemy.orm.attributes import flag_modified
 
-from app.domain.enums import MatchStatus, ScheduleType, SetType
+from app.domain.enums import (
+    STRUCTURAL_SCHEDULE_TYPES,
+    MatchStatus,
+    ScheduleType,
+    SetType,
+)
 from app.services.dual_write import (
     clear_match_referees,
     get_match_ref_initials,
@@ -30,6 +34,7 @@ from app.utils.helpers import (
     resolve_tag_to_team,
 )
 from app.utils.name_validation import match_name_char_error
+from app.utils.datetime_helpers import now_utc_naive
 from app.utils.scheduling import (
     compute_dynamic_match_nominal_start_time,
     recompute_scheduled_and_nominal_times,
@@ -38,7 +43,7 @@ from app.utils.scheduling import (
 from models import (
     Field,
     Match,
-    Point,
+    ScriptVariable,
     Tag,
     db,
 )
@@ -59,6 +64,8 @@ def _check_to(tournament_url):
 
 def _tag_usage(tournament_url, tag_name):
     """Return list of human-readable strings describing where tag is used, or empty if not used."""
+    from app.utils.parser import extract_tag_references
+
     tag_ref = f"tag::{tag_name}"
     used = []
     for m in Match.query.filter_by(event=tournament_url).all():
@@ -68,9 +75,45 @@ def _tag_usage(tournament_url, tag_name):
             used.append(f'Team 2 of match "{m.name}"')
         if any(initial == tag_ref for initial in get_match_ref_initials(m)):
             used.append(f'Refs of match "{m.name}"')
-        if m.skip_condition and (tag_ref in m.skip_condition or tag_name in m.skip_condition):
+        if m.skip_condition and tag_name in extract_tag_references(m.skip_condition):
+            used.append(f'Skip condition of match "{m.name}"')
+    for t in Tag.query.filter_by(event=tournament_url).all():
+        if t.name == tag_name:
+            continue
+        expr = (t.expression or "").strip()
+        if expr and tag_name in extract_tag_references(expr):
+            used.append(f'Expression of tag "{t.name}"')
+    for v in ScriptVariable.query.filter_by(event=tournament_url).all():
+        expr = (v.expression or "").strip()
+        if expr and tag_name in extract_tag_references(expr):
+            used.append(f'Expression of variable "{v.name}"')
+    return used
+
+
+def _script_variable_usage(tournament_url, var_name, exclude_id=None):
+    """Where a script variable name is referenced (other vars, tags, skip conditions)."""
+    from app.utils.parser import extract_variable_references
+
+    used = []
+    for v in ScriptVariable.query.filter_by(event=tournament_url).all():
+        if exclude_id is not None and v.id == exclude_id:
+            continue
+        if var_name in extract_variable_references(v.expression or ""):
+            used.append(f'Variable "{v.name}"')
+    for t in Tag.query.filter_by(event=tournament_url).all():
+        if var_name in extract_variable_references(t.expression or ""):
+            used.append(f'Expression of tag "{t.name}"')
+    for m in Match.query.filter_by(event=tournament_url).all():
+        if var_name in extract_variable_references(m.skip_condition or ""):
             used.append(f'Skip condition of match "{m.name}"')
     return used
+
+
+def _recompute_after_script_change(tournament_url: str) -> None:
+    """Reconcile tag-backed slots and refresh schedule after a scripting edit."""
+    from app.utils.scheduling import recompute_all_match_times
+
+    recompute_all_match_times(tournament_url)
 
 
 # Statuses where a match has already started and is no longer editable.
@@ -124,7 +167,17 @@ def update_match_api(tournament_url, match_id):
         return jsonify({"error": "Forbidden"}), 403
 
     match = Match.query.filter_by(uuid=match_id, event=tournament_url).first_or_404()
-    if match.status in _LOCKED_STATUSES:
+    # STATBREAK status is time-derived (nobody "starts" them): locked once the
+    # scheduled start has passed, editable before that. (effective_status also
+    # flips to COMPLETED at that same moment.)
+    if match.schedule_type == ScheduleType.STATBREAK:
+        start = match.nominal_start_time or match.scheduled_start_time
+        if start is not None and now_utc_naive() >= start:
+            return (
+                jsonify({"error": "Static break cannot be edited once its start time has passed."}),
+                409,
+            )
+    elif match.status in _LOCKED_STATUSES:
         return (
             jsonify({"error": (f"Match cannot be edited once it has started (current status: {match.status.value}).")}),
             409,
@@ -142,8 +195,12 @@ def update_match_api(tournament_url, match_id):
         ),
         ScheduleType.SAFE: (ScheduleType.SAFE, ScheduleType.FAST),
         ScheduleType.FAST: (ScheduleType.FAST,),
-        ScheduleType.BREAK: (ScheduleType.BREAK,),
-        ScheduleType.JOIN: (ScheduleType.JOIN,),
+        # Breaks and joins interconvert (both are dynamic field reservations);
+        # nothing converts TO a STATBREAK — create one deliberately, with a
+        # start time, instead of mutating a dynamic break into a static one.
+        ScheduleType.BREAK: (ScheduleType.BREAK, ScheduleType.JOIN),
+        ScheduleType.STATBREAK: (ScheduleType.STATBREAK, ScheduleType.BREAK),
+        ScheduleType.JOIN: (ScheduleType.JOIN, ScheduleType.BREAK),
     }
 
     # Extract fields. `name` is intentionally not extracted — match names are immutable
@@ -173,7 +230,26 @@ def update_match_api(tournament_url, match_id):
                     jsonify(
                         {
                             "error": f"Match type cannot be changed from {current_schedule_type.value} to {new_schedule_type.value}. "
-                            "Allowed changes: Static→Safe/Fast, Safe→Fast only."
+                            "Allowed changes: Static→Safe/Fast, Safe→Fast, Break↔Join, Static Break→Break."
+                        }
+                    ),
+                    400,
+                )
+            # Structural rows sharing a name form one logical group; converting a
+            # single row of a multi-row group would leave it mixed-type. Convert
+            # the whole group at once via the break-groups endpoint instead.
+            if (
+                new_schedule_type != current_schedule_type
+                and current_schedule_type in STRUCTURAL_SCHEDULE_TYPES
+                and Match.query.filter_by(event=tournament_url, name=match.name)
+                .filter(Match.schedule_type.in_(STRUCTURAL_SCHEDULE_TYPES), Match.uuid != match.uuid)
+                .count()
+                > 0
+            ):
+                return (
+                    jsonify(
+                        {
+                            "error": "This break/join spans multiple fields; convert the whole group via the group editor."
                         }
                     ),
                     400,
@@ -186,20 +262,22 @@ def update_match_api(tournament_url, match_id):
     if field is not None:  # field can be empty string/null
         match.field = field
 
-    # Match-name uniqueness check (still useful when only `field` changes for BREAK/JOIN,
-    # since BREAK/JOIN match names are unique per field).
+    # Match-name uniqueness check (still useful when only `field` changes for
+    # structural matches, whose names are unique per field across BREAK/STATBREAK/JOIN).
     if field is not None:
         effective_name = (match.name or "").strip()
         effective_field = (match.field or "").strip()
-        if effective_name and match.schedule_type in (ScheduleType.BREAK, ScheduleType.JOIN):
+        if effective_name and match.schedule_type in STRUCTURAL_SCHEDULE_TYPES:
             existing_name = (
                 Match.query.filter_by(
                     event=tournament_url,
                     name=effective_name,
                     field=effective_field,
-                    schedule_type=match.schedule_type,
                 )
-                .filter(Match.uuid != match.uuid)
+                .filter(
+                    Match.schedule_type.in_(STRUCTURAL_SCHEDULE_TYPES),
+                    Match.uuid != match.uuid,
+                )
                 .first()
             )
             if existing_name:
@@ -210,13 +288,36 @@ def update_match_api(tournament_url, match_id):
                     400,
                 )
 
-    # Handle BREAK/JOIN clearing teams
-    if match.schedule_type in (ScheduleType.BREAK, ScheduleType.JOIN):
+    # Structural matches (BREAK/STATBREAK/JOIN) never have playing teams or
+    # refs — they only occupy fields. Match the break-groups API: reject
+    # team/ref/skip payloads rather than silently dropping them.
+    if match.schedule_type in STRUCTURAL_SCHEDULE_TYPES:
+        if (team1_input is not None and str(team1_input).strip()) or (
+            team2_input is not None and str(team2_input).strip()
+        ):
+            return (
+                jsonify({"error": "Breaks and joins cannot have team requirements; they only occupy fields."}),
+                400,
+            )
+        if refs is not None:
+            has_refs = False
+            if isinstance(refs, list):
+                has_refs = any(str(r or "").strip() for r in refs)
+            else:
+                has_refs = bool(str(refs).strip())
+            if has_refs:
+                return (
+                    jsonify({"error": "Breaks and joins cannot have team requirements; they only occupy fields."}),
+                    400,
+                )
+        if skip_condition is not None and str(skip_condition).strip():
+            return jsonify({"error": "Breaks and joins cannot have a skip condition."}), 400
         match.team1 = None
         match.team1_initial = None
         match.team2 = None
         match.team2_initial = None
         clear_match_referees(match)
+        match.skip_condition = None
     else:
         # When _initial fields change, write through to the resolved team cache
         # (team1 / team2). _resolve_initial_to_cached_team returns None for
@@ -262,10 +363,16 @@ def update_match_api(tournament_url, match_id):
     if match.schedule_type == ScheduleType.JOIN:
         match.nominal_length = 0
     elif length is not None:
-        match.nominal_length = int(length)
+        try:
+            length_int = int(length)
+        except (TypeError, ValueError):
+            return jsonify({"error": "Length must be an integer number of minutes."}), 400
+        if length_int < 0:
+            return jsonify({"error": "Length cannot be negative."}), 400
+        match.nominal_length = length_int
 
     # Skip Condition (only for SAFE/FAST)
-    if skip_condition is not None:
+    if match.schedule_type not in STRUCTURAL_SCHEDULE_TYPES and skip_condition is not None:
         match.skip_condition = (
             (skip_condition.strip() if skip_condition.strip() else None)
             if match.schedule_type in (ScheduleType.SAFE, ScheduleType.FAST)
@@ -323,6 +430,37 @@ def update_match_api(tournament_url, match_id):
         detach_match_from_chain(match, tournament_url)
         flag_modified(match, "previous_match")
         flag_modified(match, "next_match")
+    elif match.schedule_type == ScheduleType.STATBREAK:
+        # Statically-scheduled break: user-supplied start time is written to both
+        # timelines and the solver never moves it. Like STATIC it does not require
+        # a predecessor; an optional previous_match may still place it in a field
+        # chain so matches after it wait for its end.
+        if start_time_str:
+            try:
+                dt = datetime.fromisoformat(start_time_str.replace("Z", "+00:00"))
+                if dt.tzinfo:
+                    dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+                match.nominal_start_time = dt
+                match.scheduled_start_time = dt
+            except ValueError:
+                pass
+        if previous_match_id is not None:
+            prev_id = str(previous_match_id).strip()
+            if prev_id:
+                effective_field = (match.field or "").strip()
+                if not effective_field:
+                    return (
+                        jsonify({"error": "Field is required when using a previous match."}),
+                        400,
+                    )
+                prev_match = Match.query.filter_by(uuid=prev_id, event=tournament_url).first()
+                if not prev_match:
+                    return jsonify({"error": "Previous match not found."}), 400
+                if (prev_match.field or "").strip() != effective_field:
+                    return jsonify({"error": "Previous match must be on the same field."}), 400
+                update_match_previous_link(match, prev_id, tournament_url)
+            else:
+                detach_match_from_chain(match, tournament_url)
     else:
         # Dynamic (BREAK, JOIN, FAST, SAFE)
         match.nominal_start_time = compute_dynamic_match_nominal_start_time(match, tournament_url)
@@ -369,127 +507,10 @@ def update_field_api(tournament_url, field_id):
     old_field_name = field.name
     field.name = new_field_name
 
-    camera_urls = [url for url in data.get("camera_urls", []) if url.strip()]
-    old_camera_urls = []
-    try:
-        if field.camera:
-            loaded = json.loads(field.camera)
-            if isinstance(loaded, list):
-                old_camera_urls = loaded
-            else:
-                old_camera_urls = [field.camera]
-    except:
-        if field.camera:
-            old_camera_urls = [field.camera]
-
-    field.camera = json.dumps(camera_urls) if camera_urls else ""
-
-    # Update matches and points (logic copied from tournaments.py)
-    field_name_for_query = old_field_name if old_field_name != new_field_name else new_field_name
-    matches_to_update = Match.query.filter_by(event=tournament_url, field=field_name_for_query).all()
-
-    camera_urls_changed = old_camera_urls != camera_urls
-
-    if camera_urls_changed:
-        old_to_new_index_map = {}
-        for new_idx, new_url in enumerate(camera_urls):
-            try:
-                old_idx = old_camera_urls.index(new_url)
-                old_to_new_index_map[str(old_idx)] = str(new_idx)
-            except ValueError:
-                pass
-
-        for match in matches_to_update:
-            if match.camera_stream_starts:
-                try:
-                    stream_starts = json.loads(match.camera_stream_starts)
-                    new_stream_starts = {}
-                    for old_idx_str, start_time in stream_starts.items():
-                        if old_idx_str in old_to_new_index_map:
-                            new_idx_str = old_to_new_index_map[old_idx_str]
-                            new_stream_starts[new_idx_str] = start_time
-                    match.camera_stream_starts = json.dumps(new_stream_starts) if new_stream_starts else None
-                except:
-                    match.camera_stream_starts = None
-
-        from app.utils.camera_helpers import calculate_stream_timestamp
-
-        for match in matches_to_update:
-            points = Point.query.filter_by(match=match.uuid).all()
-            stream_starts = {}
-            if match.camera_stream_starts:
-                try:
-                    stream_starts = json.loads(match.camera_stream_starts)
-                except:
-                    pass
-
-            for point in points:
-                if point.camera_index is not None:
-                    old_idx_str = str(point.camera_index)
-                    if old_idx_str in old_to_new_index_map:
-                        point.camera_index = int(old_to_new_index_map[old_idx_str])
-                    else:
-                        # Try to find by URL
-                        if point.camera_index < len(old_camera_urls):
-                            old_url = old_camera_urls[point.camera_index]
-                            try:
-                                new_idx = camera_urls.index(old_url)
-                                point.camera_index = new_idx
-                            except ValueError:
-                                point.camera_index = None
-                                point.stream_timestamp = None
-                        else:
-                            point.camera_index = None
-                            point.stream_timestamp = None
-
-                if point.camera_index is not None and point.stamp:
-                    camera_idx_str = str(point.camera_index)
-                    if camera_idx_str in stream_starts:
-                        new_ts = calculate_stream_timestamp(point.stamp, stream_starts[camera_idx_str])
-                        if new_ts is not None:
-                            point.stream_timestamp = new_ts
-
     if old_field_name != new_field_name:
+        matches_to_update = Match.query.filter_by(event=tournament_url, field=old_field_name).all()
         for match in matches_to_update:
             match.field = new_field_name
-
-    # Optional: set stream start times for cameras (e.g. from YouTube API or user input).
-    # Merge with existing: only update indices present in the request; never remove other keys.
-    stream_start_times = data.get("stream_start_times")
-    if stream_start_times is not None and isinstance(stream_start_times, list):
-        from app.utils.camera_helpers import calculate_stream_timestamp
-
-        for match in matches_to_update:
-            stream_starts = {}
-            if match.camera_stream_starts:
-                try:
-                    loaded = json.loads(match.camera_stream_starts)
-                    if isinstance(loaded, dict):
-                        stream_starts = dict(loaded)
-                except (TypeError, ValueError):
-                    pass
-            for idx, val in enumerate(stream_start_times):
-                if idx >= len(camera_urls):
-                    break
-                if val is not None and isinstance(val, str) and val.strip():
-                    stream_starts[str(idx)] = val.strip()
-                elif str(idx) in stream_starts:
-                    del stream_starts[str(idx)]
-            match.camera_stream_starts = json.dumps(stream_starts) if stream_starts else None
-        # Recompute point stream_timestamp for matches we updated
-        for match in matches_to_update:
-            points = Point.query.filter_by(match=match.uuid).all()
-            stream_starts = {}
-            if match.camera_stream_starts:
-                try:
-                    stream_starts = json.loads(match.camera_stream_starts)
-                except (TypeError, ValueError):
-                    pass
-            for point in points:
-                if point.camera_index is not None and point.stamp and str(point.camera_index) in stream_starts:
-                    new_ts = calculate_stream_timestamp(point.stamp, stream_starts[str(point.camera_index)])
-                    if new_ts is not None:
-                        point.stream_timestamp = new_ts
 
     db.session.commit()
     return jsonify({"success": True})
@@ -522,18 +543,42 @@ def create_match_api(tournament_url):
             pass
     effective_field = (data.get("field") or "").strip()
 
-    # Name uniqueness: for BREAK/JOIN only within same field (and same type); for others globally in tournament
-    if schedule_type in (ScheduleType.BREAK, ScheduleType.JOIN):
-        existing = Match.query.filter_by(
-            event=tournament_url,
-            name=name.strip(),
-            field=effective_field,
-            schedule_type=schedule_type,
-        ).first()
+    # Name uniqueness: structural matches (BREAK/STATBREAK/JOIN) are unique per
+    # (name, event, field) across the structural group; others globally in tournament.
+    # Same display name must not be reused across different structural types.
+    if schedule_type in STRUCTURAL_SCHEDULE_TYPES:
+        type_conflict = (
+            Match.query.filter_by(event=tournament_url, name=name.strip())
+            .filter(Match.schedule_type.in_(STRUCTURAL_SCHEDULE_TYPES))
+            .filter(Match.schedule_type != schedule_type)
+            .first()
+        )
+        if type_conflict:
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            f'Name "{name.strip()}" is already used by a '
+                            f"{type_conflict.schedule_type.value} group; "
+                            "structural types cannot share a name."
+                        )
+                    }
+                ),
+                400,
+            )
+        existing = (
+            Match.query.filter_by(
+                event=tournament_url,
+                name=name.strip(),
+                field=effective_field,
+            )
+            .filter(Match.schedule_type.in_(STRUCTURAL_SCHEDULE_TYPES))
+            .first()
+        )
     else:
         existing = Match.query.filter_by(event=tournament_url, name=name.strip()).first()
     if existing:
-        if schedule_type in (ScheduleType.BREAK, ScheduleType.JOIN):
+        if schedule_type in STRUCTURAL_SCHEDULE_TYPES:
             return (
                 jsonify({"error": f"A {schedule_type.value} match with this name already exists on this field."}),
                 400,
@@ -542,8 +587,42 @@ def create_match_api(tournament_url):
 
     match = Match(event=tournament_url, name=name)
     match.field = data.get("field")
-    match.nominal_length = int(data.get("length")) if data.get("length") is not None else None
     match.schedule_type = schedule_type
+
+    # Structural rows match the break-groups API: field required, length rules,
+    # no teams/refs/skip_condition.
+    if match.schedule_type in STRUCTURAL_SCHEDULE_TYPES:
+        if not effective_field:
+            return jsonify({"error": "Field is required for breaks and joins."}), 400
+        if team1_input := (data.get("team1") or "").strip():
+            return jsonify({"error": "Breaks and joins cannot have team requirements; they only occupy fields."}), 400
+        if team2_input := (data.get("team2") or "").strip():
+            return jsonify({"error": "Breaks and joins cannot have team requirements; they only occupy fields."}), 400
+        refs = data.get("refs")
+        if refs:
+            if isinstance(refs, list) and any(str(r or "").strip() for r in refs):
+                return jsonify(
+                    {"error": "Breaks and joins cannot have team requirements; they only occupy fields."}
+                ), 400
+            if isinstance(refs, str) and refs.strip():
+                return jsonify(
+                    {"error": "Breaks and joins cannot have team requirements; they only occupy fields."}
+                ), 400
+        if (data.get("skip_condition") or "").strip():
+            return jsonify({"error": "Breaks and joins cannot have a skip condition."}), 400
+        if match.schedule_type == ScheduleType.JOIN:
+            match.nominal_length = 0
+        else:
+            try:
+                length = int(data.get("length"))
+            except (TypeError, ValueError):
+                return jsonify({"error": "Length (minutes) is required."}), 400
+            if length < 0:
+                return jsonify({"error": "Length cannot be negative."}), 400
+            match.nominal_length = length
+        match.skip_condition = None
+    else:
+        match.nominal_length = int(data.get("length")) if data.get("length") is not None else None
 
     # BREAK, JOIN, FAST, SAFE require non-empty previous_match on same field
     if match.schedule_type in (
@@ -571,8 +650,10 @@ def create_match_api(tournament_url):
         if prev_field != effective_field:
             return jsonify({"error": "Previous match must be on the same field."}), 400
 
-    if match.schedule_type == ScheduleType.STATIC:
+    if match.schedule_type in (ScheduleType.STATIC, ScheduleType.STATBREAK):
         start_time_str = data.get("start_time")
+        if not start_time_str and match.schedule_type == ScheduleType.STATBREAK:
+            return jsonify({"error": "Start time is required for Static Break matches."}), 400
         if start_time_str:
             try:
                 dt = datetime.fromisoformat(start_time_str.replace("Z", "+00:00"))
@@ -581,12 +662,13 @@ def create_match_api(tournament_url):
                 match.nominal_start_time = dt
                 match.scheduled_start_time = dt
             except ValueError:
-                pass
+                if match.schedule_type == ScheduleType.STATBREAK:
+                    return jsonify({"error": "Invalid start time for Static Break match."}), 400
 
     # Team handling
     team1_input = data.get("team1") or ""
     team2_input = data.get("team2") or ""
-    if match.schedule_type not in (ScheduleType.BREAK, ScheduleType.JOIN):
+    if match.schedule_type not in STRUCTURAL_SCHEDULE_TYPES:
         team1_name = str(team1_input).strip()
         team2_name = str(team2_input).strip()
         match.team1_initial = team1_name or None
@@ -596,10 +678,10 @@ def create_match_api(tournament_url):
 
     # Refs: parallel refs / refs_initial (same slot count). Resolved here but
     # written below after the flush so the match has a uuid the join-table
-    # rows can reference.
+    # rows can reference. Never allowed on structural types (BREAK/STATBREAK/JOIN).
     refs = data.get("refs")
     refs_csv_pair: tuple[str, str] | None = None
-    if refs and isinstance(refs, list):
+    if refs and isinstance(refs, list) and match.schedule_type not in STRUCTURAL_SCHEDULE_TYPES:
         refs_csv_pair = resolve_refs_slots(refs, tournament_url)
 
     # Format
@@ -618,7 +700,8 @@ def create_match_api(tournament_url):
     if data.get("ribbon") is not None:
         match.ribbon = bool(data.get("ribbon"))
 
-    match.skip_condition = data.get("skip_condition")
+    if match.schedule_type not in STRUCTURAL_SCHEDULE_TYPES:
+        match.skip_condition = data.get("skip_condition")
 
     db.session.add(match)
     db.session.flush()  # Ensure uuid exists before link updates and validation.
@@ -626,7 +709,9 @@ def create_match_api(tournament_url):
     if refs_csv_pair is not None:
         set_match_referees_from_csv(match, refs_csv_pair[0], refs_csv_pair[1])
 
-    # Handle linked list insert
+    # Handle linked list insert (STATBREAK may optionally sit in a chain so
+    # downstream matches wait for its end). Same-field validation for any type
+    # that sets a predecessor here.
     prev_match_id = (
         data.get("previous_match_id")
         if match.schedule_type
@@ -635,15 +720,29 @@ def create_match_api(tournament_url):
             ScheduleType.FAST,
             ScheduleType.STATIC,
             ScheduleType.BREAK,
+            ScheduleType.STATBREAK,
             ScheduleType.JOIN,
         )
         else None
     )
     if prev_match_id:
-        update_match_previous_link(match, prev_match_id, tournament_url, is_new=True)
+        prev_id = str(prev_match_id).strip()
+        if prev_id:
+            effective_field = (match.field or "").strip()
+            prev_match = Match.query.filter_by(uuid=prev_id, event=tournament_url).first()
+            if not prev_match:
+                db.session.rollback()
+                return jsonify({"error": "Previous match not found."}), 400
+            if not effective_field:
+                db.session.rollback()
+                return jsonify({"error": "Field is required when using a previous match."}), 400
+            if (prev_match.field or "").strip() != effective_field:
+                db.session.rollback()
+                return jsonify({"error": "Previous match must be on the same field."}), 400
+            update_match_previous_link(match, prev_id, tournament_url, is_new=True)
 
-    # Dynamic time compute
-    if match.schedule_type != ScheduleType.STATIC:
+    # Dynamic time compute (STATIC and STATBREAK keep their user-supplied anchor)
+    if match.schedule_type not in (ScheduleType.STATIC, ScheduleType.STATBREAK):
         match.nominal_start_time = compute_dynamic_match_nominal_start_time(match, tournament_url)
         # Seed the scheduled anchor from the freshly-computed nominal so future
         # recomputations of nominal don't drag time-based dependency edges around.
@@ -683,6 +782,480 @@ def delete_match_api(tournament_url, match_id):
     return jsonify({"success": True})
 
 
+@bp.route("/tournaments/<tournament_url>/matches/bulk-length", methods=["POST"])
+@login_required
+def bulk_match_length_api(tournament_url):
+    """Set ``nominal_length`` on many matches at once.
+
+    Body: ``{"match_ids": [...], "length": <minutes>}``. Applies the shared
+    length to every editable match. Selecting any row of a multi-field
+    BREAK/STATBREAK group expands to the whole same-name group so durations
+    stay in sync. Skips JOINs (structurally zero-length), started matches, and
+    STATBREAKs whose start has passed (same lock as the group endpoint).
+    Single commit, one recompute, per-match results in the response.
+    """
+    if not _check_to(tournament_url):
+        return jsonify({"error": "Forbidden"}), 403
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    match_ids = data.get("match_ids")
+    if not isinstance(match_ids, list) or not match_ids:
+        return jsonify({"error": "match_ids must be a non-empty list."}), 400
+
+    try:
+        length = int(data.get("length"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Length must be a number of minutes."}), 400
+    if length <= 0:
+        return jsonify({"error": "Length must be greater than zero."}), 400
+
+    # Dedup while preserving order so results line up with the request.
+    seen: set[str] = set()
+    unique_ids: list[str] = []
+    for mid in match_ids:
+        mid = str(mid or "").strip()
+        if mid and mid not in seen:
+            seen.add(mid)
+            unique_ids.append(mid)
+    if not unique_ids:
+        return jsonify({"error": "match_ids must be a non-empty list."}), 400
+
+    # Expand BREAK/STATBREAK selections to every same-name structural row so a
+    # bulk length change cannot desync a multi-field group.
+    expanded_ids: list[str] = []
+    expanded_seen: set[str] = set()
+    for mid in unique_ids:
+        match = Match.query.filter_by(uuid=mid, event=tournament_url).first()
+        if match is not None and match.schedule_type in (ScheduleType.BREAK, ScheduleType.STATBREAK) and match.name:
+            for sibling in _break_group_rows(tournament_url, match.name):
+                if sibling.uuid not in expanded_seen:
+                    expanded_seen.add(sibling.uuid)
+                    expanded_ids.append(sibling.uuid)
+        elif mid not in expanded_seen:
+            expanded_seen.add(mid)
+            expanded_ids.append(mid)
+
+    results = []
+    updated = 0
+    for mid in expanded_ids:
+        match = Match.query.filter_by(uuid=mid, event=tournament_url).first()
+        if not match:
+            results.append({"match_id": mid, "status": "not_found"})
+            continue
+        if match.schedule_type == ScheduleType.JOIN:
+            results.append({"match_id": mid, "status": "skipped_join"})
+            continue
+        if match.schedule_type == ScheduleType.STATBREAK and _statbreak_start_passed(match):
+            results.append({"match_id": mid, "status": "skipped_locked"})
+            continue
+        if match.status in _LOCKED_STATUSES:
+            results.append({"match_id": mid, "status": "skipped_locked"})
+            continue
+        match.nominal_length = length
+        updated += 1
+        results.append({"match_id": mid, "status": "updated"})
+
+    db.session.commit()
+    if updated:
+        recompute_scheduled_and_nominal_times(tournament_url)
+
+    return jsonify({"success": True, "updated": updated, "results": results})
+
+
+# ---------------------------------------------------------------------------
+# Structural groups ("break-groups" API): same-name BREAK/STATBREAK/JOIN rows
+# across multiple fields, created and edited as one unit (shared name / length /
+# start time; JOINs carry only a name — length is always 0). Structural rows
+# only occupy fields; they never have teams or refs. Group identity is the
+# display name (``/`` is rejected by match_name_char_error so route segments work).
+# ---------------------------------------------------------------------------
+
+
+def _parse_start_time_utc(start_time_str: str | None) -> datetime | None:
+    """Parse an ISO datetime (optionally with Z/offset) into naive UTC, or ``None``."""
+    if not start_time_str:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(start_time_str).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+def _break_group_rows(tournament_url: str, name: str) -> list[Match]:
+    """All BREAK/STATBREAK/JOIN rows sharing *name* in this tournament."""
+    return (
+        Match.query.filter_by(event=tournament_url, name=name)
+        .filter(Match.schedule_type.in_(STRUCTURAL_SCHEDULE_TYPES))
+        .all()
+    )
+
+
+def _statbreak_start_passed(row: Match) -> bool:
+    """True when a STATBREAK's scheduled start is in the past (edit lock)."""
+    start = row.nominal_start_time or row.scheduled_start_time
+    if start is None:
+        return False
+    return now_utc_naive() >= start
+
+
+def _field_chain_tail(tournament_url: str, field_name: str, exclude_uuids: set[str] | None = None) -> Match | None:
+    """Last match in *field_name*'s doubly-linked chain (no next_match).
+
+    Detached matches (e.g. STATIC rows) also have no next_match; among all
+    candidates we pick the one with the latest planned/nominal anchor so a new
+    break appended "at the tail" lands after everything currently scheduled.
+    """
+    exclude_uuids = exclude_uuids or set()
+    candidates = [
+        m
+        for m in Match.query.filter_by(event=tournament_url, field=field_name).all()
+        if not m.next_match and m.uuid not in exclude_uuids
+    ]
+    if not candidates:
+        return None
+
+    def sort_key(m: Match):
+        anchor = m.scheduled_start_time or m.nominal_start_time
+        return (anchor is not None, anchor or datetime.min, m.uuid)
+
+    return max(candidates, key=sort_key)
+
+
+def _structural_name_collision(tournament_url: str, name: str, field_name: str) -> Match | None:
+    """Existing structural match blocking (name, event, field), or ``None``."""
+    return (
+        Match.query.filter_by(event=tournament_url, name=name, field=field_name)
+        .filter(Match.schedule_type.in_(STRUCTURAL_SCHEDULE_TYPES))
+        .first()
+    )
+
+
+def _structural_name_type_conflict(tournament_url: str, name: str, schedule_type: ScheduleType) -> Match | None:
+    """Existing same-name structural row with a different schedule type, or ``None``.
+
+    Display name is the group key, so BREAK ``Lunch`` and JOIN ``Lunch`` must
+    not coexist in one tournament.
+    """
+    return (
+        Match.query.filter_by(event=tournament_url, name=name)
+        .filter(Match.schedule_type.in_(STRUCTURAL_SCHEDULE_TYPES))
+        .filter(Match.schedule_type != schedule_type)
+        .first()
+    )
+
+
+@bp.route("/tournaments/<tournament_url>/break-groups", methods=["POST"])
+@login_required
+def create_break_group_api(tournament_url):
+    """Create one BREAK/STATBREAK/JOIN row per field, sharing name/length.
+
+    JOIN rows always have ``nominal_length`` 0. Structural rows never carry
+    teams — they only occupy fields.
+    """
+    if not _check_to(tournament_url):
+        return jsonify({"error": "Forbidden"}), 403
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "Name is required"}), 400
+    mn_err = match_name_char_error(name)
+    if mn_err:
+        return jsonify({"error": mn_err}), 400
+
+    try:
+        schedule_type = ScheduleType(data.get("schedule_type") or "BREAK")
+    except ValueError:
+        schedule_type = None
+    if schedule_type not in STRUCTURAL_SCHEDULE_TYPES:
+        return jsonify({"error": "schedule_type must be BREAK, STATBREAK, or JOIN."}), 400
+    is_join = schedule_type == ScheduleType.JOIN
+
+    if is_join:
+        length = 0  # JOIN invariant: zero-length synchronisation point.
+    else:
+        try:
+            length = int(data.get("length"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "Length (minutes) is required."}), 400
+        if length < 0:
+            return jsonify({"error": "Length cannot be negative."}), 400
+
+    raw_fields = data.get("fields")
+    if not isinstance(raw_fields, list):
+        raw_fields = []
+    fields, seen = [], set()
+    for f in raw_fields:
+        f = str(f or "").strip()
+        if f and f not in seen:
+            seen.add(f)
+            fields.append(f)
+    if not fields:
+        return jsonify({"error": "At least one field is required."}), 400
+    known_fields = {f.name for f in Field.query.filter_by(event=tournament_url).all()}
+    unknown = [f for f in fields if f not in known_fields]
+    if unknown:
+        return jsonify({"error": f"Unknown field(s): {', '.join(unknown)}"}), 400
+
+    if data.get("teams"):
+        return jsonify({"error": "Breaks and joins cannot have team requirements; they only occupy fields."}), 400
+
+    start_dt = None
+    if schedule_type == ScheduleType.STATBREAK:
+        start_dt = _parse_start_time_utc(data.get("start_time"))
+        if start_dt is None:
+            return jsonify({"error": "Start time is required for Static Break groups."}), 400
+
+    previous_map = data.get("previous_match")
+    if not isinstance(previous_map, dict):
+        previous_map = {}
+
+    type_conflict = _structural_name_type_conflict(tournament_url, name, schedule_type)
+    if type_conflict:
+        return (
+            jsonify(
+                {
+                    "error": (
+                        f'Name "{name}" is already used by a '
+                        f"{type_conflict.schedule_type.value} group; "
+                        "structural types cannot share a name."
+                    )
+                }
+            ),
+            400,
+        )
+
+    for f in fields:
+        if _structural_name_collision(tournament_url, name, f):
+            return (
+                jsonify({"error": f'A break or join named "{name}" already exists on field "{f}".'}),
+                400,
+            )
+
+    created: list[Match] = []
+    for f in fields:
+        match = Match(event=tournament_url, name=name)
+        match.field = f
+        match.schedule_type = schedule_type
+        match.nominal_length = length
+        match.skip_condition = None
+        if start_dt is not None:
+            match.nominal_start_time = start_dt
+            match.scheduled_start_time = start_dt
+        db.session.add(match)
+        db.session.flush()
+        if schedule_type in (ScheduleType.BREAK, ScheduleType.JOIN):
+            prev_id = str(previous_map.get(f) or "").strip()
+            if prev_id:
+                prev_match = Match.query.filter_by(uuid=prev_id, event=tournament_url).first()
+                if not prev_match:
+                    db.session.rollback()
+                    return jsonify({"error": f'Previous match not found for field "{f}".'}), 400
+                if (prev_match.field or "").strip() != f:
+                    db.session.rollback()
+                    return (
+                        jsonify({"error": f'Previous match for field "{f}" must be on that field.'}),
+                        400,
+                    )
+            else:
+                # Default: append at the tail of the field's chain.
+                tail = _field_chain_tail(tournament_url, f, exclude_uuids={match.uuid})
+                prev_match = tail
+            if prev_match is not None:
+                update_match_previous_link(match, prev_match.uuid, tournament_url, is_new=True)
+        created.append(match)
+
+    db.session.flush()
+    db.session.commit()
+    recompute_scheduled_and_nominal_times(tournament_url)
+
+    return jsonify({"success": True, "name": name, "uuids": [m.uuid for m in created]})
+
+
+@bp.route("/tournaments/<tournament_url>/break-groups/<name>", methods=["PUT"])
+@login_required
+def update_break_group_api(tournament_url, name):
+    """Edit every same-name structural row at once (length/start_time/fields).
+
+    JOIN groups only support field membership changes; length stays 0. Team
+    requirements are rejected for every structural type. The whole group can
+    be converted BREAK↔JOIN (JOIN→BREAK requires a length); nothing converts
+    to STATBREAK, and a STATBREAK group is locked once its start has passed.
+    """
+    if not _check_to(tournament_url):
+        return jsonify({"error": "Forbidden"}), 403
+
+    rows = _break_group_rows(tournament_url, name)
+    if not rows:
+        return jsonify({"error": "Break group not found"}), 404
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    types = {m.schedule_type for m in rows}
+    if len(types) != 1:
+        return jsonify({"error": "Break group has mixed schedule types; cannot edit."}), 409
+    group_type = rows[0].schedule_type
+    # Lock once the static break's start has passed (same moment effective_status
+    # becomes COMPLETED — the break is history for editing).
+    if group_type == ScheduleType.STATBREAK and _statbreak_start_passed(rows[0]):
+        return jsonify({"error": "Static break cannot be edited once its start time has passed."}), 409
+
+    # Whole-group type conversion: BREAK↔JOIN only (both are dynamic field
+    # reservations). Nothing converts TO a STATBREAK — create one deliberately
+    # with a start time instead.
+    convert_to: ScheduleType | None = None
+    if data.get("schedule_type") is not None:
+        try:
+            requested_type = ScheduleType(data.get("schedule_type"))
+        except ValueError:
+            requested_type = None
+        if requested_type is not None and requested_type != group_type:
+            if group_type in (ScheduleType.BREAK, ScheduleType.JOIN) and requested_type in (
+                ScheduleType.BREAK,
+                ScheduleType.JOIN,
+            ):
+                convert_to = requested_type
+            elif requested_type == ScheduleType.STATBREAK:
+                return jsonify(
+                    {"error": "Breaks cannot be converted to static breaks; create a new static break instead."}
+                ), 400
+            else:
+                return jsonify({"error": "A group's schedule type cannot be changed here."}), 400
+
+    effective_type = convert_to or group_type
+    is_join = effective_type == ScheduleType.JOIN
+
+    length = data.get("length")
+    if is_join:
+        length = 0 if convert_to is not None else None  # JOIN invariant: length is 0.
+    elif convert_to == ScheduleType.BREAK and length is None:
+        # JOIN rows carry length 0; a break needs a real duration.
+        return jsonify({"error": "Length (minutes) is required when converting a join to a break."}), 400
+    elif length is not None:
+        try:
+            length = int(length)
+        except (TypeError, ValueError):
+            return jsonify({"error": "Length must be a number of minutes."}), 400
+        if length < 0:
+            return jsonify({"error": "Length cannot be negative."}), 400
+
+    if data.get("teams"):
+        return jsonify({"error": "Breaks and joins cannot have team requirements; they only occupy fields."}), 400
+
+    start_dt = None
+    if data.get("start_time") is not None:
+        if group_type != ScheduleType.STATBREAK:
+            start_dt = None  # start_time only applies to STATBREAK groups
+        else:
+            start_dt = _parse_start_time_utc(data.get("start_time"))
+            if start_dt is None:
+                return jsonify({"error": "Invalid start time."}), 400
+
+    fields = data.get("fields")
+    if fields is not None:
+        if not isinstance(fields, list):
+            return jsonify({"error": "fields must be a list of field names."}), 400
+        normalized, seen = [], set()
+        for f in fields:
+            f = str(f or "").strip()
+            if f and f not in seen:
+                seen.add(f)
+                normalized.append(f)
+        fields = normalized
+        if not fields:
+            return (
+                jsonify({"error": "A break group needs at least one field. Use DELETE to remove the group."}),
+                400,
+            )
+        known_fields = {f.name for f in Field.query.filter_by(event=tournament_url).all()}
+        unknown = [f for f in fields if f not in known_fields]
+        if unknown:
+            return jsonify({"error": f"Unknown field(s): {', '.join(unknown)}"}), 400
+
+    # Shared edits on existing rows.
+    for m in rows:
+        if convert_to is not None:
+            m.schedule_type = convert_to
+        if length is not None:
+            m.nominal_length = length
+        if start_dt is not None:
+            m.nominal_start_time = start_dt
+            m.scheduled_start_time = start_dt
+
+    # Field membership changes: create/delete rows.
+    if fields is not None:
+        current = {(m.field or "").strip(): m for m in rows}
+        template = rows[0]
+        to_add = [f for f in fields if f not in current]
+        to_remove = [m for f, m in current.items() if f not in fields]
+
+        for f in to_add:
+            if _structural_name_collision(tournament_url, name, f):
+                db.session.rollback()
+                return (
+                    jsonify({"error": f'A break or join named "{name}" already exists on field "{f}".'}),
+                    400,
+                )
+            match = Match(event=tournament_url, name=name)
+            match.field = f
+            match.schedule_type = effective_type
+            match.nominal_length = length if length is not None else template.nominal_length
+            match.skip_condition = None
+            if effective_type == ScheduleType.STATBREAK:
+                match.nominal_start_time = template.nominal_start_time
+                match.scheduled_start_time = template.scheduled_start_time
+            db.session.add(match)
+            db.session.flush()
+            if effective_type in (ScheduleType.BREAK, ScheduleType.JOIN):
+                tail = _field_chain_tail(tournament_url, f, exclude_uuids={match.uuid})
+                if tail is not None:
+                    update_match_previous_link(match, tail.uuid, tournament_url, is_new=True)
+
+        for m in to_remove:
+            detach_match_from_chain(m, tournament_url)
+        if to_remove:
+            db.session.flush()
+            delete_matches_with_children([m.uuid for m in to_remove])
+
+    db.session.flush()
+    db.session.commit()
+    recompute_scheduled_and_nominal_times(tournament_url)
+
+    return jsonify({"success": True})
+
+
+@bp.route("/tournaments/<tournament_url>/break-groups/<name>", methods=["DELETE"])
+@login_required
+def delete_break_group_api(tournament_url, name):
+    """Delete every same-name structural row in the group."""
+    if not _check_to(tournament_url):
+        return jsonify({"error": "Forbidden"}), 403
+
+    rows = _break_group_rows(tournament_url, name)
+    if not rows:
+        return jsonify({"error": "Break group not found"}), 404
+
+    for m in rows:
+        detach_match_from_chain(m, tournament_url)
+    db.session.flush()
+    delete_matches_with_children([m.uuid for m in rows])
+    db.session.commit()
+    recompute_scheduled_and_nominal_times(tournament_url)
+
+    return jsonify({"success": True})
+
+
 @bp.route("/tournaments/<tournament_url>/fields", methods=["POST"])
 @login_required
 def create_field_api(tournament_url):
@@ -701,9 +1274,6 @@ def create_field_api(tournament_url):
         return jsonify({"error": "Field already exists"}), 400
 
     field = Field(event=tournament_url, name=name)
-    camera_urls = [url for url in data.get("camera_urls", []) if url.strip()]
-    if camera_urls:
-        field.camera = json.dumps(camera_urls)
 
     db.session.add(field)
     db.session.commit()
@@ -727,6 +1297,33 @@ def delete_field_api(tournament_url, field_id):
     return jsonify({"success": True})
 
 
+def validate_tag_expression(tournament_url, expression):
+    """Validate an ASS tag expression: parse + type check (must include TEAM).
+
+    Returns ``(normalized_expression_or_None, error_or_None)``. An empty or
+    None expression normalizes to None (clears the tag's expression).
+    """
+    from app.utils.parser import DSLValidationError, _human_type_name, _infer_types, get_parser
+
+    expression = (expression or "").strip()
+    if not expression:
+        return None, None
+    try:
+        parser = get_parser(tournament_url)
+        warnings = parser.static_check(expression)
+        if warnings:
+            return None, "; ".join(warnings)
+        result = parser.parse(expression)
+    except DSLValidationError as e:
+        return None, str(e)
+    except Exception as e:
+        return None, f"Parse error: {e}"
+    types = _infer_types(result)
+    if "TEAM" not in types:
+        return None, f"Tag expression must resolve to a TEAM, got {_human_type_name(types)}."
+    return expression, None
+
+
 @bp.route("/tournaments/<tournament_url>/tags", methods=["POST"])
 @login_required
 def create_tag_api(tournament_url):
@@ -746,7 +1343,11 @@ def create_tag_api(tournament_url):
     if Tag.query.filter_by(event=tournament_url, name=name).first():
         return jsonify({"error": "Tag already exists"}), 400
 
-    tag = Tag(event=tournament_url, name=name)
+    expression, err = validate_tag_expression(tournament_url, data.get("expression"))
+    if err:
+        return jsonify({"error": err}), 400
+
+    tag = Tag(event=tournament_url, name=name, expression=expression)
     db.session.add(tag)
     db.session.commit()
     return jsonify({"success": True, "id": tag.id})
@@ -789,6 +1390,192 @@ def update_tag_api(tournament_url, tag_id):
     data = request.get_json()
     if not data or "name" not in data:
         return jsonify({"error": "Name required"}), 400
-    tag.name = data["name"]
+    new_name = (data.get("name") or "").strip()
+    if not new_name:
+        return jsonify({"error": "Name required"}), 400
+    if "::" in new_name:
+        return jsonify({"error": 'Tag name cannot contain "::"'}), 400
+    if new_name != tag.name:
+        used = _tag_usage(tournament_url, tag.name)
+        if used:
+            return (
+                jsonify(
+                    {
+                        "error": f'Cannot rename tag "{tag.name}": it is used in '
+                        + ", ".join(used[:5])
+                        + (" (and possibly more)" if len(used) > 5 else "")
+                    }
+                ),
+                400,
+            )
+        if Tag.query.filter_by(event=tournament_url, name=new_name).first():
+            return jsonify({"error": "Tag already exists"}), 400
+    if "expression" in data:
+        expression, err = validate_tag_expression(tournament_url, data.get("expression"))
+        if err:
+            return jsonify({"error": err}), 400
+        tag.expression = expression
+    tag.name = new_name
     db.session.commit()
+    _recompute_after_script_change(tournament_url)
+    return jsonify({"success": True})
+
+
+def _validate_script_variable(tournament_url, name, expression, exclude_id=None):
+    """Validate a script variable's name and expression. Returns an error string or None."""
+    from app.utils.parser import (
+        RESERVED_IDENTIFIERS,
+        DSLValidationError,
+        extract_variable_references,
+        get_parser,
+        is_valid_identifier,
+    )
+
+    if not name:
+        return "Name required"
+    if not is_valid_identifier(name):
+        return f"'{name}' is not a valid identifier."
+    if name in RESERVED_IDENTIFIERS:
+        return f"'{name}' is a builtin function or reserved word."
+    query = ScriptVariable.query.filter_by(event=tournament_url, name=name)
+    if exclude_id is not None:
+        query = query.filter(ScriptVariable.id != exclude_id)
+    if query.first():
+        return f"Variable '{name}' already exists."
+    if not expression:
+        return "Expression required"
+
+    # Static cycle check over variable-to-variable references, with this
+    # variable's (new) expression substituted in.
+    graph = {name: extract_variable_references(expression)}
+    for row in ScriptVariable.query.filter_by(event=tournament_url).all():
+        if exclude_id is not None and row.id == exclude_id:
+            continue
+        if row.name == name:
+            continue
+        graph[row.name] = extract_variable_references(row.expression)
+    # Iterative DFS with colors, only following edges to defined variables.
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color = {n: WHITE for n in graph}
+
+    def _has_cycle_from(start):
+        stack = [(start, iter(sorted(graph[start] & set(graph))))]
+        color[start] = GRAY
+        while stack:
+            node, it = stack[-1]
+            advanced = False
+            for nxt in it:
+                if color[nxt] == GRAY:
+                    return True
+                if color[nxt] == WHITE:
+                    color[nxt] = GRAY
+                    stack.append((nxt, iter(sorted(graph[nxt] & set(graph)))))
+                    advanced = True
+                    break
+            if not advanced:
+                color[node] = BLACK
+                stack.pop()
+        return False
+
+    if _has_cycle_from(name):
+        return f"Cyclic variable reference involving '{name}'."
+
+    # The expression must parse and evaluate cleanly (other variables are
+    # available in the environment; the candidate itself is not).
+    try:
+        parser = get_parser(tournament_url)
+        warnings = parser.static_check(expression)
+        if warnings:
+            return "; ".join(warnings)
+        parser.parse(expression)
+    except DSLValidationError as e:
+        return str(e)
+    except Exception as e:
+        return f"Parse error: {e}"
+    return None
+
+
+def _script_variable_to_dict(var):
+    return {"id": var.id, "name": var.name, "expression": var.expression}
+
+
+@bp.route("/tournaments/<tournament_url>/script-variables", methods=["POST"])
+@login_required
+def create_script_variable_api(tournament_url):
+    if not _check_to(tournament_url):
+        return jsonify({"error": "Forbidden"}), 403
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Name required"}), 400
+    name = (data.get("name") or "").strip()
+    expression = (data.get("expression") or "").strip()
+    err = _validate_script_variable(tournament_url, name, expression)
+    if err:
+        return jsonify({"error": err}), 400
+
+    var = ScriptVariable(event=tournament_url, name=name, expression=expression)
+    db.session.add(var)
+    db.session.commit()
+    _recompute_after_script_change(tournament_url)
+    return jsonify({"success": True, "id": var.id})
+
+
+@bp.route("/tournaments/<tournament_url>/script-variables/<int:var_id>", methods=["PUT"])
+@login_required
+def update_script_variable_api(tournament_url, var_id):
+    if not _check_to(tournament_url):
+        return jsonify({"error": "Forbidden"}), 403
+
+    var = ScriptVariable.query.filter_by(id=var_id, event=tournament_url).first_or_404()
+    data = request.get_json() or {}
+    name = (data.get("name") or var.name).strip()
+    expression = (data.get("expression") or var.expression).strip()
+    err = _validate_script_variable(tournament_url, name, expression, exclude_id=var.id)
+    if err:
+        return jsonify({"error": err}), 400
+
+    if name != var.name:
+        used = _script_variable_usage(tournament_url, var.name, exclude_id=var.id)
+        if used:
+            return (
+                jsonify(
+                    {
+                        "error": f'Cannot rename variable "{var.name}": it is used in '
+                        + ", ".join(used[:5])
+                        + (" (and possibly more)" if len(used) > 5 else "")
+                    }
+                ),
+                400,
+            )
+
+    var.name = name
+    var.expression = expression
+    db.session.commit()
+    _recompute_after_script_change(tournament_url)
+    return jsonify({"success": True})
+
+
+@bp.route("/tournaments/<tournament_url>/script-variables/<int:var_id>", methods=["DELETE"])
+@login_required
+def delete_script_variable_api(tournament_url, var_id):
+    if not _check_to(tournament_url):
+        return jsonify({"error": "Forbidden"}), 403
+
+    var = ScriptVariable.query.filter_by(id=var_id, event=tournament_url).first_or_404()
+    used = _script_variable_usage(tournament_url, var.name, exclude_id=var.id)
+    if used:
+        return (
+            jsonify(
+                {
+                    "error": f'Cannot delete variable "{var.name}": it is used in '
+                    + ", ".join(used[:5])
+                    + (" (and possibly more)" if len(used) > 5 else "")
+                }
+            ),
+            400,
+        )
+    db.session.delete(var)
+    db.session.commit()
+    _recompute_after_script_change(tournament_url)
     return jsonify({"success": True})

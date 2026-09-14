@@ -7,9 +7,8 @@ mod pages;
 mod time_format;
 mod url_slug;
 
-#[cfg(target_arch = "wasm32")]
-mod record_idb;
 mod stones_filter;
+mod time_sync;
 mod types;
 
 use dioxus::prelude::*;
@@ -76,8 +75,11 @@ enum Route {
     #[route("/:url")]
     TournamentHome { url: String },
 
-    #[route("/:url/schedule")]
-    Schedule { url: String },
+    #[route("/:url/schedule/edit")]
+    ScheduleEdit { url: String },
+
+    #[route("/:url/schedule?:view&:team&:field")]
+    Schedule { url: String, view: String, team: String, field: String },
 
     #[route("/:url/results")]
     Results { url: String },
@@ -111,8 +113,8 @@ enum Route {
     #[route("/:url/manage")]
     Manage { url: String },
 
-    #[route("/:url/manage-user-uploads")]
-    ManageUserUploads { url: String },
+    #[route("/:url/manage-footage")]
+    ManageFootage { url: String },
 
     #[route("/:url/invitations")]
     Invitations { url: String },
@@ -128,9 +130,6 @@ enum Route {
 
     #[route("/:url/scoreboard?:field")]
     Scoreboard { url: String, field: String },
-
-    #[route("/:url/record?:field&:camera_key&:camera_name")]
-    Record { url: String, field: String, camera_key: String, camera_name: String },
 
     #[route("/:url/match")]
     MatchPage { url: String },

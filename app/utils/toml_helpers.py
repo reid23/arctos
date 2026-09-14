@@ -18,7 +18,11 @@ def parse_toml_schedule(content: str) -> Result[dict[str, Any], ArctosError]:
 
     Expects a TOML document with:
 
-    * ``event`` (str, required) — tournament URL slug.
+    * ``event`` (str, optional, deprecated) — tournament URL slug. Accepted
+      for backward compatibility with older exports; the importing route
+      determines the target tournament.
+    * ``variables`` (array of tables, optional) — tournament script
+      variables (``name`` + ``expression``).
     * ``tags`` (array of tables, optional).
     * ``fields`` (array of tables, optional).
     * ``matches`` (array of tables, optional).
@@ -28,9 +32,10 @@ def parse_toml_schedule(content: str) -> Result[dict[str, Any], ArctosError]:
 
     Returns:
         :class:`~app.error_values.Ok` wrapping a dict with keys
-        ``"event"``, ``"tags"``, ``"fields"``, ``"matches"``; or
-        :class:`~app.error_values.Err` wrapping a
-        :class:`~app.exceptions.ValidationError` on parse / structure error.
+        ``"event"`` (str or ``None``), ``"variables"``, ``"tags"``,
+        ``"fields"``, ``"matches"``; or :class:`~app.error_values.Err`
+        wrapping a :class:`~app.exceptions.ValidationError` on parse /
+        structure error.
     """
     try:
         data = tomli.loads(content)
@@ -41,29 +46,47 @@ def parse_toml_schedule(content: str) -> Result[dict[str, Any], ArctosError]:
     if not isinstance(data, dict):
         return Err(ValidationError("TOML root must be a table"))
 
-    # Extract event (required)
+    # Extract event (optional, legacy). Non-string values are ignored.
     event = data.get("event")
-    if not event or not isinstance(event, str):
-        return Err(ValidationError("Missing or invalid 'event' field in TOML"))
+    if not isinstance(event, str) or not event:
+        event = None
+
+    # Extract script variables (optional, defaults to empty list)
+    variables = data.get("variables", [])
+    if not isinstance(variables, list):
+        return Err(ValidationError("'variables' must be an array of tables"))
+    for i, entry in enumerate(variables):
+        if not isinstance(entry, dict):
+            return Err(ValidationError(f"'variables[{i}]' must be a table"))
 
     # Extract tags (optional, defaults to empty list)
     tags = data.get("tags", [])
     if not isinstance(tags, list):
         return Err(ValidationError("'tags' must be an array of tables"))
+    for i, entry in enumerate(tags):
+        if not isinstance(entry, dict):
+            return Err(ValidationError(f"'tags[{i}]' must be a table"))
 
     # Extract fields (optional, defaults to empty list)
     fields = data.get("fields", [])
     if not isinstance(fields, list):
         return Err(ValidationError("'fields' must be an array of tables"))
+    for i, entry in enumerate(fields):
+        if not isinstance(entry, dict):
+            return Err(ValidationError(f"'fields[{i}]' must be a table"))
 
     # Extract matches (optional, defaults to empty list)
     matches = data.get("matches", [])
     if not isinstance(matches, list):
         return Err(ValidationError("'matches' must be an array of tables"))
+    for i, entry in enumerate(matches):
+        if not isinstance(entry, dict):
+            return Err(ValidationError(f"'matches[{i}]' must be a table"))
 
     return Ok(
         {
             "event": event,
+            "variables": variables,
             "tags": tags,
             "fields": fields,
             "matches": matches,
@@ -72,25 +95,28 @@ def parse_toml_schedule(content: str) -> Result[dict[str, Any], ArctosError]:
 
 
 def write_toml_schedule(
-    event: str,
     tags: list[dict[str, Any]],
     fields: list[dict[str, Any]],
     matches: list[dict[str, Any]],
     *,
+    variables: list[dict[str, Any]] | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> str:
     """Serialise a tournament schedule to a TOML string.
 
     Produces a human-readable TOML document suitable for download or
     re-import.  An optional metadata comment header is prepended when
-    *metadata* is provided.
+    *metadata* is provided.  The document intentionally carries no ``event``
+    key — the target tournament is determined by the importing route.
 
     Args:
-        event: Tournament URL slug written as the ``event`` key.
         tags: List of tag dicts with ``id``, ``name``, and optional
-            ``team`` (team ID).
+            ``team`` (team ID) and ``expression`` (ASS expression).
         fields: List of field dicts with ``id``, ``name``, and ``camera``.
         matches: List of match attribute dicts.
+        variables: Optional list of script-variable dicts with ``name`` and
+            ``expression``. Written before the tags section (tag / match
+            expressions may reference variables) and omitted when empty.
         metadata: Optional key-value pairs written as TOML comments at the
             top (e.g. ``{"export_date": "2024-06-01", "version": "1"}``)
 
@@ -106,9 +132,16 @@ def write_toml_schedule(
             lines.append(f"# {key}: {value}")
         lines.append("")
 
-    # Event
-    lines.append(f'event = "{_escape_toml_string(event)}"')
-    lines.append("")
+    # Script variables (before tags: tag expressions may reference them)
+    if variables:
+        lines.append("# Script variables")
+        for variable in variables:
+            lines.append("[[variables]]")
+            if "name" in variable and variable["name"]:
+                lines.append(f'name = "{_escape_toml_string(variable["name"])}"')
+            if "expression" in variable and variable["expression"]:
+                lines.append(f'expression = "{_escape_toml_string(variable["expression"])}"')
+            lines.append("")
 
     # Tags
     if tags:
@@ -121,6 +154,8 @@ def write_toml_schedule(
                 lines.append(f'name = "{_escape_toml_string(tag["name"])}"')
             if "team" in tag and tag["team"]:
                 lines.append(f'team = "{_escape_toml_string(tag["team"])}"')
+            if "expression" in tag and tag["expression"]:
+                lines.append(f'expression = "{_escape_toml_string(tag["expression"])}"')
             lines.append("")
 
     # Fields
@@ -162,14 +197,14 @@ def write_toml_schedule(
                 if field_name in match and match[field_name]:
                     lines.append(f'{field_name} = "{_escape_toml_string(str(match[field_name]))}"')
 
-            # Datetime
-            if "nominal_start_time" in match and match["nominal_start_time"]:
-                dt = match["nominal_start_time"]
-                if isinstance(dt, datetime):
-                    # Format as ISO 8601 string (TOML datetime format)
-                    lines.append(f'nominal_start_time = "{dt.isoformat()}"')
-                else:
-                    lines.append(f'nominal_start_time = "{dt}"')
+            # Datetimes: plan anchor first, then live estimate.
+            for field_name in ("scheduled_start_time", "nominal_start_time"):
+                if field_name in match and match[field_name]:
+                    dt = match[field_name]
+                    if isinstance(dt, datetime):
+                        lines.append(f'{field_name} = "{dt.isoformat()}"')
+                    else:
+                        lines.append(f'{field_name} = "{dt}"')
 
             # Integer fields
             for field_name in ["nominal_length", "nsets", "stones_per_set"]:

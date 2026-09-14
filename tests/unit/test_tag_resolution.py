@@ -19,7 +19,7 @@ def test_apply_match_dependencies_preserves_explicit_teams_and_tag_resolutions(t
     """apply_match_dependencies should only resolve match references, preserving explicit teams and tag resolutions."""
     tournament_url = tournament.url
 
-    field = Field(event=tournament_url, name="Field 1", camera=None)
+    field = Field(event=tournament_url, name="Field 1")
     db.session.add(field)
 
     team1_id = "team1"
@@ -75,7 +75,7 @@ def test_mixed_refs_all_three_types(test_db, tournament, app, seeded_teams):
     """Refs list with all three types: explicit team, tag reference, and match reference."""
     tournament_url = tournament.url
 
-    field = Field(event=tournament_url, name="Field 1", camera=None)
+    field = Field(event=tournament_url, name="Field 1")
     db.session.add(field)
 
     tag = Tag(event=tournament_url, name="Pool A")
@@ -141,7 +141,7 @@ def test_team1_team2_with_mixed_references(test_db, tournament, app, seeded_team
     """team1 and team2 fields with explicit teams, tag references, and match references."""
     tournament_url = tournament.url
 
-    field = Field(event=tournament_url, name="Field 1", camera=None)
+    field = Field(event=tournament_url, name="Field 1")
     db.session.add(field)
 
     tag = Tag(event=tournament_url, name="Pool A")

@@ -12,15 +12,13 @@ from flask import (
 from flask_login import login_required, current_user
 from sqlalchemy.orm.attributes import flag_modified
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import io
-import json
 
 from models import (
     Tournament,
     Match,
     MatchNote,
-    Field,
     Tag,
     Point,
     Injury,
@@ -57,6 +55,7 @@ from app.utils.scheduling import (
     validate_match_warnings,
     recompute_all_match_times,
     recompute_scheduled_and_nominal_times,
+    push_back_unstarted_matches,
 )
 from app.utils.datetime_helpers import now_utc_naive, parse_datetime_local_to_utc
 from app.utils.name_validation import match_name_char_error
@@ -107,20 +106,6 @@ def schedule_warnings(tournament_url):
         return jsonify({"success": True, "warnings": warnings}), 200
     except Exception as e:
         return jsonify({"success": False, "error": f"Schedule warnings failed: {e}"}), 500
-
-
-@bp.route("/<tournament_url>/recompute-schedule", methods=["POST"])
-@require_tournament_organizer("Only tournament organizers can access this page")
-def recompute_schedule(tournament_url):
-    """Force full recompute of match times as if a match were just edited (TO only)."""
-    try:
-        recompute_scheduled_and_nominal_times(tournament_url)
-        return (
-            jsonify({"success": True, "message": "Schedule recomputed successfully."}),
-            200,
-        )
-    except Exception as e:
-        return jsonify({"success": False, "error": f"Recompute failed: {e}"}), 500
 
 
 @bp.route("/<tournament_url>/export-schedule")
@@ -175,7 +160,8 @@ def import_schedule(tournament_url):
     res = ScheduleImportExportService.import_schedule(tournament_url, toml_content)
 
     def result_to_payload(import_result):
-        """Convert ImportResult to JSON payload."""
+        """Convert ImportResult to JSON payload, then re-solve plan + live timelines."""
+        recompute_scheduled_and_nominal_times(tournament_url)
         return {
             "tags_created": import_result.tags_created,
             "tags_updated": import_result.tags_updated,
@@ -184,6 +170,7 @@ def import_schedule(tournament_url):
             "matches_created": import_result.matches_created,
             "matches_updated": import_result.matches_updated,
             "errors": import_result.errors,
+            "warnings": import_result.warnings,
         }
 
     return json_from_result(res, ok_to_payload=result_to_payload)
@@ -718,33 +705,30 @@ def update_all_references(tournament_url):
 @bp.route("/<tournament_url>/push-back-matches", methods=["POST"])
 @require_tournament_organizer("Only tournament organizers can access this page")
 def push_back_matches(tournament_url):
-    """Push all non-started matches backwards by a specified amount of time (in minutes)."""
+    """Push unstarted STATIC/STATBREAK plan anchors on one local day by N minutes."""
+    from datetime import date
+
     try:
         minutes = int(request.form.get("minutes", 0))
     except (ValueError, TypeError):
         return jsonify({"success": False, "error": "Invalid number of minutes"}), 400
 
-    non_started_matches = (
-        Match.query.filter_by(event=tournament_url)
-        .filter(~Match.status.in_([MatchStatus.IN_PROGRESS, MatchStatus.COMPLETED, MatchStatus.SKIPPED]))
-        .all()
-    )
+    day_str = (request.form.get("day") or "").strip()
+    if not day_str:
+        return jsonify({"success": False, "error": "day is required (YYYY-MM-DD)."}), 400
+    try:
+        day = date.fromisoformat(day_str)
+    except ValueError:
+        return jsonify({"success": False, "error": "day must be YYYY-MM-DD."}), 400
+    try:
+        tz_offset_minutes = int(request.form.get("tz_offset_minutes", 0))
+    except (ValueError, TypeError):
+        return jsonify({"success": False, "error": "Invalid tz_offset_minutes"}), 400
 
-    updated_count = 0
-    for match in non_started_matches:
-        # Push back nominal_start_time if it exists
-        if match.nominal_start_time:
-            match.nominal_start_time = match.nominal_start_time + timedelta(minutes=minutes)
-            updated_count += 1
-
-        # Also push back confirmed_start_time if it exists (even when start time is already finalized)
-        if match.confirmed_start_time:
-            match.confirmed_start_time = match.confirmed_start_time + timedelta(minutes=minutes)
-
-    db.session.commit()
+    updated_count = push_back_unstarted_matches(tournament_url, minutes, day, tz_offset_minutes=tz_offset_minutes)
 
     if updated_count > 0:
-        msg = f"Pushed back {updated_count} non-started match(es) by {minutes} minute(s)"
+        msg = f"Pushed back {updated_count} non-started match(es) on {day_str} by {minutes} minute(s)"
     else:
         msg = "No matches were updated. All matches have already started or been completed."
     return jsonify({"success": True, "message": msg}), 200
@@ -793,7 +777,7 @@ def tournament_autocomplete(tournament_url):
     # Exclude BREAK and JOIN matches entirely
     matches = (
         Match.query.filter_by(event=tournament_url)
-        .filter(Match.schedule_type.notin_([ScheduleType.BREAK, ScheduleType.JOIN]))
+        .filter(Match.schedule_type.notin_([ScheduleType.BREAK, ScheduleType.STATBREAK, ScheduleType.JOIN]))
         .all()
     )
     for m in matches:
@@ -1153,22 +1137,6 @@ def finalize_match_post_api(tournament_url):
     match.match_winner = match_winner
     match.finalized_at = now_utc_naive()
 
-    if match.field:
-        field_obj = Field.query.filter_by(event=tournament_url, name=match.field).first()
-        if field_obj and field_obj.camera:
-            from app.utils.camera_helpers import get_all_camera_stream_starts
-
-            stream_starts = get_all_camera_stream_starts(field_obj)
-            if stream_starts:
-                existing_starts = {}
-                if match.camera_stream_starts:
-                    try:
-                        existing_starts = json.loads(match.camera_stream_starts)
-                    except json.JSONDecodeError:
-                        pass
-                existing_starts.update(stream_starts)
-                match.camera_stream_starts = json.dumps(existing_starts)
-
     team1_signature = data.get("team1_signature")
     team2_signature = data.get("team2_signature")
     if team1_signature:
@@ -1267,9 +1235,13 @@ def force_start_match_api(tournament_url, match_id):
     r_csv, i_csv = resolve_refs_slots(refs_list, tournament_url)
     set_match_referees_from_csv(match, r_csv, i_csv)
 
-    # Convert to static
+    # Convert to static. The new wall-clock "now" becomes both the plan anchor and
+    # the live estimate — otherwise the planned pass keeps a stale scheduled time
+    # while the board (plan mode) still shows the old slot.
     match.schedule_type = ScheduleType.STATIC
-    match.nominal_start_time = now_utc_naive()
+    now = now_utc_naive()
+    match.nominal_start_time = now
+    match.scheduled_start_time = now
     match.status = MatchStatus.READY_TO_START
 
     # The match is being converted to STATIC and started — fully splice it out of
@@ -1280,18 +1252,9 @@ def force_start_match_api(tournament_url, match_id):
 
     db.session.flush()
     db.session.commit()
-    recompute_all_match_times(tournament_url)
-
-    return jsonify({"success": True})
-
-
-@bp.route("/tournaments/<tournament_url>/recompute-schedule", methods=["POST"])
-@login_required
-def recompute_schedule_api(tournament_url):
-    if not _check_to(tournament_url):
-        return jsonify({"error": "Forbidden"}), 403
-
+    # Structural change to a STATIC anchor: re-solve plan then live.
     recompute_scheduled_and_nominal_times(tournament_url)
+
     return jsonify({"success": True})
 
 
@@ -1315,27 +1278,32 @@ def update_all_references_api(tournament_url):
 @bp.route("/tournaments/<tournament_url>/push-back-matches", methods=["POST"])
 @login_required
 def push_back_matches_api(tournament_url):
+    from datetime import date
+
     if not _check_to(tournament_url):
         return jsonify({"error": "Forbidden"}), 403
 
-    data = request.get_json()
-    minutes = int(data.get("minutes", 0))
+    data = request.get_json() or {}
+    try:
+        minutes = int(data.get("minutes", 0))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Invalid number of minutes"}), 400
     if not minutes:
         return jsonify({"success": True})
 
-    matches = (
-        Match.query.filter_by(event=tournament_url)
-        .filter(Match.status.in_([MatchStatus.NOT_STARTED, MatchStatus.TIME_FINALIZED]))
-        .all()
-    )
-    from datetime import timedelta
+    day_str = (data.get("day") or "").strip()
+    if not day_str:
+        return jsonify({"error": "day is required (YYYY-MM-DD)."}), 400
+    try:
+        day = date.fromisoformat(day_str)
+    except ValueError:
+        return jsonify({"error": "day must be YYYY-MM-DD."}), 400
+    try:
+        tz_offset_minutes = int(data.get("tz_offset_minutes", 0))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Invalid tz_offset_minutes"}), 400
 
-    for m in matches:
-        if m.schedule_type == ScheduleType.STATIC and m.nominal_start_time:
-            m.nominal_start_time += timedelta(minutes=minutes)
-
-    db.session.commit()
-    recompute_all_match_times(tournament_url)
+    push_back_unstarted_matches(tournament_url, minutes, day, tz_offset_minutes=tz_offset_minutes)
     return jsonify({"success": True})
 
 
@@ -1347,14 +1315,25 @@ def update_tags_api(tournament_url):
 
     data = request.get_json()
     tag_id = data.get("tag_id")
-    team_id = data.get("team_id")
 
     if not tag_id:
         return jsonify({"error": "Tag required"}), 400
 
     tag = Tag.query.filter_by(id=tag_id, event=tournament_url).first_or_404()
-    tag.team = team_id if team_id else None
+    if "expression" in data:
+        from app.routes.tournaments.matches_admin import validate_tag_expression
+
+        expression, err = validate_tag_expression(tournament_url, data.get("expression"))
+        if err:
+            return jsonify({"error": err}), 400
+        tag.expression = expression
+    if "team_id" in data:
+        team_id = data.get("team_id")
+        tag.team = team_id if team_id else None
     db.session.commit()
+
+    # Effective resolution: manual override if set, else the tag's expression.
+    effective_team = resolve_tag_to_team(f"tag::{tag.name}", tournament_url)
 
     # Update matches
     matches = Match.query.filter_by(event=tournament_url).all()
@@ -1368,13 +1347,13 @@ def update_tags_api(tournament_url):
         ):
             continue
         if m.team1_initial == tag_ref:
-            m.team1 = team_id
+            m.team1 = effective_team
         if m.team2_initial == tag_ref:
-            m.team2 = team_id
+            m.team2 = effective_team
 
         for row in get_match_referee_rows(m):
             if (row.initial or "").strip() == tag_ref:
-                row.team_id = team_id
+                row.team_id = effective_team
 
     db.session.commit()
     recompute_all_match_times(tournament_url)
@@ -1408,9 +1387,9 @@ def import_schedule_api(tournament_url):
     from app.services.schedule_import_export_service import ScheduleImportExportService
     from app.utils.result_helpers import json_from_result
 
-    def _ok_payload(_):
+    def _ok_payload(import_result):
         recompute_scheduled_and_nominal_times(tournament_url)
-        return {}
+        return {"warnings": import_result.warnings}
 
     res = ScheduleImportExportService.import_schedule(tournament_url, toml_content)
     return json_from_result(res, ok_to_payload=_ok_payload)

@@ -8,8 +8,8 @@ loosely into five topic areas:
 - **Dates and times** - naive-UTC conversion helpers.
 - **Auth, users, permissions** - the small functions every route reaches
   for (`get_registrable_config`, `can_head_ref_match`, ...).
-- **Cameras, footage, video** - the recording / upload / finalisation
-  pipeline.
+- **Cameras, footage, video** - YouTube upload helpers and the simplified
+  user-upload ingest path used by the footage API.
 - **Validation, responses, misc** - reserved-character validation, JSON
   response helpers, TOML parse/write.
 

@@ -318,8 +318,10 @@ play from two separate devices and it'll be in sync.
     putting the devices in question right next to each other and see
     if the issue persists. Unfortunately there's nothing I can do
     about this issue :\(
-
-
+	
+If you use a bluetooth speaker, you'll need to do a quick calibration
+to compensate for the bluetooth delay. This tends to be somewhere on
+the order of 200ms.
 
 ## Account Types
 

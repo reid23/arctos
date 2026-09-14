@@ -551,3 +551,208 @@ class TestScheduledVsNominalTimeline:
             # Planned timeline treats the skipped match as if it ran for its full 45 min.
             assert _aware_utc(skipped.scheduled_start_time) == _aware_utc(base + timedelta(minutes=60))
             assert _aware_utc(after.scheduled_start_time) == _aware_utc(base + timedelta(minutes=105))
+
+
+class TestPlanAnchorWritePaths:
+    """Write paths that intentionally shift the *plan* must touch scheduled_start_time."""
+
+    @pytest.mark.unit
+    def test_push_back_moves_scheduled_and_downstream_plan(self, app, test_db, tournament):
+        """STATIC push-back must move the plan anchor, then re-solve dynamic planned times."""
+        from app.domain.enums import ScheduleType
+
+        tournament_url = tournament.url
+        with app.app_context():
+            base = datetime.now(timezone.utc).replace(tzinfo=None)
+
+            anchor = Match(
+                name="Anchor",
+                event=tournament_url,
+                field="Field 1",
+                nominal_start_time=base,
+                scheduled_start_time=base,
+                schedule_type=ScheduleType.STATIC,
+                nominal_length=60,
+                status=MatchStatus.NOT_STARTED,
+            )
+            m2 = Match(
+                name="M2",
+                event=tournament_url,
+                field="Field 1",
+                nominal_start_time=base + timedelta(minutes=60),
+                scheduled_start_time=base + timedelta(minutes=60),
+                schedule_type=ScheduleType.SAFE,
+                nominal_length=60,
+                status=MatchStatus.NOT_STARTED,
+            )
+            db.session.add_all([anchor, m2])
+            db.session.flush()
+            _link_chain([anchor, m2])
+            db.session.commit()
+
+            # Mirror push_back_matches_api: shift STATIC plan anchors, then both passes.
+            from app.utils.scheduling import push_back_unstarted_matches
+
+            delta = timedelta(minutes=30)
+            push_back_unstarted_matches(tournament_url, 30, base.date())
+
+            db.session.refresh(anchor)
+            db.session.refresh(m2)
+
+            assert _aware_utc(anchor.scheduled_start_time) == _aware_utc(base + delta)
+            assert _aware_utc(anchor.nominal_start_time) == _aware_utc(base + delta)
+            # Downstream plan follows the shifted STATIC anchor.
+            assert _aware_utc(m2.scheduled_start_time) == _aware_utc(base + delta + timedelta(minutes=60))
+            assert _aware_utc(m2.nominal_start_time) == _aware_utc(base + delta + timedelta(minutes=60))
+
+    @pytest.mark.unit
+    def test_push_back_includes_ready_to_start_static_anchors(self, app, test_db, tournament):
+        """READY_TO_START is still unstarted — push-back must move those STATIC anchors."""
+        from app.domain.enums import ScheduleType
+        from app.utils.scheduling import push_back_unstarted_matches
+
+        tournament_url = tournament.url
+        with app.app_context():
+            base = datetime.now(timezone.utc).replace(tzinfo=None)
+            anchor = Match(
+                name="ReadyAnchor",
+                event=tournament_url,
+                field="Field 1",
+                nominal_start_time=base,
+                scheduled_start_time=base,
+                schedule_type=ScheduleType.STATIC,
+                nominal_length=60,
+                status=MatchStatus.READY_TO_START,
+            )
+            db.session.add(anchor)
+            db.session.commit()
+
+            push_back_unstarted_matches(tournament_url, 15, base.date())
+            db.session.refresh(anchor)
+            assert _aware_utc(anchor.scheduled_start_time) == _aware_utc(base + timedelta(minutes=15))
+            assert _aware_utc(anchor.nominal_start_time) == _aware_utc(base + timedelta(minutes=15))
+
+    @pytest.mark.unit
+    def test_push_back_moves_future_statbreak_not_past(self, app, test_db, tournament):
+        """Future STATBREAK anchors shift; past-start STATBREAKs stay locked."""
+        from app.domain.enums import ScheduleType
+        from app.utils.scheduling import push_back_unstarted_matches
+
+        tournament_url = tournament.url
+        with app.app_context():
+            base = datetime.now(timezone.utc).replace(tzinfo=None)
+            future = Match(
+                name="FutureLunch",
+                event=tournament_url,
+                field="Field 1",
+                nominal_start_time=base + timedelta(hours=2),
+                scheduled_start_time=base + timedelta(hours=2),
+                schedule_type=ScheduleType.STATBREAK,
+                nominal_length=30,
+                status=MatchStatus.NOT_STARTED,
+            )
+            past = Match(
+                name="PastLunch",
+                event=tournament_url,
+                field="Field 1",
+                nominal_start_time=base - timedelta(hours=1),
+                scheduled_start_time=base - timedelta(hours=1),
+                schedule_type=ScheduleType.STATBREAK,
+                nominal_length=30,
+                status=MatchStatus.NOT_STARTED,
+            )
+            db.session.add_all([future, past])
+            db.session.commit()
+            past_start = past.scheduled_start_time
+
+            # Both anchors share a calendar day here; one push must move only the
+            # future STATBREAK while the past-start lock keeps the other put.
+            push_back_unstarted_matches(tournament_url, 20, (base + timedelta(hours=2)).date())
+            db.session.refresh(future)
+            db.session.refresh(past)
+            assert _aware_utc(future.scheduled_start_time) == _aware_utc(base + timedelta(hours=2, minutes=20))
+            assert _aware_utc(past.scheduled_start_time) == _aware_utc(past_start)
+
+    @pytest.mark.unit
+    def test_push_back_only_affects_requested_day(self, app, test_db, tournament):
+        """Anchors on other calendar days stay put when pushing a single day."""
+        from app.domain.enums import ScheduleType
+        from app.utils.scheduling import push_back_unstarted_matches
+
+        tournament_url = tournament.url
+        with app.app_context():
+            day1 = datetime(2030, 6, 1, 15, 0, 0)
+            day2 = datetime(2030, 6, 2, 15, 0, 0)
+            a1 = Match(
+                name="Day1Anchor",
+                event=tournament_url,
+                field="Field 1",
+                nominal_start_time=day1,
+                scheduled_start_time=day1,
+                schedule_type=ScheduleType.STATIC,
+                nominal_length=60,
+                status=MatchStatus.NOT_STARTED,
+            )
+            a2 = Match(
+                name="Day2Anchor",
+                event=tournament_url,
+                field="Field 1",
+                nominal_start_time=day2,
+                scheduled_start_time=day2,
+                schedule_type=ScheduleType.STATIC,
+                nominal_length=60,
+                status=MatchStatus.NOT_STARTED,
+            )
+            db.session.add_all([a1, a2])
+            db.session.commit()
+
+            push_back_unstarted_matches(tournament_url, 30, day1.date())
+            db.session.refresh(a1)
+            db.session.refresh(a2)
+            assert _aware_utc(a1.scheduled_start_time) == _aware_utc(day1 + timedelta(minutes=30))
+            assert _aware_utc(a2.scheduled_start_time) == _aware_utc(day2)
+
+    @pytest.mark.unit
+    def test_live_pass_after_late_finish_does_not_move_plan(self, app, test_db, tournament):
+        """Regression: recompute_all_match_times after a late finish must leave scheduled alone."""
+        tournament_url = tournament.url
+        with app.app_context():
+            base = datetime.now(timezone.utc).replace(tzinfo=None)
+
+            anchor = Match(
+                name="Anchor",
+                event=tournament_url,
+                field="Field 1",
+                nominal_start_time=base,
+                scheduled_start_time=base,
+                schedule_type="STATIC",
+                nominal_length=60,
+                status=MatchStatus.COMPLETED,
+            )
+            # Finished 45 min late relative to plan end (plan end = base+60).
+            anchor.confirmed_start_time = base
+            anchor.completed_time = base + timedelta(minutes=105)
+            anchor.finalized_at = base + timedelta(minutes=105)
+            m2 = Match(
+                name="M2",
+                event=tournament_url,
+                field="Field 1",
+                nominal_start_time=base + timedelta(minutes=60),
+                scheduled_start_time=base + timedelta(minutes=60),
+                schedule_type="SAFE",
+                nominal_length=60,
+                status=MatchStatus.NOT_STARTED,
+            )
+            db.session.add_all([anchor, m2])
+            db.session.flush()
+            _link_chain([anchor, m2])
+            db.session.commit()
+
+            planned_m2 = m2.scheduled_start_time
+            recompute_all_match_times(tournament_url)
+            db.session.refresh(m2)
+
+            assert _aware_utc(m2.scheduled_start_time) == _aware_utc(planned_m2)
+            assert (
+                abs((_aware_utc(m2.nominal_start_time) - _aware_utc(base + timedelta(minutes=105))).total_seconds()) < 2
+            )

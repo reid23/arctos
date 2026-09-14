@@ -28,12 +28,11 @@ pub fn short_or_truncate(full: &str, shortname: Option<&str>) -> String {
     }
 }
 
-#[cfg(all(test, target_arch = "wasm32"))]
+#[cfg(test)]
 mod tests {
     use super::*;
-    use wasm_bindgen_test::wasm_bindgen_test;
 
-    #[wasm_bindgen_test]
+    #[test]
     fn returns_shortname_when_present() {
         assert_eq!(
             short_or_truncate("Boston Common Stones", Some("BCS")),
@@ -41,24 +40,24 @@ mod tests {
         );
     }
 
-    #[wasm_bindgen_test]
+    #[test]
     fn trims_shortname_whitespace() {
         assert_eq!(short_or_truncate("Boston", Some("  BCS  ")), "BCS");
     }
 
-    #[wasm_bindgen_test]
+    #[test]
     fn ignores_empty_shortname() {
         assert_eq!(short_or_truncate("Boston", Some("")), "Boston");
         assert_eq!(short_or_truncate("Boston", Some("   ")), "Boston");
     }
 
-    #[wasm_bindgen_test]
+    #[test]
     fn returns_full_name_when_short_enough() {
         assert_eq!(short_or_truncate("Short", None), "Short");
         assert_eq!(short_or_truncate("Exactly8", None), "Exactly8");
     }
 
-    #[wasm_bindgen_test]
+    #[test]
     fn truncates_long_name_with_ellipsis() {
         assert_eq!(
             short_or_truncate("Boston Common Stones", None),
@@ -66,7 +65,7 @@ mod tests {
         );
     }
 
-    #[wasm_bindgen_test]
+    #[test]
     fn counts_unicode_codepoints_not_bytes() {
         let full = "日本語チームXXXXXXXXXX";
         let out = short_or_truncate(full, None);
