@@ -1696,7 +1696,12 @@ pub struct SideCompSummary {
     #[serde(default)]
     pub registration_open: bool,
     #[serde(default)]
+    pub active: bool,
+    #[serde(default)]
     pub allowed_weapons: Vec<String>,
+    pub only_show_top_n_results: Option<i32>,
+    #[serde(default)]
+    pub results_page_enabled: bool,
     pub created_at: Option<String>,
     #[serde(default)]
     pub viewer_is_registered: bool,
@@ -1727,7 +1732,12 @@ pub struct SideCompDetail {
     #[serde(default)]
     pub registration_open: bool,
     #[serde(default)]
+    pub active: bool,
+    #[serde(default)]
     pub allowed_weapons: Vec<String>,
+    pub only_show_top_n_results: Option<i32>,
+    #[serde(default)]
+    pub results_page_enabled: bool,
     pub created_at: Option<String>,
     pub registrants: Vec<SideCompRegistrant>,
     #[serde(default)]
@@ -1771,4 +1781,85 @@ pub struct SideCompRegisterPlayerResponse {
     pub entry_number: i32,
     pub weapon: Option<String>,
     pub registered_at: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SideCompEnterRosterPlayer {
+    pub registration_id: i32,
+    pub entry_number: i32,
+    pub weapon: Option<String>,
+    pub player_id: String,
+    pub display_name: String,
+    pub profile_photo: Option<String>,
+    pub jersey_name: Option<String>,
+    pub jersey_number: Option<String>,
+    pub team_id: Option<String>,
+    pub team_shortname: Option<String>,
+    pub team_profile_photo: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SideCompEnterRoster {
+    pub id: i32,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub type_: String,
+    #[serde(default)]
+    pub active: bool,
+    pub registrants: Vec<SideCompEnterRosterPlayer>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SideCompResultEntry {
+    pub uuid: String,
+    pub comp: i32,
+    pub player: i32,
+    pub opponent: Option<i32>,
+    pub stamp: Option<String>,
+    pub points: i32,
+    #[serde(rename = "ref")]
+    pub result_ref: String,
+    #[serde(default)]
+    pub flagged: bool,
+    #[serde(default = "default_true")]
+    pub valid: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SideCompStandingRow {
+    pub registration_id: i32,
+    pub entry_number: i32,
+    pub weapon: Option<String>,
+    pub player_id: String,
+    pub display_name: String,
+    pub profile_photo: Option<String>,
+    pub jersey_name: Option<String>,
+    pub jersey_number: Option<String>,
+    pub team_shortname: Option<String>,
+    pub team_profile_photo: Option<String>,
+    pub wins: i32,
+    pub rank: i32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SideCompStandingTable {
+    pub id: String,
+    pub title: String,
+    pub rows: Vec<SideCompStandingRow>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SideCompStandings {
+    pub id: i32,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub type_: String,
+    pub only_show_top_n_results: Option<i32>,
+    #[serde(default)]
+    pub results_page_enabled: bool,
+    pub tables: Vec<SideCompStandingTable>,
 }

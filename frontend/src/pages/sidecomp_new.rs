@@ -1,6 +1,6 @@
-use crate::api;
-use crate::components::{default_allowed_weapons, AllowedWeaponsCheckboxes};
 use crate::Route;
+use crate::api;
+use crate::components::{AllowedWeaponsCheckboxes, default_allowed_weapons};
 use dioxus::prelude::*;
 
 #[component]
@@ -10,6 +10,7 @@ pub fn SideCompNew(url: String) -> Element {
     let mut type_ = use_signal(|| "DUELING".to_string());
     let mut description = use_signal(String::new);
     let mut allowed_weapons = use_signal(default_allowed_weapons);
+    let mut top_n_text = use_signal(String::new);
     let mut error = use_signal(|| None::<String>);
     let mut submitting = use_signal(|| false);
 
@@ -39,6 +40,20 @@ pub fn SideCompNew(url: String) -> Element {
                         let d = description();
                         let d_opt = if d.trim().is_empty() { None } else { Some(d) };
                         let weapons = allowed_weapons();
+                        let top_n = {
+                            let raw = top_n_text().trim().to_string();
+                            if raw.is_empty() {
+                                None
+                            } else {
+                                match raw.parse::<i32>() {
+                                    Ok(v) if v >= 0 => Some(v),
+                                    _ => {
+                                        error.set(Some("Top N results must be a non-negative integer or blank".into()));
+                                        return;
+                                    }
+                                }
+                            }
+                        };
                         submitting.set(true);
                         error.set(None);
                         spawn(async move {
@@ -48,6 +63,7 @@ pub fn SideCompNew(url: String) -> Element {
                                 &t,
                                 d_opt.as_deref(),
                                 Some(&weapons),
+                                top_n,
                             ).await {
                                 Ok(_) => {
                                     navigator.push(Route::TournamentHomeWithTab {
@@ -94,6 +110,17 @@ pub fn SideCompNew(url: String) -> Element {
                         div { class: "form-text", "Optional. Shown on the side competition page." }
                     }
                     AllowedWeaponsCheckboxes { selected: allowed_weapons }
+                    div { class: "mb-3",
+                        label { class: "form-label", "Only show top N results" }
+                        input {
+                            class: "form-control",
+                            r#type: "number",
+                            min: "0",
+                            placeholder: "Leave blank to show all",
+                            value: "{top_n_text}",
+                            oninput: move |evt| top_n_text.set(evt.value()),
+                        }
+                    }
                     if let Some(err) = error() {
                         div { class: "alert alert-danger", "{err}" }
                     }

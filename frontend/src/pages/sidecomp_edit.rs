@@ -1,6 +1,6 @@
-use crate::api;
-use crate::components::{default_allowed_weapons, AllowedWeaponsCheckboxes};
 use crate::Route;
+use crate::api;
+use crate::components::{AllowedWeaponsCheckboxes, default_allowed_weapons};
 use dioxus::prelude::*;
 
 #[component]
@@ -12,7 +12,9 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
     let mut type_ = use_signal(String::new);
     let mut description = use_signal(String::new);
     let mut registration_open = use_signal(|| false);
+    let mut active = use_signal(|| false);
     let mut allowed_weapons = use_signal(default_allowed_weapons);
+    let mut top_n_text = use_signal(String::new);
     let mut initialised = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
 
@@ -22,11 +24,17 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
             type_.set(d.type_.clone());
             description.set(d.description.clone().unwrap_or_default());
             registration_open.set(d.registration_open);
+            active.set(d.active);
             if d.allowed_weapons.is_empty() {
                 allowed_weapons.set(Vec::new());
             } else {
                 allowed_weapons.set(d.allowed_weapons.clone());
             }
+            top_n_text.set(
+                d.only_show_top_n_results
+                    .map(|n| n.to_string())
+                    .unwrap_or_default(),
+            );
             initialised.set(true);
         }
     }
@@ -72,7 +80,22 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
                         let t = type_();
                         let d = description();
                         let open = registration_open();
+                        let is_active = active();
                         let weapons = allowed_weapons();
+                        let top_n = {
+                            let raw = top_n_text().trim().to_string();
+                            if raw.is_empty() {
+                                None
+                            } else {
+                                match raw.parse::<i32>() {
+                                    Ok(v) if v >= 0 => Some(v),
+                                    _ => {
+                                        error.set(Some("Top N results must be a non-negative integer or blank".into()));
+                                        return;
+                                    }
+                                }
+                            }
+                        };
                         error.set(None);
                         spawn(async move {
                             match api::sidecomp_update(
@@ -81,7 +104,9 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
                                 Some(&t),
                                 Some(&d),
                                 Some(open),
+                                Some(is_active),
                                 Some(&weapons),
+                                top_n,
                             ).await {
                                 Ok(_) => {
                                     navigator.push(Route::SideCompDetail { url: url_inner, comp_id });
@@ -137,9 +162,37 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
                             "When off, only TO check-in can add players."
                         }
                     }
+                    div { class: "mb-3 form-check form-switch",
+                        input {
+                            class: "form-check-input",
+                            r#type: "checkbox",
+                            id: "active-toggle",
+                            checked: active(),
+                            onchange: move |evt| active.set(evt.checked()),
+                        }
+                        label {
+                            class: "form-check-label",
+                            r#for: "active-toggle",
+                            "Active"
+                        }
+                        div { class: "form-text",
+                            "When off, results cannot be entered."
+                        }
+                    }
                     AllowedWeaponsCheckboxes {
                         selected: allowed_weapons,
                         disabled_warning_count,
+                    }
+                    div { class: "mb-3",
+                        label { class: "form-label", "Only show top N results" }
+                        input {
+                            class: "form-control",
+                            r#type: "number",
+                            min: "0",
+                            placeholder: "Leave blank to show all",
+                            value: "{top_n_text}",
+                            oninput: move |evt| top_n_text.set(evt.value()),
+                        }
                     }
                     if let Some(err) = error() {
                         div { class: "alert alert-danger", "{err}" }

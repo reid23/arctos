@@ -3231,6 +3231,7 @@ pub async fn sidecomp_create(
     type_: &str,
     description: Option<&str>,
     allowed_weapons: Option<&[String]>,
+    only_show_top_n_results: Option<i32>,
 ) -> Result<Value, String> {
     let c = client();
     let mut body = serde_json::Map::new();
@@ -3243,6 +3244,10 @@ pub async fn sidecomp_create(
     if let Some(weapons) = allowed_weapons {
         body.insert("allowed_weapons".to_string(), serde_json::json!(weapons));
     }
+    body.insert(
+        "only_show_top_n_results".to_string(),
+        serde_json::json!(only_show_top_n_results),
+    );
     let r = with_credentials(
         c.post(format!("{}/_api/{}/sidecomps", base(), tournament_url))
             .json(&body),
@@ -3259,7 +3264,9 @@ pub async fn sidecomp_update(
     type_: Option<&str>,
     description: Option<&str>,
     registration_open: Option<bool>,
+    active: Option<bool>,
     allowed_weapons: Option<&[String]>,
+    only_show_top_n_results: Option<i32>,
 ) -> Result<Value, String> {
     let c = client();
     let mut body = serde_json::Map::new();
@@ -3275,9 +3282,16 @@ pub async fn sidecomp_update(
     if let Some(open) = registration_open {
         body.insert("registration_open".to_string(), serde_json::json!(open));
     }
+    if let Some(is_active) = active {
+        body.insert("active".to_string(), serde_json::json!(is_active));
+    }
     if let Some(weapons) = allowed_weapons {
         body.insert("allowed_weapons".to_string(), serde_json::json!(weapons));
     }
+    body.insert(
+        "only_show_top_n_results".to_string(),
+        serde_json::json!(only_show_top_n_results),
+    );
     let r = with_credentials(
         c.patch(format!("{}/_api/sidecomps/{}", base(), comp_id))
             .json(&body),
@@ -3394,6 +3408,65 @@ pub async fn sidecomp_eligible_players(comp_id: i32) -> Result<EligiblePlayersRe
     let c = client();
     let r = with_credentials(c.get(format!(
         "{}/_api/sidecomps/{}/eligible-players",
+        base(),
+        comp_id
+    )))
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
+pub async fn sidecomp_enter_results_roster(comp_id: i32) -> Result<SideCompEnterRoster, String> {
+    let c = client();
+    let r = with_credentials(c.get(format!(
+        "{}/_api/sidecomps/{}/enter-results-roster",
+        base(),
+        comp_id
+    )))
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
+pub async fn sidecomp_log_result(
+    comp_id: i32,
+    registration_id: i32,
+    points: i32,
+) -> Result<SideCompResultEntry, String> {
+    let c = client();
+    let body = serde_json::json!({
+        "registration_id": registration_id,
+        "points": points,
+    });
+    let r = with_credentials(
+        c.post(format!("{}/_api/sidecomps/{}/results", base(), comp_id))
+            .json(&body),
+    )
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
+pub async fn sidecomp_flag_result(result_uuid: &str, flagged: bool) -> Result<SideCompResultEntry, String> {
+    let c = client();
+    let body = serde_json::json!({ "flagged": flagged });
+    let r = with_credentials(
+        c.patch(format!("{}/_api/sidecomps/results/{}", base(), result_uuid))
+            .json(&body),
+    )
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
+pub async fn sidecomp_standings(comp_id: i32) -> Result<SideCompStandings, String> {
+    let c = client();
+    let r = with_credentials(c.get(format!(
+        "{}/_api/sidecomps/{}/standings",
         base(),
         comp_id
     )))

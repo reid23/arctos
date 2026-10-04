@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from typing import List
+import uuid
+from typing import List, Optional
 
 from app.domain.enums import Pompfen, SideCompType
 from app.models.base import db
@@ -12,6 +13,7 @@ from app.models.constants import (
     SHORT_NAME_LEN,
     URL_SLUG_LEN,
     USER_ID_LEN,
+    UUID_LEN,
 )
 
 
@@ -30,8 +32,14 @@ class SideComp(db.Model):
         description: Optional free-form description of the side competition.
         registration_open: When ``True``, players can self-register; when
             ``False`` (default), only TO can add registrants.
+        active: When ``True``, signed-in users may log results; when
+            ``False`` (default), result logging is rejected.
         allowed_weapons: JSON-encoded list of :class:`Pompfen` member names
             that players may select when registering. Defaults to all.
+        only_show_top_n_results: When ``None``, the results page shows all
+            ranked players. When ``0``, the results page is hidden. When a
+            positive integer ``N``, each results table shows only the top
+            ``N`` players (filters then apply within that cut).
         created_at: Timestamp when the side competition was created.
     """
 
@@ -43,12 +51,14 @@ class SideComp(db.Model):
     type = db.Column(db.Enum(SideCompType), nullable=False)
     description = db.Column(db.Text, nullable=True)
     registration_open = db.Column(db.Boolean, nullable=False, default=False)
+    active = db.Column(db.Boolean, nullable=False, default=False)
     allowed_weapons = db.Column(
         db.Text,
         nullable=False,
         default=_DEFAULT_ALLOWED_WEAPONS_JSON,
         server_default=_DEFAULT_ALLOWED_WEAPONS_JSON,
     )
+    only_show_top_n_results = db.Column(db.Integer, nullable=True, default=None)
     created_at = db.Column(
         db.DateTime,
         default=now_utc_naive,
@@ -79,6 +89,10 @@ class SideComp(db.Model):
     def allowed_weapon_names(self) -> List[str]:
         """Return enabled pompfen names for JSON payloads."""
         return [w.name for w in self.get_allowed_weapons()]
+
+    def results_page_enabled(self) -> bool:
+        """Return whether the public results page should be shown."""
+        return self.only_show_top_n_results is None or self.only_show_top_n_results != 0
 
 
 class SideCompRegistration(db.Model):
@@ -127,21 +141,53 @@ class SideCompRegistration(db.Model):
 
 
 class SideCompResult(db.Model):
-    """A single player's result entry in a side competition.
+    """A single scored point logged against a side-comp registration.
 
     Attributes:
-        id: Auto-increment primary key.
+        uuid: UUID primary key.
         comp: FK to the parent :class:`SideComp`.
-        player: ID of the participating player.
-        scanner_id: Optional scanner device ID used for automated result
-            capture.
-        stamp: Timestamp when the result was recorded.
+        player: FK to the scoring :class:`SideCompRegistration`.
+        opponent: Optional FK to an opposing registration (reserved for
+            future features).
+        stamp: Timestamp when the point was recorded.
+        points: Point delta (currently ``+1`` or ``-1``).
+        ref: User ID of the account that logged the point.
+        flagged: When ``True``, the entry is marked for later review.
+        valid: Soft-validity flag; defaults to ``True``. Invalid rows are
+            excluded from standings.
     """
 
     __tablename__ = "sidecompresults"
 
-    id = db.Column(db.Integer, primary_key=True)
-    comp = db.Column(db.Integer, db.ForeignKey("sidecomps.id"), nullable=False)
-    player = db.Column(db.String(USER_ID_LEN), db.ForeignKey("players.id"), nullable=False)
-    scanner_id = db.Column(db.Integer)
-    stamp = db.Column(db.DateTime, default=now_utc_naive)
+    uuid = db.Column(db.String(UUID_LEN), primary_key=True, default=lambda: str(uuid.uuid4()))
+    comp = db.Column(db.Integer, db.ForeignKey("sidecomps.id"), nullable=False, index=True)
+    player = db.Column(
+        db.Integer,
+        db.ForeignKey("sidecomp_registrations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    opponent = db.Column(
+        db.Integer,
+        db.ForeignKey("sidecomp_registrations.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    stamp = db.Column(db.DateTime, default=now_utc_naive, nullable=False)
+    points = db.Column(db.Integer, nullable=False)
+    ref = db.Column(db.String(USER_ID_LEN), nullable=False)
+    flagged = db.Column(db.Boolean, nullable=False, default=False)
+    valid = db.Column(db.Boolean, nullable=False, default=True)
+
+    def to_payload(self) -> dict:
+        """Serialize this result for API responses."""
+        return {
+            "uuid": self.uuid,
+            "comp": self.comp,
+            "player": self.player,
+            "opponent": self.opponent,
+            "stamp": self.stamp.isoformat() if self.stamp else None,
+            "points": self.points,
+            "ref": self.ref,
+            "flagged": bool(self.flagged),
+            "valid": bool(self.valid),
+        }

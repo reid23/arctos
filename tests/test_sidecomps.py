@@ -309,7 +309,9 @@ def test_sidecomp_delete_cascades(test_db, tournament):
     db.session.add(sc)
     db.session.flush()
     db.session.add(SideCompRegistration(comp=sc.id, player=other.id, entry_number=1, weapon=0))
-    db.session.add(SideCompResult(comp=sc.id, player=other.id))
+    db.session.flush()
+    reg = SideCompRegistration.query.filter_by(comp=sc.id, player=other.id).first()
+    db.session.add(SideCompResult(comp=sc.id, player=reg.id, points=1, ref=other.id))
     db.session.commit()
     comp_id = sc.id
 
@@ -790,6 +792,37 @@ def test_update_registration_open_toggle(test_db, tournament):
     assert sc.registration_open is False
 
 
+def test_update_active_toggle(test_db, tournament):
+    p = _make_player("to_user", "TO User")
+    _make_to(tournament.url, p.id)
+    sc = SideComp(event=tournament.url, name="A", type="DUELING")
+    db.session.add(sc)
+    db.session.commit()
+    assert sc.active is False
+
+    from app.services.sidecomp_service import SideCompService
+
+    res = SideCompService.update(
+        sc.id,
+        actor_user_id=p.id,
+        actor_user_type="player",
+        active=True,
+    )
+    assert isinstance(res, Ok)
+    db.session.refresh(sc)
+    assert sc.active is True
+
+    res = SideCompService.update(
+        sc.id,
+        actor_user_id=p.id,
+        actor_user_type="player",
+        active=False,
+    )
+    assert isinstance(res, Ok)
+    db.session.refresh(sc)
+    assert sc.active is False
+
+
 def test_cancel_player_registrations_in_event_removes_only_matching(test_db, tournament):
     p1 = _make_player("p1", "P1")
     p2 = _make_player("p2", "P2")
@@ -1024,6 +1057,7 @@ def test_route_create_with_description(app, client, tournament):
     payload = resp.get_json()
     assert payload["description"] == "Single elim"
     assert payload["registration_open"] is False
+    assert payload["active"] is False
 
 
 def test_route_update_open_close(app, client, tournament):
@@ -1046,6 +1080,32 @@ def test_route_update_open_close(app, client, tournament):
     resp = client.get(f"/_api/sidecomps/{comp_id}")
     assert resp.status_code == 200
     assert resp.get_json()["registration_open"] is True
+
+
+def test_route_update_active(app, client, tournament):
+    with app.app_context():
+        to_user = _make_player("to_user", "TO User")
+        _make_to(tournament.url, to_user.id)
+        sc = SideComp(event=tournament.url, name="A", type="DUELING")
+        db.session.add(sc)
+        db.session.commit()
+        comp_id = sc.id
+        login_as(client, to_user)
+
+    resp = client.get(f"/_api/sidecomps/{comp_id}")
+    assert resp.status_code == 200
+    assert resp.get_json()["active"] is False
+
+    resp = client.patch(
+        f"/_api/sidecomps/{comp_id}",
+        json={"active": True},
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["active"] is True
+
+    resp = client.get(f"/_api/sidecomps/{comp_id}")
+    assert resp.status_code == 200
+    assert resp.get_json()["active"] is True
 
 
 def test_route_detail_viewer_cannot_register_when_closed(app, client, tournament):
@@ -1384,3 +1444,99 @@ def test_update_player_weapon(test_db, tournament):
     res = SideCompService.update_player_weapon(sc.id, player_id=p.id, weapon="STAFF")
     assert isinstance(res, Ok)
     assert res.unwrap().weapon == Pompfen.STAFF.value
+
+
+def test_log_result_and_standings(test_db, tournament):
+    from app.domain.enums import Pompfen
+    from app.services.sidecomp_service import SideCompService
+
+    p = _make_player()
+    _confirm_event_registration(tournament.url, p.id)
+    sc = SideComp(event=tournament.url, name="Duel", type="DUELING", registration_open=True, active=True)
+    db.session.add(sc)
+    db.session.commit()
+
+    reg = SideCompService.register_player(sc.id, player_id=p.id, weapon="LONG").unwrap()
+    r1 = SideCompService.log_result(sc.id, registration_id=reg.id, points=1, ref_user_id="ref").unwrap()
+    SideCompService.log_result(sc.id, registration_id=reg.id, points=1, ref_user_id="ref").unwrap()
+    SideCompService.log_result(sc.id, registration_id=reg.id, points=-1, ref_user_id="ref").unwrap()
+
+    flagged = SideCompService.set_result_flagged(r1.uuid, flagged=True, actor_user_id="ref").unwrap()
+    assert flagged.flagged is True
+
+    standings = SideCompService.standings(sc.id).unwrap()
+    assert standings["results_page_enabled"] is True
+    assert len(standings["tables"]) == 1
+    row = standings["tables"][0]["rows"][0]
+    assert row["wins"] == 1
+    assert row["rank"] == 1
+    assert row["weapon"] == "LONG"
+
+
+def test_log_result_rejects_when_inactive(test_db, tournament):
+    from app.error_values import Err
+    from app.services.sidecomp_service import SideCompService
+
+    p = _make_player()
+    _confirm_event_registration(tournament.url, p.id)
+    sc = SideComp(event=tournament.url, name="Duel", type="DUELING", registration_open=True, active=False)
+    db.session.add(sc)
+    db.session.commit()
+
+    reg = SideCompService.register_player(sc.id, player_id=p.id, weapon="LONG").unwrap()
+    res = SideCompService.log_result(sc.id, registration_id=reg.id, points=1, ref_user_id="ref")
+    assert isinstance(res, Err)
+    assert "not active" in str(res.unwrap_err()).lower()
+
+
+def test_chain_breaking_standings_split_and_top_n(test_db, tournament):
+    from app.domain.enums import Pompfen
+    from app.services.sidecomp_service import SideCompService
+
+    chain = _make_player("chain_p", "Chain")
+    staff = _make_player("staff_p", "Staff")
+    long_p = _make_player("long_p", "Long")
+    for pl in (chain, staff, long_p):
+        _confirm_event_registration(tournament.url, pl.id)
+
+    sc = SideComp(
+        event=tournament.url,
+        name="CB",
+        type="CHAIN_BREAKING",
+        registration_open=True,
+        active=True,
+        only_show_top_n_results=1,
+    )
+    db.session.add(sc)
+    db.session.commit()
+
+    r_chain = SideCompService.register_player(sc.id, player_id=chain.id, weapon="CHAIN").unwrap()
+    r_staff = SideCompService.register_player(sc.id, player_id=staff.id, weapon="STAFF").unwrap()
+    r_long = SideCompService.register_player(sc.id, player_id=long_p.id, weapon="LONG").unwrap()
+
+    SideCompService.log_result(sc.id, registration_id=r_chain.id, points=1, ref_user_id="ref").unwrap()
+    SideCompService.log_result(sc.id, registration_id=r_staff.id, points=1, ref_user_id="ref").unwrap()
+    SideCompService.log_result(sc.id, registration_id=r_staff.id, points=1, ref_user_id="ref").unwrap()
+    SideCompService.log_result(sc.id, registration_id=r_long.id, points=1, ref_user_id="ref").unwrap()
+
+    standings = SideCompService.standings(sc.id).unwrap()
+    assert [t["id"] for t in standings["tables"]] == ["chains", "breaks"]
+    chains = standings["tables"][0]["rows"]
+    breaks = standings["tables"][1]["rows"]
+    assert len(chains) == 1
+    assert chains[0]["weapon"] == "CHAIN"
+    # top N=1 keeps only the highest-scoring break player (staff with 2)
+    assert len(breaks) == 1
+    assert breaks[0]["player_id"] == staff.id
+    assert breaks[0]["rank"] == 1
+    assert breaks[0]["wins"] == 2
+
+
+def test_only_show_top_n_zero_hides_results_page(test_db, tournament):
+    sc = SideComp(event=tournament.url, name="Hidden", type="DUELING", only_show_top_n_results=0)
+    db.session.add(sc)
+    db.session.commit()
+    from app.services.sidecomp_service import SideCompService
+
+    standings = SideCompService.standings(sc.id).unwrap()
+    assert standings["results_page_enabled"] is False

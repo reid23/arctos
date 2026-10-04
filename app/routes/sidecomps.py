@@ -19,7 +19,10 @@ def _sc_summary(sc, *, registrant_count=None, viewer_reg=None):
         "name": sc.name,
         "type": str(sc.type),
         "registration_open": bool(sc.registration_open),
+        "active": bool(sc.active),
         "allowed_weapons": sc.allowed_weapon_names(),
+        "only_show_top_n_results": sc.only_show_top_n_results,
+        "results_page_enabled": sc.results_page_enabled(),
         "created_at": sc.created_at.isoformat() if sc.created_at else None,
     }
     if registrant_count is not None:
@@ -43,7 +46,10 @@ def _sc_payload(sc):
         "type": str(sc.type),
         "description": sc.description,
         "registration_open": bool(sc.registration_open),
+        "active": bool(sc.active),
         "allowed_weapons": sc.allowed_weapon_names(),
+        "only_show_top_n_results": sc.only_show_top_n_results,
+        "results_page_enabled": sc.results_page_enabled(),
         "created_at": sc.created_at.isoformat() if sc.created_at else None,
     }
 
@@ -146,6 +152,7 @@ def create(tournament_url: str):
         type=data.get("type", ""),
         description=data.get("description"),
         allowed_weapons=data.get("allowed_weapons"),
+        only_show_top_n_results=data.get("only_show_top_n_results"),
     )
     return json_from_result(res, ok_to_payload=_sc_payload)
 
@@ -157,6 +164,11 @@ def update(comp_id: int):
     """TO-only: rename or change type of a side competition."""
     data = g.json_body
 
+    # only_show_top_n_results: omit key to leave untouched; null clears; 0 hides.
+    top_n_arg = ...
+    if "only_show_top_n_results" in data:
+        top_n_arg = data.get("only_show_top_n_results")
+
     res = SideCompService.update(
         comp_id,
         actor_user_id=current_user.id,
@@ -165,7 +177,9 @@ def update(comp_id: int):
         type=data.get("type"),
         description=data.get("description"),
         registration_open=data.get("registration_open"),
+        active=data.get("active"),
         allowed_weapons=data.get("allowed_weapons"),
+        only_show_top_n_results=top_n_arg,
     )
     return json_from_result(
         res,
@@ -176,7 +190,10 @@ def update(comp_id: int):
             "type": str(sc.type),
             "description": sc.description,
             "registration_open": bool(sc.registration_open),
+            "active": bool(sc.active),
             "allowed_weapons": sc.allowed_weapon_names(),
+            "only_show_top_n_results": sc.only_show_top_n_results,
+            "results_page_enabled": sc.results_page_enabled(),
         },
     )
 
@@ -399,3 +416,59 @@ def eligible_players(comp_id: int):
     ]
     # Also return the side comp's allowed weapons for the registration modal.
     return jsonify({"players": out, "allowed_weapons": sc.allowed_weapon_names(), "name": sc.name})
+
+
+@bp.route("/sidecomps/<int:comp_id>/enter-results-roster", methods=["GET"])
+@login_required
+def enter_results_roster(comp_id: int):
+    """Authenticated: full registrant roster for the enter-results UI."""
+    res = SideCompService.enter_results_roster(comp_id)
+    return json_from_result(res, ok_to_payload=lambda payload: payload)
+
+
+@bp.route("/sidecomps/<int:comp_id>/results", methods=["POST"])
+@login_required
+@require_json_body()
+def log_result(comp_id: int):
+    """Authenticated: log a +1 / -1 point against a registration."""
+    data = g.json_body
+    try:
+        registration_id = int(data.get("registration_id"))
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "error": "registration_id is required"}), 400
+    try:
+        points = int(data.get("points"))
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "error": "points must be +1 or -1"}), 400
+
+    res = SideCompService.log_result(
+        comp_id,
+        registration_id=registration_id,
+        points=points,
+        ref_user_id=current_user.id,
+    )
+    return json_from_result(res, ok_to_payload=lambda result: result.to_payload())
+
+
+@bp.route("/sidecomps/results/<result_uuid>", methods=["PATCH"])
+@login_required
+@require_json_body()
+def patch_result(result_uuid: str):
+    """Authenticated: update flagged (and later other) fields on a result."""
+    data = g.json_body
+    if "flagged" not in data:
+        return jsonify({"success": False, "error": "flagged is required"}), 400
+
+    res = SideCompService.set_result_flagged(
+        result_uuid,
+        flagged=bool(data.get("flagged")),
+        actor_user_id=current_user.id,
+    )
+    return json_from_result(res, ok_to_payload=lambda result: result.to_payload())
+
+
+@bp.route("/sidecomps/<int:comp_id>/standings", methods=["GET"])
+def standings(comp_id: int):
+    """Public: standings tables for a side competition."""
+    res = SideCompService.standings(comp_id)
+    return json_from_result(res, ok_to_payload=lambda payload: payload)

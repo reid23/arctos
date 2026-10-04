@@ -6,6 +6,7 @@ use dioxus::prelude::*;
 #[component]
 pub fn SideCompDetail(url: String, comp_id: i32) -> Element {
     let mut detail = use_resource(move || async move { api::sidecomp_detail(comp_id).await });
+    let me = use_resource(move || async move { api::me().await });
     let mut action_error = use_signal(|| None::<String>);
     let mut show_register_modal = use_signal(|| false);
     let mut show_edit_modal = use_signal(|| false);
@@ -13,6 +14,9 @@ pub fn SideCompDetail(url: String, comp_id: i32) -> Element {
     let url_for_back = url.clone();
     let url_for_edit = url.clone();
     let url_for_register = url.clone();
+    let url_for_enter = url.clone();
+    let url_for_results = url.clone();
+    let signed_in = matches!(me.read().as_ref(), Some(Ok(_)));
 
     rsx! {
         div { class: "row",
@@ -29,18 +33,25 @@ pub fn SideCompDetail(url: String, comp_id: i32) -> Element {
                         let viewer_can_register = d.viewer_can_register;
                         let viewer_is_registered_in_comp = d.viewer_is_registered_in_comp;
                         let registration_open = d.registration_open;
+                        let active = d.active;
                         let description = d.description.clone();
                         let allowed_weapons = d.allowed_weapons.clone();
                         let comp_name = d.name.clone();
                         let viewer_weapon = d.viewer_weapon.clone();
+                        let results_page_enabled = d.results_page_enabled;
                         rsx! {
                             h1 { "{d.name}" }
                             p {
                                 span { class: "badge bg-secondary me-2", "{d.type_}" }
                                 if registration_open {
-                                    span { class: "badge bg-success", "Open" }
+                                    span { class: "badge bg-success me-2", "Open" }
                                 } else {
-                                    span { class: "badge bg-secondary", "Closed" }
+                                    span { class: "badge bg-secondary me-2", "Closed" }
+                                }
+                                if active {
+                                    span { class: "badge bg-success", "Active" }
+                                } else {
+                                    span { class: "badge bg-secondary", "Inactive" }
                                 }
                             }
                             if let Some(desc) = description.as_ref() {
@@ -62,7 +73,7 @@ pub fn SideCompDetail(url: String, comp_id: i32) -> Element {
                                     }
                                 }
                             }
-                            div { class: "mb-3 d-flex gap-2",
+                            div { class: "mb-3 d-flex flex-wrap gap-2",
                                 if viewer_can_register {
                                     button {
                                         class: "btn btn-success",
@@ -75,6 +86,20 @@ pub fn SideCompDetail(url: String, comp_id: i32) -> Element {
                                         class: "btn btn-outline-secondary",
                                         onclick: move |_| show_edit_modal.set(true),
                                         "Edit registration"
+                                    }
+                                }
+                                if signed_in && active {
+                                    Link {
+                                        to: Route::SideCompEnterResults { url: url_for_enter.clone(), comp_id },
+                                        class: "btn btn-primary",
+                                        "Enter results"
+                                    }
+                                }
+                                if results_page_enabled {
+                                    Link {
+                                        to: Route::SideCompResults { url: url_for_results.clone(), comp_id },
+                                        class: "btn btn-outline-dark",
+                                        "Results"
                                     }
                                 }
                             }
