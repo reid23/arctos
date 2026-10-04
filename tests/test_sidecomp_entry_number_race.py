@@ -53,7 +53,7 @@ def test_register_player_retries_on_entry_number_collision(comp_setup):
     comp_id = comp_setup["comp_id"]
     p0, p1 = comp_setup["players"]
 
-    res0 = SideCompService.register_player(comp_id, player_id=p0.id)
+    res0 = SideCompService.register_player(comp_id, player_id=p0.id, weapon="CHAIN")
     assert isinstance(res0, Ok), repr(res0)
 
     # Force _next_entry_number to return 1 (collides) then a fresh 2.
@@ -67,7 +67,7 @@ def test_register_player_retries_on_entry_number_collision(comp_setup):
             return real_next(comp)
 
     with patch.object(SideCompService, "_next_entry_number", side_effect=fake_next):
-        res1 = SideCompService.register_player(comp_id, player_id=p1.id)
+        res1 = SideCompService.register_player(comp_id, player_id=p1.id, weapon="CHAIN")
     assert isinstance(res1, Ok), repr(res1)
 
     rows = SideCompRegistration.query.filter_by(comp=comp_id).order_by(SideCompRegistration.entry_number).all()

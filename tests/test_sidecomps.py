@@ -116,9 +116,9 @@ def test_sidecomp_registration_unique_per_player(test_db, tournament):
     sc = SideComp(event=tournament.url, name="Chain", type="CHAIN_BREAKING")
     db.session.add(sc)
     db.session.flush()
-    db.session.add(SideCompRegistration(comp=sc.id, player=p.id, entry_number=1))
+    db.session.add(SideCompRegistration(comp=sc.id, player=p.id, entry_number=1, weapon=0))
     db.session.commit()
-    db.session.add(SideCompRegistration(comp=sc.id, player=p.id, entry_number=2))
+    db.session.add(SideCompRegistration(comp=sc.id, player=p.id, entry_number=2, weapon=0))
     with pytest.raises(IntegrityError):
         db.session.commit()
     db.session.rollback()
@@ -217,7 +217,7 @@ def test_sidecomp_get_with_registrants(test_db, tournament):
     sc = SideComp(event=tournament.url, name="C", type="CHAIN_BREAKING")
     db.session.add(sc)
     db.session.flush()
-    db.session.add(SideCompRegistration(comp=sc.id, player=p.id, entry_number=1))
+    db.session.add(SideCompRegistration(comp=sc.id, player=p.id, entry_number=1, weapon=0))
     db.session.commit()
 
     from app.services.sidecomp_service import SideCompService
@@ -308,7 +308,7 @@ def test_sidecomp_delete_cascades(test_db, tournament):
     sc = SideComp(event=tournament.url, name="Z", type="DUELING")
     db.session.add(sc)
     db.session.flush()
-    db.session.add(SideCompRegistration(comp=sc.id, player=other.id, entry_number=1))
+    db.session.add(SideCompRegistration(comp=sc.id, player=other.id, entry_number=1, weapon=0))
     db.session.add(SideCompResult(comp=sc.id, player=other.id))
     db.session.commit()
     comp_id = sc.id
@@ -331,7 +331,7 @@ def test_register_player_succeeds_when_event_registered(test_db, tournament):
 
     from app.services.sidecomp_service import SideCompService
 
-    res = SideCompService.register_player(sc.id, player_id=p.id)
+    res = SideCompService.register_player(sc.id, player_id=p.id, weapon="CHAIN")
     assert isinstance(res, Ok)
     reg = res.unwrap()
     assert reg.comp == sc.id
@@ -344,7 +344,7 @@ def test_register_player_succeeds_with_league_scoped_registration(test_db):
 
     from app.services.sidecomp_service import SideCompService
 
-    res = SideCompService.register_player(ctx["sidecomp"].id, player_id=ctx["player"].id)
+    res = SideCompService.register_player(ctx["sidecomp"].id, player_id=ctx["player"].id, weapon="CHAIN")
 
     assert isinstance(res, Ok)
     reg = res.unwrap()
@@ -361,7 +361,7 @@ def test_register_player_no_event_registration(test_db, tournament):
 
     from app.services.sidecomp_service import SideCompService
 
-    res = SideCompService.register_player(sc.id, player_id=p.id)
+    res = SideCompService.register_player(sc.id, player_id=p.id, weapon="CHAIN")
     assert isinstance(res, Err)
     assert res.unwrap_err().status_code == 400
 
@@ -377,7 +377,7 @@ def test_register_player_cancelled_event_registration(test_db, tournament):
 
     from app.services.sidecomp_service import SideCompService
 
-    res = SideCompService.register_player(sc.id, player_id=p.id)
+    res = SideCompService.register_player(sc.id, player_id=p.id, weapon="CHAIN")
     assert isinstance(res, Err)
     assert res.unwrap_err().status_code == 400
 
@@ -391,8 +391,8 @@ def test_register_player_duplicate_rejected(test_db, tournament):
 
     from app.services.sidecomp_service import SideCompService
 
-    SideCompService.register_player(sc.id, player_id=p.id)
-    res2 = SideCompService.register_player(sc.id, player_id=p.id)
+    SideCompService.register_player(sc.id, player_id=p.id, weapon="CHAIN")
+    res2 = SideCompService.register_player(sc.id, player_id=p.id, weapon="CHAIN")
     assert isinstance(res2, Err)
     assert res2.unwrap_err().status_code == 400
 
@@ -407,7 +407,7 @@ def test_register_player_unaffiliated_succeeds(test_db, tournament):
 
     from app.services.sidecomp_service import SideCompService
 
-    res = SideCompService.register_player(sc.id, player_id=p.id)
+    res = SideCompService.register_player(sc.id, player_id=p.id, weapon="CHAIN")
     assert isinstance(res, Ok)
 
 
@@ -417,7 +417,7 @@ def test_deregister_player_removes_row(test_db, tournament):
     sc = SideComp(event=tournament.url, name="A", type="DUELING")
     db.session.add(sc)
     db.session.flush()
-    db.session.add(SideCompRegistration(comp=sc.id, player=p.id, entry_number=1))
+    db.session.add(SideCompRegistration(comp=sc.id, player=p.id, entry_number=1, weapon=0))
     db.session.commit()
 
     from app.services.sidecomp_service import SideCompService
@@ -455,6 +455,7 @@ def test_register_player_as_to_succeeds(test_db, tournament):
         actor_user_id=to_user.id,
         actor_user_type="player",
         player_id=other.id,
+        weapon="CHAIN",
     )
     assert isinstance(res, Ok)
     reg = res.unwrap()
@@ -471,6 +472,7 @@ def test_register_player_as_to_succeeds_with_league_scoped_registration(test_db)
         actor_user_id=ctx["to_user"].id,
         actor_user_type="player",
         player_id=ctx["player"].id,
+        weapon="CHAIN",
     )
 
     assert isinstance(res, Ok)
@@ -495,6 +497,7 @@ def test_register_player_as_to_non_to_forbidden(test_db, tournament):
         actor_user_id=actor.id,
         actor_user_type="player",
         player_id=target.id,
+        weapon="CHAIN",
     )
     assert isinstance(res, Err)
     assert res.unwrap_err().status_code == 403
@@ -515,6 +518,7 @@ def test_register_player_as_to_target_not_event_registered(test_db, tournament):
         actor_user_id=to_user.id,
         actor_user_type="player",
         player_id=target.id,
+        weapon="CHAIN",
     )
     assert isinstance(res, Err)
     assert res.unwrap_err().status_code == 400
@@ -549,7 +553,7 @@ def test_register_player_rejected_when_closed(test_db, tournament):
 
     from app.services.sidecomp_service import SideCompService
 
-    res = SideCompService.register_player(sc.id, player_id=p.id)
+    res = SideCompService.register_player(sc.id, player_id=p.id, weapon="CHAIN")
     assert isinstance(res, Err)
     assert res.unwrap_err().status_code == 400
 
@@ -566,7 +570,7 @@ def test_register_player_succeeds_when_opened(test_db, tournament):
 
     from app.services.sidecomp_service import SideCompService
 
-    closed = SideCompService.register_player(sc.id, player_id=p.id)
+    closed = SideCompService.register_player(sc.id, player_id=p.id, weapon="CHAIN")
     assert isinstance(closed, Err)
 
     upd = SideCompService.update(
@@ -577,7 +581,7 @@ def test_register_player_succeeds_when_opened(test_db, tournament):
     )
     assert isinstance(upd, Ok)
 
-    res = SideCompService.register_player(sc.id, player_id=p.id)
+    res = SideCompService.register_player(sc.id, player_id=p.id, weapon="CHAIN")
     assert isinstance(res, Ok)
 
 
@@ -599,6 +603,7 @@ def test_register_player_as_to_works_when_closed(test_db, tournament):
         actor_user_id=to_user.id,
         actor_user_type="player",
         player_id=target.id,
+        weapon="CHAIN",
     )
     assert isinstance(res, Ok)
 
@@ -612,7 +617,7 @@ def test_register_player_assigns_entry_number_one(test_db, tournament):
 
     from app.services.sidecomp_service import SideCompService
 
-    res = SideCompService.register_player(sc.id, player_id=p.id)
+    res = SideCompService.register_player(sc.id, player_id=p.id, weapon="CHAIN")
     assert isinstance(res, Ok)
     assert res.unwrap().entry_number == 1
 
@@ -628,8 +633,8 @@ def test_register_player_assigns_sequential_entry_numbers(test_db, tournament):
 
     from app.services.sidecomp_service import SideCompService
 
-    r1 = SideCompService.register_player(sc.id, player_id=p1.id).unwrap()
-    r2 = SideCompService.register_player(sc.id, player_id=p2.id).unwrap()
+    r1 = SideCompService.register_player(sc.id, player_id=p1.id, weapon="CHAIN").unwrap()
+    r2 = SideCompService.register_player(sc.id, player_id=p2.id, weapon="CHAIN").unwrap()
     assert r1.entry_number == 1
     assert r2.entry_number == 2
 
@@ -647,14 +652,14 @@ def test_entry_numbers_do_not_reuse_after_deregister(test_db, tournament):
 
     from app.services.sidecomp_service import SideCompService
 
-    r1 = SideCompService.register_player(sc.id, player_id=p1.id).unwrap()
-    r2 = SideCompService.register_player(sc.id, player_id=p2.id).unwrap()
+    r1 = SideCompService.register_player(sc.id, player_id=p1.id, weapon="CHAIN").unwrap()
+    r2 = SideCompService.register_player(sc.id, player_id=p2.id, weapon="CHAIN").unwrap()
     assert r1.entry_number == 1
     assert r2.entry_number == 2
 
     SideCompService.deregister_player(sc.id, player_id=p1.id)
 
-    r3 = SideCompService.register_player(sc.id, player_id=p3.id).unwrap()
+    r3 = SideCompService.register_player(sc.id, player_id=p3.id, weapon="CHAIN").unwrap()
     assert r3.entry_number == 3
 
 
@@ -668,8 +673,8 @@ def test_entry_numbers_independent_per_comp(test_db, tournament):
 
     from app.services.sidecomp_service import SideCompService
 
-    r1 = SideCompService.register_player(sc1.id, player_id=p.id).unwrap()
-    r2 = SideCompService.register_player(sc2.id, player_id=p.id).unwrap()
+    r1 = SideCompService.register_player(sc1.id, player_id=p.id, weapon="CHAIN").unwrap()
+    r2 = SideCompService.register_player(sc2.id, player_id=p.id, weapon="CHAIN").unwrap()
     assert r1.entry_number == 1
     assert r2.entry_number == 1
 
@@ -690,6 +695,7 @@ def test_register_player_as_to_assigns_entry_number(test_db, tournament):
         actor_user_id=to_user.id,
         actor_user_type="player",
         player_id=target.id,
+        weapon="CHAIN",
     )
     assert isinstance(res, Ok)
     assert res.unwrap().entry_number == 1
@@ -701,9 +707,9 @@ def test_entry_number_unique_constraint_enforced(test_db, tournament):
     sc = SideComp(event=tournament.url, name="A", type="DUELING")
     db.session.add(sc)
     db.session.flush()
-    db.session.add(SideCompRegistration(comp=sc.id, player=p1.id, entry_number=1))
+    db.session.add(SideCompRegistration(comp=sc.id, player=p1.id, entry_number=1, weapon=0))
     db.session.commit()
-    db.session.add(SideCompRegistration(comp=sc.id, player=p2.id, entry_number=1))
+    db.session.add(SideCompRegistration(comp=sc.id, player=p2.id, entry_number=1, weapon=0))
     with pytest.raises(IntegrityError):
         db.session.commit()
     db.session.rollback()
@@ -791,9 +797,9 @@ def test_cancel_player_registrations_in_event_removes_only_matching(test_db, tou
     sc2 = SideComp(event=tournament.url, name="B", type="OTHER")
     db.session.add_all([sc1, sc2])
     db.session.flush()
-    db.session.add(SideCompRegistration(comp=sc1.id, player=p1.id, entry_number=1))
-    db.session.add(SideCompRegistration(comp=sc2.id, player=p1.id, entry_number=1))
-    db.session.add(SideCompRegistration(comp=sc1.id, player=p2.id, entry_number=2))
+    db.session.add(SideCompRegistration(comp=sc1.id, player=p1.id, entry_number=1, weapon=0))
+    db.session.add(SideCompRegistration(comp=sc2.id, player=p1.id, entry_number=1, weapon=0))
+    db.session.add(SideCompRegistration(comp=sc1.id, player=p2.id, entry_number=2, weapon=0))
     db.session.commit()
 
     from app.services.sidecomp_service import SideCompService
@@ -814,7 +820,7 @@ def test_player_self_deregister_from_event_cascades(app, client, tournament):
         sc = SideComp(event=tournament.url, name="A", type="DUELING")
         db.session.add(sc)
         db.session.flush()
-        db.session.add(SideCompRegistration(comp=sc.id, player=p.id, entry_number=1))
+        db.session.add(SideCompRegistration(comp=sc.id, player=p.id, entry_number=1, weapon=0))
         db.session.commit()
         login_as(client, p)
 
@@ -841,7 +847,7 @@ def test_route_detail_public_with_registrants(client, tournament):
     sc = SideComp(event=tournament.url, name="A", type="DUELING")
     db.session.add(sc)
     db.session.flush()
-    db.session.add(SideCompRegistration(comp=sc.id, player=p.id, entry_number=1))
+    db.session.add(SideCompRegistration(comp=sc.id, player=p.id, entry_number=1, weapon=0))
     db.session.commit()
 
     resp = client.get(f"/_api/sidecomps/{sc.id}")
@@ -866,8 +872,8 @@ def test_route_detail_includes_entry_numbers(app, client, tournament):
 
         from app.services.sidecomp_service import SideCompService
 
-        SideCompService.register_player(comp_id, player_id=p1.id)
-        SideCompService.register_player(comp_id, player_id=p2.id)
+        SideCompService.register_player(comp_id, player_id=p1.id, weapon="CHAIN")
+        SideCompService.register_player(comp_id, player_id=p2.id, weapon="CHAIN")
 
     resp = client.get(f"/_api/sidecomps/{comp_id}")
     assert resp.status_code == 200
@@ -918,7 +924,7 @@ def test_route_detail_viewer_flags_already_registered(app, client, tournament):
         sc = SideComp(event=tournament.url, name="A", type="DUELING")
         db.session.add(sc)
         db.session.flush()
-        db.session.add(SideCompRegistration(comp=sc.id, player=p.id, entry_number=1))
+        db.session.add(SideCompRegistration(comp=sc.id, player=p.id, entry_number=1, weapon=0))
         db.session.commit()
         comp_id = sc.id
         login_as(client, p)
@@ -1097,7 +1103,7 @@ def test_route_player_register_succeeds(app, client, tournament):
         comp_id = sc.id
         login_as(client, p)
 
-    resp = client.post(f"/_api/sidecomps/{comp_id}/register")
+    resp = client.post(f"/_api/sidecomps/{comp_id}/register", json={"weapon": "CHAIN"})
     assert resp.status_code == 200
 
     with app.app_context():
@@ -1119,7 +1125,7 @@ def test_route_player_register_requires_player_account(app, client, tournament):
         comp_id = sc.id
         login_as(client, t)
 
-    resp = client.post(f"/_api/sidecomps/{comp_id}/register")
+    resp = client.post(f"/_api/sidecomps/{comp_id}/register", json={"weapon": "CHAIN"})
     assert resp.status_code == 403
 
 
@@ -1130,7 +1136,7 @@ def test_route_player_deregister_succeeds(app, client, tournament):
         sc = SideComp(event=tournament.url, name="A", type="DUELING")
         db.session.add(sc)
         db.session.flush()
-        db.session.add(SideCompRegistration(comp=sc.id, player=p.id, entry_number=1))
+        db.session.add(SideCompRegistration(comp=sc.id, player=p.id, entry_number=1, weapon=0))
         db.session.commit()
         comp_id = sc.id
         login_as(client, p)
@@ -1157,7 +1163,7 @@ def test_route_register_player_as_to_succeeds(app, client, tournament):
 
     resp = client.post(
         f"/_api/sidecomps/{comp_id}/register-player-as-to",
-        json={"player_id": target_id},
+        json={"player_id": target_id, "weapon": "CHAIN"},
     )
     assert resp.status_code == 200
 
@@ -1182,7 +1188,7 @@ def test_delete_tournament_cascades_sidecomp_registrations(app, client, tourname
         sc = SideComp(event=tournament.url, name="A", type="DUELING")
         db.session.add(sc)
         db.session.flush()
-        db.session.add(SideCompRegistration(comp=sc.id, player=target.id, entry_number=1))
+        db.session.add(SideCompRegistration(comp=sc.id, player=target.id, entry_number=1, weapon=0))
         db.session.commit()
         comp_id = sc.id
         tournament_url = tournament.url
@@ -1211,14 +1217,15 @@ def test_route_eligible_players_marks_sidecomp_registered_players(app, client, t
         sc = SideComp(event=tournament.url, name="A", type="DUELING")
         db.session.add(sc)
         db.session.flush()
-        db.session.add(SideCompRegistration(comp=sc.id, player=p1.id, entry_number=1))
+        db.session.add(SideCompRegistration(comp=sc.id, player=p1.id, entry_number=1, weapon=0))
         db.session.commit()
         comp_id = sc.id
         login_as(client, to_user)
 
     resp = client.get(f"/_api/sidecomps/{comp_id}/eligible-players")
     assert resp.status_code == 200
-    rows_by_id = {row["player_id"]: row for row in resp.get_json()}
+    payload = resp.get_json()
+    rows_by_id = {row["player_id"]: row for row in payload["players"]}
     assert set(rows_by_id) == {"p1", "p2"}
     assert rows_by_id["p1"]["sidecomp_registered"] is True
     assert rows_by_id["p1"]["entry_number"] == 1
@@ -1292,6 +1299,88 @@ def test_route_eligible_players_returns_league_scoped_registrations(app, client,
 
     resp = client.get(f"/_api/sidecomps/{comp_id}/eligible-players")
     assert resp.status_code == 200
-    rows = resp.get_json()
+    rows = resp.get_json()["players"]
     assert [row["player_id"] for row in rows] == ["lg_p1"]
     assert rows[0]["team_pseudonym"] == "LG Pseudonym"
+
+
+def test_register_player_requires_valid_weapon(test_db, tournament):
+    p = _make_player()
+    _confirm_event_registration(tournament.url, p.id)
+    sc = SideComp(event=tournament.url, name="A", type="DUELING", registration_open=True)
+    db.session.add(sc)
+    db.session.commit()
+
+    from app.services.sidecomp_service import SideCompService
+
+    res = SideCompService.register_player(sc.id, player_id=p.id, weapon="NOT_A_WEAPON")
+    assert isinstance(res, Err)
+    assert res.unwrap_err().status_code == 400
+
+
+def test_register_player_rejects_disabled_weapon(test_db, tournament):
+    p = _make_player()
+    _confirm_event_registration(tournament.url, p.id)
+    sc = SideComp(event=tournament.url, name="A", type="DUELING", registration_open=True)
+    from app.domain.enums import Pompfen
+
+    sc.set_allowed_weapons([Pompfen.CHAIN])
+    db.session.add(sc)
+    db.session.commit()
+
+    from app.services.sidecomp_service import SideCompService
+
+    res = SideCompService.register_player(sc.id, player_id=p.id, weapon="LONG")
+    assert isinstance(res, Err)
+    assert res.unwrap_err().status_code == 400
+
+    ok = SideCompService.register_player(sc.id, player_id=p.id, weapon="CHAIN")
+    assert isinstance(ok, Ok)
+    assert ok.unwrap().weapon == Pompfen.CHAIN.value
+
+
+def test_update_allowed_weapons_deregisters_disabled(test_db, tournament):
+    to_user = _make_player("to_user", "TO User")
+    _make_to(tournament.url, to_user.id)
+    p1 = _make_player("p1", "P1")
+    p2 = _make_player("p2", "P2")
+    _confirm_event_registration(tournament.url, p1.id)
+    _confirm_event_registration(tournament.url, p2.id)
+    sc = SideComp(event=tournament.url, name="A", type="DUELING", registration_open=True)
+    db.session.add(sc)
+    db.session.flush()
+    from app.domain.enums import Pompfen
+
+    db.session.add(SideCompRegistration(comp=sc.id, player=p1.id, entry_number=1, weapon=Pompfen.CHAIN.value))
+    db.session.add(SideCompRegistration(comp=sc.id, player=p2.id, entry_number=2, weapon=Pompfen.LONG.value))
+    db.session.commit()
+
+    from app.services.sidecomp_service import SideCompService
+
+    res = SideCompService.update(
+        sc.id,
+        actor_user_id=to_user.id,
+        actor_user_type="player",
+        allowed_weapons=["CHAIN"],
+    )
+    assert isinstance(res, Ok)
+    remaining = SideCompRegistration.query.filter_by(comp=sc.id).all()
+    assert len(remaining) == 1
+    assert remaining[0].player == p1.id
+    assert remaining[0].weapon == Pompfen.CHAIN.value
+
+
+def test_update_player_weapon(test_db, tournament):
+    p = _make_player()
+    _confirm_event_registration(tournament.url, p.id)
+    sc = SideComp(event=tournament.url, name="A", type="DUELING", registration_open=True)
+    db.session.add(sc)
+    db.session.commit()
+
+    from app.domain.enums import Pompfen
+    from app.services.sidecomp_service import SideCompService
+
+    SideCompService.register_player(sc.id, player_id=p.id, weapon="CHAIN").unwrap()
+    res = SideCompService.update_player_weapon(sc.id, player_id=p.id, weapon="STAFF")
+    assert isinstance(res, Ok)
+    assert res.unwrap().weapon == Pompfen.STAFF.value

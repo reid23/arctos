@@ -1695,7 +1695,13 @@ pub struct SideCompSummary {
     pub registrant_count: i64,
     #[serde(default)]
     pub registration_open: bool,
+    #[serde(default)]
+    pub allowed_weapons: Vec<String>,
     pub created_at: Option<String>,
+    #[serde(default)]
+    pub viewer_is_registered: bool,
+    pub viewer_entry_number: Option<i32>,
+    pub viewer_weapon: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1704,6 +1710,7 @@ pub struct SideCompRegistrant {
     pub player_name: String,
     #[serde(default)]
     pub entry_number: i32,
+    pub weapon: Option<String>,
     pub registered_at: Option<String>,
     pub registered_by_to: bool,
 }
@@ -1719,6 +1726,8 @@ pub struct SideCompDetail {
     pub description: Option<String>,
     #[serde(default)]
     pub registration_open: bool,
+    #[serde(default)]
+    pub allowed_weapons: Vec<String>,
     pub created_at: Option<String>,
     pub registrants: Vec<SideCompRegistrant>,
     #[serde(default)]
@@ -1727,6 +1736,8 @@ pub struct SideCompDetail {
     pub viewer_can_register: bool,
     #[serde(default)]
     pub viewer_is_registered_in_comp: bool,
+    pub viewer_entry_number: Option<i32>,
+    pub viewer_weapon: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1741,6 +1752,16 @@ pub struct EligiblePlayer {
     #[serde(default)]
     pub sidecomp_registered: bool,
     pub entry_number: Option<i32>,
+    pub weapon: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EligiblePlayersResponse {
+    pub players: Vec<EligiblePlayer>,
+    #[serde(default)]
+    pub allowed_weapons: Vec<String>,
+    #[serde(default)]
+    pub name: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1748,5 +1769,6 @@ pub struct SideCompRegisterPlayerResponse {
     pub player_id: String,
     pub player_name: String,
     pub entry_number: i32,
+    pub weapon: Option<String>,
     pub registered_at: Option<String>,
 }

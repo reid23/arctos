@@ -1,4 +1,5 @@
 use crate::api;
+use crate::components::{default_allowed_weapons, AllowedWeaponsCheckboxes};
 use crate::Route;
 use dioxus::prelude::*;
 
@@ -11,6 +12,7 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
     let mut type_ = use_signal(String::new);
     let mut description = use_signal(String::new);
     let mut registration_open = use_signal(|| false);
+    let mut allowed_weapons = use_signal(default_allowed_weapons);
     let mut initialised = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
 
@@ -20,9 +22,32 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
             type_.set(d.type_.clone());
             description.set(d.description.clone().unwrap_or_default());
             registration_open.set(d.registration_open);
+            if d.allowed_weapons.is_empty() {
+                allowed_weapons.set(Vec::new());
+            } else {
+                allowed_weapons.set(d.allowed_weapons.clone());
+            }
             initialised.set(true);
         }
     }
+
+    let disabled_warning_count = {
+        let selected = allowed_weapons();
+        match detail.read().as_ref() {
+            Some(Ok(d)) => {
+                let n = d
+                    .registrants
+                    .iter()
+                    .filter(|r| match r.weapon.as_deref() {
+                        Some(w) => !selected.iter().any(|s| s == w),
+                        None => true,
+                    })
+                    .count() as i32;
+                Some(n)
+            }
+            _ => None,
+        }
+    };
 
     let url_for_back = url.clone();
     let url_for_submit = url.clone();
@@ -47,6 +72,7 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
                         let t = type_();
                         let d = description();
                         let open = registration_open();
+                        let weapons = allowed_weapons();
                         error.set(None);
                         spawn(async move {
                             match api::sidecomp_update(
@@ -55,6 +81,7 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
                                 Some(&t),
                                 Some(&d),
                                 Some(open),
+                                Some(&weapons),
                             ).await {
                                 Ok(_) => {
                                     navigator.push(Route::SideCompDetail { url: url_inner, comp_id });
@@ -109,6 +136,10 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
                         div { class: "form-text",
                             "When off, only TO check-in can add players."
                         }
+                    }
+                    AllowedWeaponsCheckboxes {
+                        selected: allowed_weapons,
+                        disabled_warning_count,
                     }
                     if let Some(err) = error() {
                         div { class: "alert alert-danger", "{err}" }

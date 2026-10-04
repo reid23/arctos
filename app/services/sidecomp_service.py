@@ -7,7 +7,7 @@ registration. Mirrors the style of :class:`~app.services.registration_service.Re
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 from app.error_values import Err, Ok, Result, allow_Q
 from app.exceptions import (
@@ -19,7 +19,7 @@ from app.exceptions import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover
-    from app.domain.enums import SideCompType
+    from app.domain.enums import Pompfen, SideCompType
     from models import SideComp, SideCompRegistration, Tournament
 
 
@@ -38,6 +38,46 @@ def _parse_type(value: object) -> Optional["SideCompType"]:
         return SideCompType(str(value))
     except ValueError:
         return None
+
+
+def _parse_weapon(value: object) -> Optional["Pompfen"]:
+    """Parse *value* into a :class:`~app.domain.enums.Pompfen` member.
+
+    Accepts a member instance, enum name (``\"CHAIN\"``), or integer value.
+    Returns ``None`` if *value* is not a valid pompfen.
+    """
+    from app.domain.enums import Pompfen
+
+    if value is None:
+        return None
+    if isinstance(value, Pompfen):
+        return value
+    by_name = Pompfen.from_name(value)
+    if by_name is not None:
+        return by_name
+    return Pompfen.from_value(value)
+
+
+def _parse_allowed_weapons(value: object) -> Optional[List["Pompfen"]]:
+    """Parse a list of weapon names/values into :class:`Pompfen` members.
+
+    Returns ``None`` if *value* is not a list or contains any invalid entry.
+    An empty list is valid (no weapons enabled).
+    """
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        return None
+    out: List["Pompfen"] = []
+    seen: set["Pompfen"] = set()
+    for item in value:
+        parsed = _parse_weapon(item)
+        if parsed is None:
+            return None
+        if parsed not in seen:
+            out.append(parsed)
+            seen.add(parsed)
+    return out
 
 
 @dataclass(frozen=True)
@@ -70,6 +110,7 @@ class SideCompService:
         *,
         comp_id: int,
         player_id: str,
+        weapon: "Pompfen",
         registered_by_to: bool,
     ) -> "SideCompRegistration":
         """Insert a SideCompRegistration with a fresh entry_number.
@@ -89,6 +130,7 @@ class SideCompService:
                 comp=comp_id,
                 player=player_id,
                 entry_number=entry_number,
+                weapon=weapon.value,
                 registered_by_to=registered_by_to,
             )
             db.session.add(reg)
@@ -129,6 +171,15 @@ class SideCompService:
         return None
 
     @staticmethod
+    def _validate_weapon_for_comp(sc: "SideComp", weapon: "Pompfen") -> Result[None, ArctosError]:
+        allowed = sc.get_allowed_weapons()
+        if not allowed:
+            return Err(ValidationError("This side competition has no weapons enabled for registration"))
+        if weapon not in allowed:
+            return Err(ValidationError("Selected weapon is not enabled for this side competition"))
+        return Ok(None)
+
+    @staticmethod
     @allow_Q
     def create(
         tournament_url: str,
@@ -138,6 +189,7 @@ class SideCompService:
         name: str,
         type: str,
         description: Optional[str] = None,
+        allowed_weapons: Optional[list] = None,
     ) -> Result["SideComp", ArctosError]:
         """Create a new side competition for *tournament_url*.
 
@@ -149,6 +201,8 @@ class SideCompService:
             type: One of the :class:`~app.domain.enums.SideCompType` values.
             description: Optional free-form description. Empty/whitespace
                 strings are treated as ``None``.
+            allowed_weapons: Optional list of :class:`~app.domain.enums.Pompfen`
+                names. Defaults to all pompfen options when omitted.
 
         Returns:
             :class:`~app.error_values.Ok` wrapping the persisted
@@ -156,6 +210,7 @@ class SideCompService:
             describing the failure (tournament not found, actor not a TO,
             invalid name, or invalid type).
         """
+        from app.domain.enums import Pompfen
         from models import SideComp, db
 
         SideCompService._get_tournament(tournament_url).Q()
@@ -174,12 +229,20 @@ class SideCompService:
             stripped = description.strip()
             description_value = stripped if stripped else None
 
+        if allowed_weapons is None:
+            parsed_weapons = list(Pompfen)
+        else:
+            parsed_weapons = _parse_allowed_weapons(allowed_weapons)
+            if parsed_weapons is None:
+                return Err(ValidationError("Invalid allowed_weapons"))
+
         sc = SideComp(
             event=tournament_url,
             name=name_value,
             type=parsed_type,
             description=description_value,
         )
+        sc.set_allowed_weapons(parsed_weapons)
         db.session.add(sc)
         db.session.commit()
         return Ok(sc)
@@ -237,8 +300,12 @@ class SideCompService:
         type: Optional[str] = None,
         description: Optional[str] = None,
         registration_open: Optional[bool] = None,
+        allowed_weapons: Optional[list] = None,
     ) -> Result["SideComp", ArctosError]:
         """Update fields of an existing side competition.
+
+        When ``allowed_weapons`` is provided, any registrants whose selected
+        weapon is no longer enabled are deregistered.
 
         Args:
             comp_id: Primary key of the :class:`~app.models.sidecomp.SideComp`.
@@ -252,6 +319,8 @@ class SideCompService:
                 untouched. An empty/whitespace string clears it to ``None``.
             registration_open: New value for the registration-open gate. If
                 ``None``, the field is left untouched.
+            allowed_weapons: New list of enabled :class:`~app.domain.enums.Pompfen`
+                names. If ``None``, the field is left untouched.
 
         Returns:
             :class:`~app.error_values.Ok` wrapping the updated
@@ -259,7 +328,7 @@ class SideCompService:
             :class:`~app.error_values.Err` describing the failure (comp not
             found, actor not a TO, invalid name, or invalid type).
         """
-        from models import SideComp, db
+        from models import SideComp, SideCompRegistration, db
 
         sc = SideComp.query.get(comp_id)
         if sc is None:
@@ -285,6 +354,20 @@ class SideCompService:
 
         if registration_open is not None:
             sc.registration_open = bool(registration_open)
+
+        if allowed_weapons is not None:
+            parsed_weapons = _parse_allowed_weapons(allowed_weapons)
+            if parsed_weapons is None:
+                return Err(ValidationError("Invalid allowed_weapons"))
+            allowed_values = {w.value for w in parsed_weapons}
+            if not allowed_values:
+                SideCompRegistration.query.filter_by(comp=comp_id).delete(synchronize_session=False)
+            else:
+                SideCompRegistration.query.filter(
+                    SideCompRegistration.comp == comp_id,
+                    ~SideCompRegistration.weapon.in_(allowed_values),
+                ).delete(synchronize_session=False)
+            sc.set_allowed_weapons(parsed_weapons)
 
         db.session.commit()
         return Ok(sc)
@@ -329,12 +412,14 @@ class SideCompService:
         comp_id: int,
         *,
         player_id: str,
+        weapon: object,
     ) -> Result["SideCompRegistration", ArctosError]:
         """Register *player_id* for side competition *comp_id* (self-registration).
 
         Args:
             comp_id: Primary key of the :class:`~app.models.sidecomp.SideComp`.
             player_id: ID of the player registering themselves.
+            weapon: Selected :class:`~app.domain.enums.Pompfen` name or value.
 
         Returns:
             :class:`~app.error_values.Ok` wrapping the persisted
@@ -363,9 +448,15 @@ class SideCompService:
         if existing:
             return Err(ValidationError("You are already registered for this side competition"))
 
+        parsed_weapon = _parse_weapon(weapon)
+        if parsed_weapon is None:
+            return Err(ValidationError("A valid weapon selection is required"))
+        SideCompService._validate_weapon_for_comp(sc, parsed_weapon).Q()
+
         reg = SideCompService._insert_registration_with_entry_number(
             comp_id=comp_id,
             player_id=player_id,
+            weapon=parsed_weapon,
             registered_by_to=False,
         )
         return Ok(reg)
@@ -378,6 +469,7 @@ class SideCompService:
         actor_user_id: str,
         actor_user_type: str,
         player_id: str,
+        weapon: object,
     ) -> Result["SideCompRegistration", ArctosError]:
         """Register *player_id* for side competition *comp_id* via TO-driven registration.
 
@@ -391,6 +483,7 @@ class SideCompService:
                 Must be a TO of the parent event.
             actor_user_type: ``"player"`` or ``"team"``.
             player_id: ID of the player being registered on their behalf.
+            weapon: Selected :class:`~app.domain.enums.Pompfen` name or value.
 
         Returns:
             :class:`~app.error_values.Ok` wrapping the persisted
@@ -423,11 +516,77 @@ class SideCompService:
         if existing:
             return Err(ValidationError("Player is already registered for this side competition"))
 
+        parsed_weapon = _parse_weapon(weapon)
+        if parsed_weapon is None:
+            return Err(ValidationError("A valid weapon selection is required"))
+        SideCompService._validate_weapon_for_comp(sc, parsed_weapon).Q()
+
         reg = SideCompService._insert_registration_with_entry_number(
             comp_id=comp_id,
             player_id=player_id,
+            weapon=parsed_weapon,
             registered_by_to=True,
         )
+        return Ok(reg)
+
+    @staticmethod
+    @allow_Q
+    def update_player_weapon(
+        comp_id: int,
+        *,
+        player_id: str,
+        weapon: object,
+    ) -> Result["SideCompRegistration", ArctosError]:
+        """Update *player_id*'s selected weapon for side competition *comp_id*."""
+        from models import SideComp, SideCompRegistration, db
+
+        sc = SideComp.query.get(comp_id)
+        if sc is None:
+            return Err(NotFoundError("Side competition not found"))
+
+        reg = SideCompRegistration.query.filter_by(comp=comp_id, player=player_id).first()
+        if reg is None:
+            return Err(NotFoundError("Registration not found"))
+
+        parsed_weapon = _parse_weapon(weapon)
+        if parsed_weapon is None:
+            return Err(ValidationError("A valid weapon selection is required"))
+        SideCompService._validate_weapon_for_comp(sc, parsed_weapon).Q()
+
+        reg.weapon = parsed_weapon.value
+        db.session.commit()
+        return Ok(reg)
+
+    @staticmethod
+    @allow_Q
+    def update_player_weapon_as_to(
+        comp_id: int,
+        *,
+        actor_user_id: str,
+        actor_user_type: str,
+        player_id: str,
+        weapon: object,
+    ) -> Result["SideCompRegistration", ArctosError]:
+        """TO-driven update of *player_id*'s selected weapon."""
+        from models import SideComp, SideCompRegistration, db
+
+        sc = SideComp.query.get(comp_id)
+        if sc is None:
+            return Err(NotFoundError("Side competition not found"))
+
+        SideCompService._require_to(sc.event, actor_user_id, actor_user_type).Q()
+
+        reg = SideCompRegistration.query.filter_by(comp=comp_id, player=player_id).first()
+        if reg is None:
+            return Err(NotFoundError("Registration not found"))
+
+        parsed_weapon = _parse_weapon(weapon)
+        if parsed_weapon is None:
+            return Err(ValidationError("A valid weapon selection is required"))
+        SideCompService._validate_weapon_for_comp(sc, parsed_weapon).Q()
+
+        reg.weapon = parsed_weapon.value
+        db.session.commit()
         return Ok(reg)
 
     @staticmethod

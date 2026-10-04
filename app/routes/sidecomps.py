@@ -13,12 +13,47 @@ from app.utils.user_helpers import is_player
 bp = Blueprint("sidecomps", __name__, url_prefix="/_api")
 
 
+def _sc_summary(sc, *, registrant_count=None, viewer_reg=None):
+    payload = {
+        "id": sc.id,
+        "name": sc.name,
+        "type": str(sc.type),
+        "registration_open": bool(sc.registration_open),
+        "allowed_weapons": sc.allowed_weapon_names(),
+        "created_at": sc.created_at.isoformat() if sc.created_at else None,
+    }
+    if registrant_count is not None:
+        payload["registrant_count"] = registrant_count
+    if viewer_reg is not None:
+        payload["viewer_is_registered"] = True
+        payload["viewer_entry_number"] = viewer_reg.entry_number
+        payload["viewer_weapon"] = viewer_reg.weapon_name()
+    else:
+        payload["viewer_is_registered"] = False
+        payload["viewer_entry_number"] = None
+        payload["viewer_weapon"] = None
+    return payload
+
+
+def _sc_payload(sc):
+    return {
+        "id": sc.id,
+        "event": sc.event,
+        "name": sc.name,
+        "type": str(sc.type),
+        "description": sc.description,
+        "registration_open": bool(sc.registration_open),
+        "allowed_weapons": sc.allowed_weapon_names(),
+        "created_at": sc.created_at.isoformat() if sc.created_at else None,
+    }
+
+
 @bp.route("/<tournament_url>/sidecomps", methods=["GET"])
 def list_for_event(tournament_url: str):
     """Public: list side competitions for a tournament.
 
-    Returns a JSON array of summaries:
-    ``[{id, name, type, registrant_count, created_at}, ...]``.
+    Returns a JSON array of summaries including viewer registration context
+    when the current user is a registered player.
     """
     from sqlalchemy import func
     from models import SideComp, SideCompRegistration, db
@@ -31,15 +66,19 @@ def list_for_event(tournament_url: str):
         .order_by(SideComp.created_at.asc())
         .all()
     )
+
+    viewer_regs_by_comp = {}
+    if current_user.is_authenticated and is_player(current_user):
+        comp_ids = [sc.id for sc, _ in rows]
+        if comp_ids:
+            for reg in SideCompRegistration.query.filter(
+                SideCompRegistration.comp.in_(comp_ids),
+                SideCompRegistration.player == current_user.id,
+            ).all():
+                viewer_regs_by_comp[reg.comp] = reg
+
     out = [
-        {
-            "id": sc.id,
-            "name": sc.name,
-            "type": str(sc.type),
-            "registrant_count": count,
-            "registration_open": bool(sc.registration_open),
-            "created_at": sc.created_at.isoformat() if sc.created_at else None,
-        }
+        _sc_summary(sc, registrant_count=count, viewer_reg=viewer_regs_by_comp.get(sc.id))
         for sc, count in rows
     ]
     return jsonify(out)
@@ -49,27 +88,29 @@ def _detail_payload(sc, registrants):
     viewer_is_to = False
     viewer_can_register = False
     viewer_is_registered_in_comp = False
+    viewer_entry_number = None
+    viewer_weapon = None
     if current_user.is_authenticated:
         viewer_is_to = PermissionService.is_tournament_organizer(sc.event, current_user)
         if is_player(current_user):
-            viewer_is_registered_in_comp = any(reg.player == current_user.id for reg, _ in registrants)
+            for reg, _ in registrants:
+                if reg.player == current_user.id:
+                    viewer_is_registered_in_comp = True
+                    viewer_entry_number = reg.entry_number
+                    viewer_weapon = reg.weapon_name()
+                    break
             if not viewer_is_registered_in_comp and sc.registration_open:
                 event_reg = SideCompService._confirmed_player_registration_for_tournament(sc.event, current_user.id)
                 viewer_can_register = event_reg is not None
 
     return {
-        "id": sc.id,
-        "event": sc.event,
-        "name": sc.name,
-        "type": str(sc.type),
-        "description": sc.description,
-        "registration_open": bool(sc.registration_open),
-        "created_at": sc.created_at.isoformat() if sc.created_at else None,
+        **_sc_payload(sc),
         "registrants": [
             {
                 "player_id": reg.player,
                 "player_name": (player.name if player else reg.player),
                 "entry_number": reg.entry_number,
+                "weapon": reg.weapon_name(),
                 "registered_at": reg.registered_at.isoformat() if reg.registered_at else None,
                 "registered_by_to": bool(reg.registered_by_to),
             }
@@ -78,6 +119,8 @@ def _detail_payload(sc, registrants):
         "viewer_is_to": viewer_is_to,
         "viewer_can_register": viewer_can_register,
         "viewer_is_registered_in_comp": viewer_is_registered_in_comp,
+        "viewer_entry_number": viewer_entry_number,
+        "viewer_weapon": viewer_weapon,
     }
 
 
@@ -102,19 +145,9 @@ def create(tournament_url: str):
         name=data.get("name", ""),
         type=data.get("type", ""),
         description=data.get("description"),
+        allowed_weapons=data.get("allowed_weapons"),
     )
-    return json_from_result(
-        res,
-        ok_to_payload=lambda sc: {
-            "id": sc.id,
-            "event": sc.event,
-            "name": sc.name,
-            "type": str(sc.type),
-            "description": sc.description,
-            "registration_open": bool(sc.registration_open),
-            "created_at": sc.created_at.isoformat() if sc.created_at else None,
-        },
-    )
+    return json_from_result(res, ok_to_payload=_sc_payload)
 
 
 @bp.route("/sidecomps/<int:comp_id>", methods=["PATCH"])
@@ -132,6 +165,7 @@ def update(comp_id: int):
         type=data.get("type"),
         description=data.get("description"),
         registration_open=data.get("registration_open"),
+        allowed_weapons=data.get("allowed_weapons"),
     )
     return json_from_result(
         res,
@@ -142,6 +176,7 @@ def update(comp_id: int):
             "type": str(sc.type),
             "description": sc.description,
             "registration_open": bool(sc.registration_open),
+            "allowed_weapons": sc.allowed_weapon_names(),
         },
     )
 
@@ -160,17 +195,51 @@ def delete(comp_id: int):
 
 @bp.route("/sidecomps/<int:comp_id>/register", methods=["POST"])
 @login_required
+@require_json_body()
 def player_register(comp_id: int):
     """Player self-registration for a side competition."""
     if not is_player(current_user):
         return jsonify({"success": False, "error": "Only players can register"}), 403
 
-    res = SideCompService.register_player(comp_id, player_id=current_user.id)
+    data = g.json_body
+    res = SideCompService.register_player(
+        comp_id,
+        player_id=current_user.id,
+        weapon=data.get("weapon"),
+    )
     return json_from_result(
         res,
         ok_to_payload=lambda reg: {
             "comp": reg.comp,
             "player_id": reg.player,
+            "entry_number": reg.entry_number,
+            "weapon": reg.weapon_name(),
+            "registered_at": reg.registered_at.isoformat() if reg.registered_at else None,
+        },
+    )
+
+
+@bp.route("/sidecomps/<int:comp_id>/registration", methods=["PATCH"])
+@login_required
+@require_json_body()
+def player_update_registration(comp_id: int):
+    """Player self-update of selected weapon for a side competition."""
+    if not is_player(current_user):
+        return jsonify({"success": False, "error": "Only players can update their registration"}), 403
+
+    data = g.json_body
+    res = SideCompService.update_player_weapon(
+        comp_id,
+        player_id=current_user.id,
+        weapon=data.get("weapon"),
+    )
+    return json_from_result(
+        res,
+        ok_to_payload=lambda reg: {
+            "comp": reg.comp,
+            "player_id": reg.player,
+            "entry_number": reg.entry_number,
+            "weapon": reg.weapon_name(),
             "registered_at": reg.registered_at.isoformat() if reg.registered_at else None,
         },
     )
@@ -202,6 +271,7 @@ def register_player_as_to(comp_id: int):
         actor_user_id=current_user.id,
         actor_user_type=current_user_type(),
         player_id=player_id,
+        weapon=data.get("weapon"),
     )
 
     def _checkin_payload(reg):
@@ -212,10 +282,44 @@ def register_player_as_to(comp_id: int):
             "player_id": reg.player,
             "player_name": player.name if player else reg.player,
             "entry_number": reg.entry_number,
+            "weapon": reg.weapon_name(),
             "registered_at": reg.registered_at.isoformat() if reg.registered_at else None,
         }
 
     return json_from_result(res, ok_to_payload=_checkin_payload)
+
+
+@bp.route("/sidecomps/<int:comp_id>/update-player-as-to", methods=["POST"])
+@login_required
+@require_json_body()
+def update_player_as_to(comp_id: int):
+    """TO-only: update a player's selected weapon on their behalf."""
+    data = g.json_body
+    player_id = (data.get("player_id") or "").strip()
+    if not player_id:
+        return jsonify({"success": False, "error": "player_id is required"}), 400
+
+    res = SideCompService.update_player_weapon_as_to(
+        comp_id,
+        actor_user_id=current_user.id,
+        actor_user_type=current_user_type(),
+        player_id=player_id,
+        weapon=data.get("weapon"),
+    )
+
+    def _payload(reg):
+        from models import Player
+
+        player = Player.query.get(reg.player)
+        return {
+            "player_id": reg.player,
+            "player_name": player.name if player else reg.player,
+            "entry_number": reg.entry_number,
+            "weapon": reg.weapon_name(),
+            "registered_at": reg.registered_at.isoformat() if reg.registered_at else None,
+        }
+
+    return json_from_result(res, ok_to_payload=_payload)
 
 
 @bp.route("/sidecomps/<int:comp_id>/deregister-player-as-to", methods=["POST"])
@@ -289,7 +393,9 @@ def eligible_players(comp_id: int):
             "jersey_name": er.jersey_name,
             "sidecomp_registered": er.player in sidecomp_regs,
             "entry_number": sidecomp_regs[er.player].entry_number if er.player in sidecomp_regs else None,
+            "weapon": sidecomp_regs[er.player].weapon_name() if er.player in sidecomp_regs else None,
         }
         for er in event_regs
     ]
-    return jsonify(out)
+    # Also return the side comp's allowed weapons for the registration modal.
+    return jsonify({"players": out, "allowed_weapons": sc.allowed_weapon_names(), "name": sc.name})

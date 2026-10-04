@@ -1,4 +1,5 @@
 use crate::api;
+use crate::components::{default_allowed_weapons, AllowedWeaponsCheckboxes};
 use crate::Route;
 use dioxus::prelude::*;
 
@@ -8,6 +9,7 @@ pub fn SideCompNew(url: String) -> Element {
     let mut name = use_signal(String::new);
     let mut type_ = use_signal(|| "DUELING".to_string());
     let mut description = use_signal(String::new);
+    let mut allowed_weapons = use_signal(default_allowed_weapons);
     let mut error = use_signal(|| None::<String>);
     let mut submitting = use_signal(|| false);
 
@@ -36,10 +38,17 @@ pub fn SideCompNew(url: String) -> Element {
                         let t = type_();
                         let d = description();
                         let d_opt = if d.trim().is_empty() { None } else { Some(d) };
+                        let weapons = allowed_weapons();
                         submitting.set(true);
                         error.set(None);
                         spawn(async move {
-                            match api::sidecomp_create(&url_inner, &n, &t, d_opt.as_deref()).await {
+                            match api::sidecomp_create(
+                                &url_inner,
+                                &n,
+                                &t,
+                                d_opt.as_deref(),
+                                Some(&weapons),
+                            ).await {
                                 Ok(_) => {
                                     navigator.push(Route::TournamentHomeWithTab {
                                         url: url_inner,
@@ -84,6 +93,7 @@ pub fn SideCompNew(url: String) -> Element {
                         }
                         div { class: "form-text", "Optional. Shown on the side competition page." }
                     }
+                    AllowedWeaponsCheckboxes { selected: allowed_weapons }
                     if let Some(err) = error() {
                         div { class: "alert alert-danger", "{err}" }
                     }
