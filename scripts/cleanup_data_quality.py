@@ -212,7 +212,6 @@ DEDUPE_RULES: Sequence[DedupeRule] = (
     DedupeRule(table="matches", columns=("name", "event"), id_column="uuid", child_handling="reassign"),
     DedupeRule(table="tags", columns=("name", "event")),
     DedupeRule(table="fields", columns=("name", "event")),
-    DedupeRule(table="sidecompresults", columns=("comp", "player")),
     DedupeRule(table="players", columns=("email",), child_handling="refuse"),
     DedupeRule(table="teams", columns=("email",), child_handling="refuse"),
 )

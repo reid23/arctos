@@ -83,10 +83,7 @@ def list_for_event(tournament_url: str):
             ).all():
                 viewer_regs_by_comp[reg.comp] = reg
 
-    out = [
-        _sc_summary(sc, registrant_count=count, viewer_reg=viewer_regs_by_comp.get(sc.id))
-        for sc, count in rows
-    ]
+    out = [_sc_summary(sc, registrant_count=count, viewer_reg=viewer_regs_by_comp.get(sc.id)) for sc, count in rows]
     return jsonify(out)
 
 

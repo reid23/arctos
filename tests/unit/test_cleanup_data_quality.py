@@ -53,7 +53,6 @@ def _drop_unique_indexes_for_dirty_seeding():
         "uq_tags_name_event",
         "uq_fields_name_event",
         "uq_headrefs_player_event",
-        "uq_sidecompresults_comp_player",
     ):
         db.session.execute(sa.text(f"DROP INDEX IF EXISTS {ix}"))
     db.session.commit()

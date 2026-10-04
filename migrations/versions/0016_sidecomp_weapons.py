@@ -21,9 +21,7 @@ down_revision: Union[str, Sequence[str], None] = "0015_script_vars_cascade"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-_DEFAULT_ALLOWED = (
-    '["CHAIN","LONG","QTIP","STAFF","BOARD","FLOURENTINE","SKULL","UNARMED"]'
-)
+_DEFAULT_ALLOWED = '["CHAIN","LONG","QTIP","STAFF","BOARD","FLOURENTINE","SKULL","UNARMED"]'
 
 
 def upgrade() -> None:

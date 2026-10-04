@@ -105,6 +105,7 @@ def _resolve_team_short_label(
         return "merc"
     return _team_display_short(shortname, team_name)
 
+
 @dataclass(frozen=True)
 class SideCompService:
     """Side competition workflows. Static methods, namespace dataclass."""
@@ -794,9 +795,7 @@ class SideCompService:
             return Err(NotFoundError("Tournament not found"))
 
         regs = (
-            SideCompRegistration.query.filter_by(comp=comp_id)
-            .order_by(SideCompRegistration.entry_number.asc())
-            .all()
+            SideCompRegistration.query.filter_by(comp=comp_id).order_by(SideCompRegistration.entry_number.asc()).all()
         )
         if not regs:
             return Ok(
@@ -1004,7 +1003,9 @@ class SideCompService:
                 "jersey_name": event_reg.jersey_name if event_reg else None,
                 "jersey_number": event_reg.jersey_number if event_reg else None,
                 "team_shortname": shortname,
-                "team_profile_photo": teams_by_id[team_id].profile_photo if team_id and team_id in teams_by_id else None,
+                "team_profile_photo": teams_by_id[team_id].profile_photo
+                if team_id and team_id in teams_by_id
+                else None,
                 "wins": wins,
                 "rank": rank,
             }

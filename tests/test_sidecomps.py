@@ -1447,7 +1447,6 @@ def test_update_player_weapon(test_db, tournament):
 
 
 def test_log_result_and_standings(test_db, tournament):
-    from app.domain.enums import Pompfen
     from app.services.sidecomp_service import SideCompService
 
     p = _make_player()
@@ -1490,7 +1489,6 @@ def test_log_result_rejects_when_inactive(test_db, tournament):
 
 
 def test_chain_breaking_standings_split_and_top_n(test_db, tournament):
-    from app.domain.enums import Pompfen
     from app.services.sidecomp_service import SideCompService
 
     chain = _make_player("chain_p", "Chain")

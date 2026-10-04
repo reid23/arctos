@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import List, Optional
+from typing import List
 
 from app.domain.enums import Pompfen, SideCompType
 from app.models.base import db
