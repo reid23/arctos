@@ -3,6 +3,7 @@ use crate::api;
 use crate::components::{ALL_POMPFEN, PompfenIcon};
 use crate::types::{SideCompStandingRow, SideCompStandingTable};
 use dioxus::prelude::*;
+#[cfg(target_arch = "wasm32")]
 use gloo_timers::callback::Interval;
 
 fn photo_src(path: &Option<String>) -> Option<String> {
@@ -163,6 +164,7 @@ pub fn SideCompResults(url: String, comp_id: i32) -> Element {
     });
 
     use_effect(move || {
+        #[cfg(target_arch = "wasm32")]
         if !poll_started() {
             let mut tick = tick;
             let handle = Interval::new(1000, move || {
@@ -170,6 +172,10 @@ pub fn SideCompResults(url: String, comp_id: i32) -> Element {
             });
             poll_started.set(true);
             std::mem::forget(handle);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = (&tick, &poll_started);
         }
     });
 

@@ -92,6 +92,7 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
     // Keep the newest history entry visible on the right; older entries overflow left.
     use_effect(move || {
         let _len = history().len();
+        #[cfg(target_arch = "wasm32")]
         spawn(async move {
             gloo_timers::future::TimeoutFuture::new(0).await;
             if let Some(window) = web_sys::window() {
