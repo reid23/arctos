@@ -13,6 +13,7 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
     let mut description = use_signal(String::new);
     let mut registration_open = use_signal(|| false);
     let mut active = use_signal(|| false);
+    let mut finalized = use_signal(|| false);
     let mut allowed_weapons = use_signal(default_allowed_weapons);
     let mut top_n_text = use_signal(String::new);
     let mut initialised = use_signal(|| false);
@@ -25,6 +26,7 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
             description.set(d.description.clone().unwrap_or_default());
             registration_open.set(d.registration_open);
             active.set(d.active);
+            finalized.set(d.finalized);
             if d.allowed_weapons.is_empty() {
                 allowed_weapons.set(Vec::new());
             } else {
@@ -168,6 +170,7 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
                             r#type: "checkbox",
                             id: "active-toggle",
                             checked: active(),
+                            disabled: finalized(),
                             onchange: move |evt| active.set(evt.checked()),
                         }
                         label {
@@ -176,8 +179,15 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
                             "Active"
                         }
                         div { class: "form-text",
-                            "When off, results cannot be entered."
+                            if finalized() {
+                                "Results are finalized; this side competition cannot be activated again."
+                            } else {
+                                "When off, results cannot be entered."
+                            }
                         }
+                    }
+                    if finalized() {
+                        div { class: "alert alert-secondary", "Results have been finalized." }
                     }
                     AllowedWeaponsCheckboxes {
                         selected: allowed_weapons,

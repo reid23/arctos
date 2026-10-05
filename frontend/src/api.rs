@@ -3463,6 +3463,44 @@ pub async fn sidecomp_flag_result(result_uuid: &str, flagged: bool) -> Result<Si
     response_json(r).await
 }
 
+pub async fn sidecomp_set_result_valid(
+    result_uuid: &str,
+    valid: bool,
+) -> Result<SideCompResultEntry, String> {
+    let c = client();
+    let body = serde_json::json!({ "valid": valid });
+    let r = with_credentials(
+        c.patch(format!("{}/_api/sidecomps/results/{}", base(), result_uuid))
+            .json(&body),
+    )
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
+pub async fn sidecomp_manage_results(comp_id: i32) -> Result<SideCompManageResults, String> {
+    let c = client();
+    let r = with_credentials(c.get(format!(
+        "{}/_api/sidecomps/{}/manage-results",
+        base(),
+        comp_id
+    )))
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
+pub async fn sidecomp_finalize(comp_id: i32) -> Result<Value, String> {
+    let c = client();
+    let r = with_credentials(c.post(format!("{}/_api/sidecomps/{}/finalize", base(), comp_id)))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
 pub async fn sidecomp_standings(comp_id: i32) -> Result<SideCompStandings, String> {
     let c = client();
     let r = with_credentials(c.get(format!(

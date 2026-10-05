@@ -115,6 +115,8 @@ enum Route {
     #[route("/:url/sidecomps/:comp_id/results")]
     SideCompResults { url: String, comp_id: i32 },
 
+    #[route("/:url/sidecomps/:comp_id/manage-results")]
+    SideCompManageResults { url: String, comp_id: i32 },
 
     #[route("/:url/manage")]
     Manage { url: String },

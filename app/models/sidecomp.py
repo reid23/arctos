@@ -34,6 +34,9 @@ class SideComp(db.Model):
             ``False`` (default), only TO can add registrants.
         active: When ``True``, signed-in users may log results; when
             ``False`` (default), result logging is rejected.
+        finalized: When ``True``, results are locked as final: the
+            competition cannot be activated again, and the public results
+            page is labeled Final rather than Unofficial. Irreversible.
         allowed_weapons: JSON-encoded list of :class:`Pompfen` member names
             that players may select when registering. Defaults to all.
         only_show_top_n_results: When ``None``, the results page shows all
@@ -52,6 +55,7 @@ class SideComp(db.Model):
     description = db.Column(db.Text, nullable=True)
     registration_open = db.Column(db.Boolean, nullable=False, default=False)
     active = db.Column(db.Boolean, nullable=False, default=False)
+    finalized = db.Column(db.Boolean, nullable=False, default=False)
     allowed_weapons = db.Column(
         db.Text,
         nullable=False,

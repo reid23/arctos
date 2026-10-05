@@ -1698,6 +1698,8 @@ pub struct SideCompSummary {
     #[serde(default)]
     pub active: bool,
     #[serde(default)]
+    pub finalized: bool,
+    #[serde(default)]
     pub allowed_weapons: Vec<String>,
     pub only_show_top_n_results: Option<i32>,
     #[serde(default)]
@@ -1733,6 +1735,8 @@ pub struct SideCompDetail {
     pub registration_open: bool,
     #[serde(default)]
     pub active: bool,
+    #[serde(default)]
+    pub finalized: bool,
     #[serde(default)]
     pub allowed_weapons: Vec<String>,
     pub only_show_top_n_results: Option<i32>,
@@ -1858,8 +1862,47 @@ pub struct SideCompStandings {
     pub name: String,
     #[serde(rename = "type")]
     pub type_: String,
+    #[serde(default)]
+    pub finalized: bool,
     pub only_show_top_n_results: Option<i32>,
     #[serde(default)]
     pub results_page_enabled: bool,
     pub tables: Vec<SideCompStandingTable>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SideCompManageResultRow {
+    pub uuid: String,
+    pub comp: i32,
+    pub player: i32,
+    pub opponent: Option<i32>,
+    pub stamp: Option<String>,
+    pub points: i32,
+    #[serde(rename = "ref")]
+    pub result_ref: String,
+    #[serde(default)]
+    pub flagged: bool,
+    #[serde(default = "default_true")]
+    pub valid: bool,
+    pub entry_number: Option<i32>,
+    pub weapon: Option<String>,
+    pub player_id: Option<String>,
+    #[serde(default)]
+    pub display_name: String,
+    pub jersey_name: Option<String>,
+    pub jersey_number: Option<String>,
+    pub team_shortname: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SideCompManageResults {
+    pub id: i32,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub type_: String,
+    #[serde(default)]
+    pub active: bool,
+    #[serde(default)]
+    pub finalized: bool,
+    pub results: Vec<SideCompManageResultRow>,
 }

@@ -20,6 +20,7 @@ def _sc_summary(sc, *, registrant_count=None, viewer_reg=None):
         "type": str(sc.type),
         "registration_open": bool(sc.registration_open),
         "active": bool(sc.active),
+        "finalized": bool(sc.finalized),
         "allowed_weapons": sc.allowed_weapon_names(),
         "only_show_top_n_results": sc.only_show_top_n_results,
         "results_page_enabled": sc.results_page_enabled(),
@@ -47,6 +48,7 @@ def _sc_payload(sc):
         "description": sc.description,
         "registration_open": bool(sc.registration_open),
         "active": bool(sc.active),
+        "finalized": bool(sc.finalized),
         "allowed_weapons": sc.allowed_weapon_names(),
         "only_show_top_n_results": sc.only_show_top_n_results,
         "results_page_enabled": sc.results_page_enabled(),
@@ -188,6 +190,7 @@ def update(comp_id: int):
             "description": sc.description,
             "registration_open": bool(sc.registration_open),
             "active": bool(sc.active),
+            "finalized": bool(sc.finalized),
             "allowed_weapons": sc.allowed_weapon_names(),
             "only_show_top_n_results": sc.only_show_top_n_results,
             "results_page_enabled": sc.results_page_enabled(),
@@ -451,10 +454,19 @@ def log_result(comp_id: int):
 @login_required
 @require_json_body()
 def patch_result(result_uuid: str):
-    """Authenticated: update flagged (and later other) fields on a result."""
+    """Update flagged (any signed-in user) or valid (TO-only) on a result."""
     data = g.json_body
+    if "valid" in data:
+        res = SideCompService.set_result_valid(
+            result_uuid,
+            valid=bool(data.get("valid")),
+            actor_user_id=current_user.id,
+            actor_user_type=current_user_type(),
+        )
+        return json_from_result(res, ok_to_payload=lambda result: result.to_payload())
+
     if "flagged" not in data:
-        return jsonify({"success": False, "error": "flagged is required"}), 400
+        return jsonify({"success": False, "error": "flagged or valid is required"}), 400
 
     res = SideCompService.set_result_flagged(
         result_uuid,
@@ -462,6 +474,37 @@ def patch_result(result_uuid: str):
         actor_user_id=current_user.id,
     )
     return json_from_result(res, ok_to_payload=lambda result: result.to_payload())
+
+
+@bp.route("/sidecomps/<int:comp_id>/manage-results", methods=["GET"])
+@login_required
+def manage_results(comp_id: int):
+    """TO-only: chronological list of every logged point for management."""
+    res = SideCompService.manage_results(
+        comp_id,
+        actor_user_id=current_user.id,
+        actor_user_type=current_user_type(),
+    )
+    return json_from_result(res, ok_to_payload=lambda payload: payload)
+
+
+@bp.route("/sidecomps/<int:comp_id>/finalize", methods=["POST"])
+@login_required
+def finalize(comp_id: int):
+    """TO-only: permanently finalize side-comp results."""
+    res = SideCompService.finalize(
+        comp_id,
+        actor_user_id=current_user.id,
+        actor_user_type=current_user_type(),
+    )
+    return json_from_result(
+        res,
+        ok_to_payload=lambda sc: {
+            "id": sc.id,
+            "active": bool(sc.active),
+            "finalized": bool(sc.finalized),
+        },
+    )
 
 
 @bp.route("/sidecomps/<int:comp_id>/standings", methods=["GET"])

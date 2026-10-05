@@ -16,6 +16,7 @@ pub fn SideCompDetail(url: String, comp_id: i32) -> Element {
     let url_for_register = url.clone();
     let url_for_enter = url.clone();
     let url_for_results = url.clone();
+    let url_for_manage = url.clone();
     let signed_in = matches!(me.read().as_ref(), Some(Ok(_)));
 
     rsx! {
@@ -34,6 +35,7 @@ pub fn SideCompDetail(url: String, comp_id: i32) -> Element {
                         let viewer_is_registered_in_comp = d.viewer_is_registered_in_comp;
                         let registration_open = d.registration_open;
                         let active = d.active;
+                        let finalized = d.finalized;
                         let description = d.description.clone();
                         let allowed_weapons = d.allowed_weapons.clone();
                         let comp_name = d.name.clone();
@@ -48,10 +50,8 @@ pub fn SideCompDetail(url: String, comp_id: i32) -> Element {
                                 } else {
                                     span { class: "badge bg-secondary me-2", "Closed" }
                                 }
-                                if active {
-                                    span { class: "badge bg-success", "Active" }
-                                } else {
-                                    span { class: "badge bg-secondary", "Inactive" }
+                                if finalized {
+                                    span { class: "badge bg-dark", "Finalized" }
                                 }
                             }
                             if let Some(desc) = description.as_ref() {
@@ -68,8 +68,13 @@ pub fn SideCompDetail(url: String, comp_id: i32) -> Element {
                                     }
                                     Link {
                                         to: Route::SideCompRegisterAsTo { url: url_for_register.clone(), comp_id },
-                                        class: "btn btn-outline-primary",
+                                        class: "btn btn-outline-primary me-2",
                                         "Quick Register players"
+                                    }
+                                    Link {
+                                        to: Route::SideCompManageResults { url: url_for_manage.clone(), comp_id },
+                                        class: "btn btn-outline-warning",
+                                        "Manage results"
                                     }
                                 }
                             }

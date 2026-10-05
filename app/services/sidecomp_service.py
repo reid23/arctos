@@ -398,7 +398,10 @@ class SideCompService:
             sc.registration_open = bool(registration_open)
 
         if active is not None:
-            sc.active = bool(active)
+            want_active = bool(active)
+            if want_active and sc.finalized:
+                return Err(ValidationError("This side competition has been finalized and cannot be reactivated"))
+            sc.active = want_active
 
         if allowed_weapons is not None:
             parsed_weapons = _parse_allowed_weapons(allowed_weapons)
@@ -885,6 +888,9 @@ class SideCompService:
         if sc is None:
             return Err(NotFoundError("Side competition not found"))
 
+        if sc.finalized:
+            return Err(ValidationError("This side competition has been finalized; results cannot be entered"))
+
         if not sc.active:
             return Err(ValidationError("This side competition is not active; results cannot be entered"))
 
@@ -923,6 +929,151 @@ class SideCompService:
         result.flagged = bool(flagged)
         db.session.commit()
         return Ok(result)
+
+    @staticmethod
+    @allow_Q
+    def set_result_valid(
+        result_uuid: str,
+        *,
+        valid: bool,
+        actor_user_id: str,
+        actor_user_type: str,
+    ) -> Result["SideCompResult", ArctosError]:
+        """TO-only: toggle whether a result counts toward standings."""
+        from models import SideComp, SideCompResult, db
+
+        result = SideCompResult.query.get(result_uuid)
+        if result is None:
+            return Err(NotFoundError("Result not found"))
+
+        sc = SideComp.query.get(result.comp)
+        if sc is None:
+            return Err(NotFoundError("Side competition not found"))
+
+        SideCompService._require_to(sc.event, actor_user_id, actor_user_type).Q()
+
+        result.valid = bool(valid)
+        db.session.commit()
+        return Ok(result)
+
+    @staticmethod
+    @allow_Q
+    def finalize(
+        comp_id: int,
+        *,
+        actor_user_id: str,
+        actor_user_type: str,
+    ) -> Result["SideComp", ArctosError]:
+        """TO-only: permanently mark results as final.
+
+        Requires the side competition to be inactive. Once finalized, it
+        cannot be reactivated and the flag cannot be cleared.
+        """
+        from models import SideComp, db
+
+        sc = SideComp.query.get(comp_id)
+        if sc is None:
+            return Err(NotFoundError("Side competition not found"))
+
+        SideCompService._require_to(sc.event, actor_user_id, actor_user_type).Q()
+
+        if sc.finalized:
+            return Err(ValidationError("This side competition has already been finalized"))
+
+        if sc.active:
+            return Err(ValidationError("Deactivate the side competition before finalizing results"))
+
+        sc.finalized = True
+        db.session.commit()
+        return Ok(sc)
+
+    @staticmethod
+    @allow_Q
+    def manage_results(
+        comp_id: int,
+        *,
+        actor_user_id: str,
+        actor_user_type: str,
+    ) -> Result[dict, ArctosError]:
+        """TO-only: every logged point for *comp_id*, oldest first."""
+        from app.domain.enums import RegistrationStatus
+        from app.services.registration_resolver import (
+            player_registrations_for_tournament,
+            team_registrations_for_tournament,
+        )
+        from models import Player, SideComp, SideCompRegistration, SideCompResult, Team, Tournament
+
+        sc = SideComp.query.get(comp_id)
+        if sc is None:
+            return Err(NotFoundError("Side competition not found"))
+
+        SideCompService._require_to(sc.event, actor_user_id, actor_user_type).Q()
+
+        tournament = Tournament.query.get(sc.event)
+        regs = {r.id: r for r in SideCompRegistration.query.filter_by(comp=comp_id).all()}
+        player_ids = [r.player for r in regs.values()]
+        players_by_id = {p.id: p for p in Player.query.filter(Player.id.in_(player_ids)).all()} if player_ids else {}
+
+        event_regs = {}
+        team_shortnames = {}
+        team_pseudonyms = {}
+        teams_by_id = {}
+        if tournament is not None and player_ids:
+            for er in player_registrations_for_tournament(tournament, statuses=[RegistrationStatus.CONFIRMED]):
+                if er.player in players_by_id:
+                    event_regs[er.player] = er
+            team_ids = {er.team for er in event_regs.values() if er.team}
+            if team_ids:
+                teams_by_id = {t.id: t for t in Team.query.filter(Team.id.in_(team_ids)).all()}
+                for tr in team_registrations_for_tournament(tournament):
+                    if tr.team in team_ids:
+                        team_shortnames[tr.team] = tr.shortname
+                        team_pseudonyms[tr.team] = tr.pseudonym
+
+        results_out = []
+        rows = (
+            SideCompResult.query.filter_by(comp=comp_id)
+            .order_by(SideCompResult.stamp.asc(), SideCompResult.uuid.asc())
+            .all()
+        )
+        for result in rows:
+            reg = regs.get(result.player)
+            player_id = reg.player if reg else None
+            player = players_by_id.get(player_id) if player_id else None
+            event_reg = event_regs.get(player_id) if player_id else None
+            team_id = event_reg.team if event_reg else None
+            team = teams_by_id.get(team_id) if team_id else None
+            display_team_name = None
+            if team_id:
+                display_team_name = team_pseudonyms.get(team_id) or (team.name if team else None)
+            shortname = _resolve_team_short_label(
+                team_id=team_id,
+                shortname=team_shortnames.get(team_id) if team_id else None,
+                team_name=display_team_name,
+            )
+            results_out.append(
+                {
+                    **result.to_payload(),
+                    "entry_number": reg.entry_number if reg else None,
+                    "weapon": reg.weapon_name() if reg else None,
+                    "player_id": player_id,
+                    "display_name": player.name if player else (player_id or ""),
+                    "jersey_name": event_reg.jersey_name if event_reg else None,
+                    "jersey_number": event_reg.jersey_number if event_reg else None,
+                    "team_shortname": shortname,
+                }
+            )
+
+        return Ok(
+            {
+                "id": sc.id,
+                "name": sc.name,
+                "type": str(sc.type),
+                "active": bool(sc.active),
+                "finalized": bool(sc.finalized),
+                "results": results_out,
+            }
+        )
 
     @staticmethod
     def standings(comp_id: int) -> Result[dict, ArctosError]:
@@ -1036,6 +1187,7 @@ class SideCompService:
                 "id": sc.id,
                 "name": sc.name,
                 "type": str(sc.type),
+                "finalized": bool(sc.finalized),
                 "only_show_top_n_results": sc.only_show_top_n_results,
                 "results_page_enabled": sc.results_page_enabled(),
                 "tables": tables,

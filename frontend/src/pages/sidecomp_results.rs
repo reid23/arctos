@@ -192,8 +192,13 @@ pub fn SideCompResults(url: String, comp_id: i32) -> Element {
                         } else {
                             let tables = data.tables.clone();
                             let name = data.name.clone();
+                            let title = if data.finalized {
+                                format!("{name} - Results (Final)")
+                            } else {
+                                format!("{name} - Results (Unofficial)")
+                            };
                             rsx! {
-                                h1 { "{name} results" }
+                                h1 { "{title}" }
                                 for table in tables.into_iter() {
                                     StandingsTableView { key: "{table.id}", table }
                                 }

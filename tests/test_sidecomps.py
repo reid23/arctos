@@ -1538,3 +1538,97 @@ def test_only_show_top_n_zero_hides_results_page(test_db, tournament):
 
     standings = SideCompService.standings(sc.id).unwrap()
     assert standings["results_page_enabled"] is False
+
+
+def test_invalid_results_excluded_from_standings(test_db, tournament):
+    from app.services.sidecomp_service import SideCompService
+
+    to_user = _make_player("to_user", "TO User")
+    _make_to(tournament.url, to_user.id)
+    p = _make_player()
+    _confirm_event_registration(tournament.url, p.id)
+    sc = SideComp(event=tournament.url, name="Duel", type="DUELING", registration_open=True, active=True)
+    db.session.add(sc)
+    db.session.commit()
+
+    reg = SideCompService.register_player(sc.id, player_id=p.id, weapon="LONG").unwrap()
+    r1 = SideCompService.log_result(sc.id, registration_id=reg.id, points=1, ref_user_id="ref").unwrap()
+    SideCompService.log_result(sc.id, registration_id=reg.id, points=1, ref_user_id="ref").unwrap()
+
+    SideCompService.set_result_valid(
+        r1.uuid,
+        valid=False,
+        actor_user_id=to_user.id,
+        actor_user_type="player",
+    ).unwrap()
+
+    standings = SideCompService.standings(sc.id).unwrap()
+    assert standings["finalized"] is False
+    assert standings["tables"][0]["rows"][0]["wins"] == 1
+
+
+def test_finalize_requires_inactive_and_is_irreversible(test_db, tournament):
+    from app.error_values import Err
+    from app.services.sidecomp_service import SideCompService
+
+    to_user = _make_player("to_user", "TO User")
+    _make_to(tournament.url, to_user.id)
+    sc = SideComp(event=tournament.url, name="Duel", type="DUELING", active=True)
+    db.session.add(sc)
+    db.session.commit()
+
+    res = SideCompService.finalize(sc.id, actor_user_id=to_user.id, actor_user_type="player")
+    assert isinstance(res, Err)
+    assert "deactivate" in str(res.unwrap_err()).lower()
+
+    SideCompService.update(
+        sc.id,
+        actor_user_id=to_user.id,
+        actor_user_type="player",
+        active=False,
+    ).unwrap()
+
+    SideCompService.finalize(sc.id, actor_user_id=to_user.id, actor_user_type="player").unwrap()
+    db.session.refresh(sc)
+    assert sc.finalized is True
+
+    res = SideCompService.update(
+        sc.id,
+        actor_user_id=to_user.id,
+        actor_user_type="player",
+        active=True,
+    )
+    assert isinstance(res, Err)
+    assert "finalized" in str(res.unwrap_err()).lower()
+
+    res = SideCompService.finalize(sc.id, actor_user_id=to_user.id, actor_user_type="player")
+    assert isinstance(res, Err)
+    assert "already" in str(res.unwrap_err()).lower()
+
+    standings = SideCompService.standings(sc.id).unwrap()
+    assert standings["finalized"] is True
+
+
+def test_manage_results_lists_chronological_points(test_db, tournament):
+    from app.services.sidecomp_service import SideCompService
+
+    to_user = _make_player("to_user", "TO User")
+    _make_to(tournament.url, to_user.id)
+    p = _make_player()
+    _confirm_event_registration(tournament.url, p.id)
+    sc = SideComp(event=tournament.url, name="Duel", type="DUELING", registration_open=True, active=True)
+    db.session.add(sc)
+    db.session.commit()
+
+    reg = SideCompService.register_player(sc.id, player_id=p.id, weapon="LONG").unwrap()
+    SideCompService.log_result(sc.id, registration_id=reg.id, points=1, ref_user_id="ref-a").unwrap()
+    SideCompService.log_result(sc.id, registration_id=reg.id, points=-1, ref_user_id="ref-b").unwrap()
+
+    payload = SideCompService.manage_results(sc.id, actor_user_id=to_user.id, actor_user_type="player").unwrap()
+    assert payload["name"] == "Duel"
+    assert payload["finalized"] is False
+    assert len(payload["results"]) == 2
+    assert payload["results"][0]["points"] == 1
+    assert payload["results"][1]["points"] == -1
+    assert payload["results"][0]["entry_number"] == reg.entry_number
+    assert payload["results"][0]["weapon"] == "LONG"
