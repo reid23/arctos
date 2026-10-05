@@ -7,7 +7,7 @@ which stores values as strings.
 
 from __future__ import annotations
 
-from enum import StrEnum
+from enum import Enum, StrEnum
 from typing import TypeVar
 
 from app.error_values import Null, Option, Some
@@ -168,6 +168,43 @@ class SideCompType(StrEnum):
     DUELING = "DUELING"
     CHAIN_BREAKING = "CHAIN_BREAKING"
     OTHER = "OTHER"
+
+
+class Pompfen(Enum):
+    """Weapon / pompfen role a player can select when registering for a side comp."""
+
+    CHAIN = 0
+    LONG = 1
+    QTIP = 2
+    STAFF = 3
+    BOARD = 4
+    FLOURENTINE = 5
+    SKULL = 6
+    UNARMED = 7
+
+    @classmethod
+    def from_name(cls, value: object) -> Pompfen | None:
+        """Parse a case-sensitive enum name (e.g. ``\"CHAIN\"``) into a member."""
+        if value is None:
+            return None
+        if isinstance(value, cls):
+            return value
+        try:
+            return cls[str(value)]
+        except KeyError:
+            return None
+
+    @classmethod
+    def from_value(cls, value: object) -> Pompfen | None:
+        """Parse an integer enum value into a member."""
+        if value is None:
+            return None
+        if isinstance(value, cls):
+            return value
+        try:
+            return cls(int(value))
+        except (TypeError, ValueError):
+            return None
 
 
 class WinnerSide(StrEnum):

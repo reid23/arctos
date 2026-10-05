@@ -66,6 +66,9 @@ fn page_title_for_route(route: &Route) -> String {
         Route::SideCompDetail { url, .. } => format!("{url} Side Competition"),
         Route::SideCompEdit { url, .. } => format!("{url} Edit Side Competition"),
         Route::SideCompRegisterAsTo { url, .. } => format!("{url} Side Competition Quick Register"),
+        Route::SideCompEnterResults { url, .. } => format!("{url} Enter Results"),
+        Route::SideCompResults { url, .. } => format!("{url} Side Comp Results"),
+        Route::SideCompManageResults { url, .. } => format!("{url} Manage Side Comp Results"),
     }
 }
 
@@ -89,8 +92,14 @@ pub fn Layout() -> Element {
     let page_title = format!("{} | Arctos", page_title_for_route(&route));
 
     // Scoreboard is embedded elsewhere (e.g. OBS); render only the raw scoreboard, no nav/footer.
-    if matches!(route, Route::Scoreboard { .. }) {
-        return rsx! { Outlet::<Route> {} };
+    // Enter-results is a mobile scoring surface — same minimal chrome.
+    if matches!(route, Route::Scoreboard { .. } | Route::SideCompEnterResults { .. }) {
+        return rsx! {
+            Title { "{page_title}" }
+            link { rel: "stylesheet", href: "https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" }
+            link { rel: "stylesheet", href: "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" }
+            Outlet::<Route> {}
+        };
     }
 
     rsx! {

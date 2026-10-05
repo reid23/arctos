@@ -46,7 +46,7 @@ For TOs
     - [Joins](#joins)
     - [Ribbon Games](#ribbon-games)
 	- [Skip Conditions](#skip-conditions)
- - [YouTube Livestream Integration](#youtube-livestream-integration)
+ - [Side Comps](#side-comps)
  - [OBS Scoreboard Integration](#obs-scoreboard-integration)
  - [Recording Matches](#recording-matches)
 
@@ -644,23 +644,47 @@ teams.
 
 ---
 
-## YouTube Livestream Integration
+## Side Comps
 
-If you plan on live streaming the matches to youtube, Arctos can be
-configured to recognize this. If you do this, it will:
+Side comps are currently implemented in a very rudimentary state. They
+are currently able to run chain pits and bear pits, and just track the
+number of wins each player has.
 
-- show the relevant live stream on each match's page
-- after the match is complete, provide easy shortcuts to seek to the
-  start of each point.
+When players register for a side comp, they are given a number as
+their ID, and they must choose a pompf to play. The available pompfen
+are the normal weapons plus skull or unarmed (for extensibility to
+qwik competitions in the future). TOs have the option to
+enable/disable any of the pompf choices when configuring the side
+comp.
 
-Setup:
+TOs have three other settings: 
+1. registration open (can people register)
+2. active (can people submit results)
+3. number of results to make public
 
-  1. Go to the tournament's match setup page and configure fields
-  2. For each field that will be livestreamed, click "edit field" and
-     add all stream urls to the field. To get the embed link:
-   1. Go to your YouTube stream
-   2. Click **Share** → **Embed**
-   3. Copy the link inside the `src="..."` attribute of the embed code
+If the side comp is active, anyone who is logged in can submit results
+to the side comp. After the side comp is over, TOs may look through
+the results manually and invalidate any as they see fit. the user who
+submitted each score is recorded.
+
+While the side comp is in progress, the results page will update live
+with (unofficial) results. It nominally will show everyone, unless the
+TOs have restricted the view to only some top $n$ players.
+
+### Running a Side Comp
+
+During the side comp, refs are presented with a screen where they can
+enter player's ID numbers and increment or decrement their score. A
+history of recent actions is shown so that refs can see, for example,
+how many points in a row the last person has scored. Refs may click on
+entries in this history bar to flag them for review later.
+
+The philosophy here is that we should just get all the data and fix it
+later. if the ref adds an extra point on accident, they can just
+remove a point and it's fine. but anything more complicated than that
+is probably going to be more complicated and controversial than I want
+to deal with right now, so we can just have the TOs figure it out
+according to whatever rules they'd like.
 
 ## OBS Scoreboard Integration
 
@@ -686,37 +710,3 @@ The scoreboard displays:
 The scoreboard automatically polls for updates and refreshes when
 match state changes. For stones matches, the countdown updates in
 real-time using the same synchronization system as the match pages.
-
-## Recording Matches
-
-!!! warning 
-    This feature is **still in development**. I cannot
-    guarantee any level of functionality. Please test thoroughly
-    before using. May only work with a specific set of browsers and/or
-    a specific set of hardware and OS version for the recording
-    phone. Video may be choppy if the phone is low on battery or not
-    sufficiently powerful.
-
-Live streaming matches can be very difficult in terms of bandwidth,
-not to mention that the best cameras that are easily accessible are
-phones, for which setting up streaming to an rtmp server and then
-pulling that to OBS is quite an involved process.
-
-If you're okay with the match videos not being available until after
-the match is complete, there's a much easier option. If you go to the
-setup matches page of your tournament, in the fields section, you can
-see buttons that say "Copy Recording URL" next to each field. Devices
-that go to these urls will automatically record and upload video of
-each match on the relevant field.
-
-This is possible because they only record points, not the entire
-match. This means that they can use the full match time to upload
-high-resolution video from just the points.
-
-When a match is completed, Arctos will clip the videos to the correct
-lengths to display a final video containing only the points. Note that
-this may take a while, since it involves re-encoding all of the video.
-
-If you want to add overlays like the scoreboard, you'll still need to
-run OBS and use a virtual camera setup to pass the feed to the
-recording page.

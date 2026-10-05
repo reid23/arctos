@@ -2,6 +2,7 @@ use crate::Route;
 use crate::api;
 use crate::components::{
     EditRegistrationContext, EditRegistrationModal, EventHeader, LeagueRegistrationButtons,
+    PompfenIcon,
 };
 use crate::types::{ToEntry, User};
 use dioxus::prelude::*;
@@ -315,15 +316,28 @@ fn TournamentHomeContent(url: String, initial_tab: Option<String>) -> Element {
                                                                     Link {
                                                                         to: Route::SideCompDetail { url: url.clone(), comp_id },
                                                                         class: "text-decoration-none text-reset p-3 flex-grow-1",
-                                                                        div {
+                                                                        div { class: "d-flex align-items-center flex-wrap gap-2",
                                                                             strong { "{row.name}" }
-                                                                            span { class: "badge bg-secondary ms-2", "{row.type_}" }
+                                                                            span { class: "badge bg-secondary", "{row.type_}" }
                                                                             if row.registration_open {
-                                                                                span { class: "badge bg-success ms-2", "Open" }
+                                                                                span { class: "badge bg-success", "Open" }
                                                                             } else {
-                                                                                span { class: "badge bg-secondary ms-2", "Closed" }
+                                                                                span { class: "badge bg-secondary", "Closed" }
                                                                             }
-                                                                            span { class: "text-muted ms-2", "({row.registrant_count} registered)" }
+                                                                            span { class: "text-muted", "({row.registrant_count} registered)" }
+                                                                            if row.viewer_is_registered {
+                                                                                span {
+                                                                                    class: "badge bg-success",
+                                                                                    if let Some(n) = row.viewer_entry_number {
+                                                                                        "Registered #{n}"
+                                                                                    } else {
+                                                                                        "Registered"
+                                                                                    }
+                                                                                }
+                                                                                if let Some(weapon) = row.viewer_weapon.as_ref() {
+                                                                                    PompfenIcon { weapon: weapon.clone(), size: "1.5em".to_string() }
+                                                                                }
+                                                                            }
                                                                         }
                                                                     }
                                                                     if viewer_is_to {

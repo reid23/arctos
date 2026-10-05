@@ -132,11 +132,6 @@ CHECKS: Sequence[DuplicateCheck] = (
         columns=("name", "event"),
         why="Match.field references fields by name string; duplicates are indistinguishable.",
     ),
-    DuplicateCheck(
-        table="sidecompresults",
-        columns=("comp", "player"),
-        why="A player should have one result per side competition.",
-    ),
 )
 
 
