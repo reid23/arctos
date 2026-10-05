@@ -89,8 +89,8 @@ pub fn About() -> Element {
                     div { class: "col-md-4 mb-3",
                         div { class: "card h-100 border-0 shadow-sm",
                             div { class: "card-body",
-                                h5 { class: "card-title", i { class: "fas fa-video text-danger" } " YouTube Live Integration" }
-                                p { class: "card-text text-muted", "Automatically scrub to points in live streams for easy footage analysis." }
+                                h5 { class: "card-title", i { class: "fas fa-list-ol text-danger" } " Side Comp Managment" }
+                                p { class: "card-text text-muted", "Registraion and live results for several common individual competitions (bear pit, chain pit)." }
                             }
                         }
                     }
