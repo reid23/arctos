@@ -1,6 +1,7 @@
 #![allow(non_snake_case)]
 
 mod api;
+mod appearance;
 mod components;
 mod display;
 mod pages;
@@ -47,6 +48,9 @@ enum Route {
 
     #[route("/leagues/new")]
     NewLeague {},
+
+    #[route("/leagues/:league_url?:tab")]
+    LeagueHomeWithTab { league_url: String, tab: String },
 
     #[route("/leagues/:league_url")]
     LeagueHome { league_url: String },
@@ -160,11 +164,17 @@ enum Route {
     #[route("/players")]
     PlayersList {},
 
+    #[route("/players/:id?:tab")]
+    PlayerProfilePageWithTab { id: String, tab: String },
+
     #[route("/players/:id")]
     PlayerProfilePage { id: String },
 
     #[route("/teams")]
     TeamsList {},
+
+    #[route("/teams/:id?:tab")]
+    TeamProfilePageWithTab { id: String, tab: String },
 
     #[route("/teams/:id")]
     TeamProfilePage { id: String },
@@ -210,6 +220,9 @@ enum Route {
 
     #[route("/oauth/authorize")]
     OAuthAuthorize {},
+
+    #[route("/:..segments")]
+    NotFound { segments: Vec<String> },
 }
 
 /// The page's path and query string (without `?`) as it was loaded. The router

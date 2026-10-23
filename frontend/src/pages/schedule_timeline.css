@@ -1,5 +1,17 @@
 /* Schedule Timeline Styles */
 
+/* Dependency colors convey different relationships, independently of palette. */
+.schedule-keyboard-focus {
+    --schedule-dep-chain: #2563eb;
+    --schedule-dep-team: #15803d;
+    --schedule-dep-ref: #c2410c;
+}
+[data-bs-theme="dark"] .schedule-keyboard-focus {
+    --schedule-dep-chain: #93c5fd;
+    --schedule-dep-team: #86efac;
+    --schedule-dep-ref: #fdba74;
+}
+
 /* Focusable container for keyboard shortcuts; hide outline so it doesn't look selected */
 .schedule-keyboard-focus:focus {
     outline: none;
@@ -9,21 +21,21 @@
     width: 100%;
     display: flex;
     flex-direction: column;
-    border: 1px solid #ddd;
+    border: 1px solid var(--ui-border);
     border-radius: 4px;
-    background: white;
+    background: var(--ui-surface);
     max-height: 85vh;
 }
 
 .schedule-timeline-nav {
     flex-shrink: 0;
     padding: 0.5rem;
-    border-bottom: 1px solid #ddd;
+    border-bottom: 1px solid var(--ui-border);
     display: flex;
     align-items: center;
     gap: 0.5rem;
     flex-wrap: wrap;
-    background: #f8f9fa;
+    background: var(--ui-surface-muted);
 }
 
 /* Only this area scrolls vertically; no horizontal scrollbar */
@@ -57,7 +69,7 @@
     /* Larger time scale */
     --slot-height: 7rem; /* ~100px */
     --header-height: 56px;
-    background-color: #ffffff;
+    background-color: var(--ui-surface);
     /*
      * Half-hour bands on the grid (not per-cell). Offset by header height so
      * stripes line up with body rows. Cells themselves stay transparent so they
@@ -65,8 +77,8 @@
      */
     background-image: linear-gradient(
         to bottom,
-        #ffffff 50%,
-        #f3f4f6 50%
+        var(--ui-surface) 50%,
+        var(--ui-surface-muted) 50%
     );
     background-size: 100% calc(var(--slot-height) * 2);
     background-position: 0 var(--header-height);
@@ -76,8 +88,8 @@
 .schedule-timeline-header {
     display: contents;
     font-weight: 600;
-    background: #f8f9fa;
-    border-bottom: 2px solid #ddd;
+    background: var(--ui-surface-muted);
+    border-bottom: 2px solid var(--ui-border);
 }
 
 .schedule-timeline-header > div {
@@ -85,13 +97,13 @@
     top: 0;
     z-index: 30;
     padding: 0.5rem 0.6rem;
-    border-right: 1px solid #ddd;
-    border-bottom: 2px solid #ddd;
+    border-right: 1px solid var(--ui-border);
+    border-bottom: 2px solid var(--ui-border);
     font-size: clamp(13px, 2vw, 15px);
     min-height: var(--header-height);
     display: flex;
     align-items: center;
-    background: #f8f9fa;
+    background: var(--ui-surface-muted);
 }
 
 .schedule-timeline-time-col {
@@ -99,16 +111,16 @@
     left: 0;
     /* Solid so sticky labels stay readable over stripes + overlapping events.
      * Above joins (25) so they slide under the gutter on horizontal scroll. */
-    background: #ffffff !important;
+    background: var(--ui-surface) !important;
     z-index: 26;
-    border-right: 2px solid #ccc;
+    border-right: 2px solid var(--ui-border);
     font-weight: 500;
     font-size: clamp(13px, 2vw, 15px);
     padding: 0.4rem 0.5rem;
 }
 
 .schedule-timeline-header .schedule-timeline-time-col {
-    background: #f8f9fa !important;
+    background: var(--ui-surface-muted) !important;
     z-index: 31;
 }
 
@@ -121,8 +133,8 @@
 }
 
 .schedule-timeline-row > div {
-    border-right: 1px solid #ddd;
-    border-bottom: 1px solid #ddd;
+    border-right: 1px solid var(--ui-border);
+    border-bottom: 1px solid var(--ui-border);
     min-height: var(--slot-height);
     position: relative;
     /* Transparent so striped grid background shows through; never cover events. */
@@ -165,7 +177,7 @@
     padding-right: 2rem; /* leave room for corner status badge */
     margin: 0; /* horizontal inset handled via left/width calc in inline style */
     border-radius: 6px;
-    color: #111;
+    color: var(--ui-text);
     font-size: clamp(13px, 2vw, 16px);
     line-height: 1.35;
     overflow: hidden;
@@ -177,12 +189,12 @@
     display: flex;
     flex-direction: column;
     justify-content: center;
-    border: 1px solid rgba(0, 0, 0, 0.22);
+    border: 1px solid var(--ui-border);
     box-shadow: 0 1px 3px rgba(0,0,0,0.25);
     transition: opacity 0.2s, box-shadow 0.15s, transform 0.15s;
     z-index: 5;
     /* Opaque fill so stripes don't show through the card */
-    background-color: #ffffff;
+    background-color: var(--ui-surface);
 }
 
 /* Highlight whole block when team is playing – wide gradient tint */
@@ -226,7 +238,7 @@
 .schedule-timeline-event-refs {
     font-size: 0.85em;
     opacity: 0.9;
-    color: #555;
+    color: var(--ui-muted);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: normal;
@@ -259,7 +271,7 @@
     right: 0;
     top: 2px;
     height: 0;
-    border-top: 2px solid #333;
+    border-top: 2px solid var(--ui-text);
     z-index: 24;
 }
 
@@ -268,23 +280,23 @@
     z-index: 6;
     font-size: clamp(12px, 1.6vw, 14px);
     font-weight: 600;
-    color: #222;
-    background: rgba(255, 255, 255, 0.95);
+    color: var(--ui-text);
+    background: var(--ui-surface);
     padding: 0.2rem 0.5rem;
     border-radius: 4px;
-    border: 1px solid #666;
+    border: 1px solid var(--ui-muted);
     white-space: nowrap;
 }
 
 .schedule-timeline-join-pill {
     pointer-events: auto;
-    background: rgba(255, 255, 255, 0.95);
-    border: 1px solid #666;
+    background: var(--ui-surface);
+    border: 1px solid var(--ui-muted);
     border-radius: 999px;
     padding: 0.15rem 0.45rem;
     font-size: clamp(10px, 1.5vw, 12px);
     font-weight: 600;
-    color: #222;
+    color: var(--ui-text);
     white-space: nowrap;
     cursor: pointer;
 }
@@ -302,8 +314,8 @@
     border-radius: 4px;
     font-size: 0.7em;
     font-weight: 600;
-    color: #111;
-    border: 1px solid rgba(0, 0, 0, 0.2);
+    color: var(--ui-text);
+    border: 1px solid var(--ui-border);
     text-transform: none;
     white-space: nowrap;
     line-height: 1.2;
@@ -316,19 +328,19 @@
     border-radius: 999px;
     font-size: 0.85em;
     font-weight: 600;
-    color: #111;
-    border: 1px solid rgba(0, 0, 0, 0.15);
+    color: var(--ui-text);
+    border: 1px solid var(--ui-border);
     text-transform: none;
     white-space: nowrap;
 }
 
-/* Tag, reference/link, and ribbon SVG icons – Bootstrap primary blue (#0d6efd) */
+/* Tag, reference/link, and ribbon SVG icons. */
 .icon-primary-svg {
     width: 1em;
     height: 1em;
     object-fit: contain;
     vertical-align: -0.15em;
-    filter: invert(27%) sepia(98%) saturate(2476%) hue-rotate(226deg) brightness(99%) contrast(101%);
+    filter: var(--ui-icon-filter, none);
 }
 
 /* Ribbon game indicator: bottom-right corner, tooltip on hover */
@@ -350,7 +362,7 @@
     width: 1em;
     height: 1em;
     object-fit: contain;
-    filter: invert(27%) sepia(98%) saturate(2476%) hue-rotate(226deg) brightness(99%) contrast(101%);
+    filter: var(--ui-icon-filter, none);
 }
 
 /* Now line (Google Calendar–style) across the multi-field schedule */
@@ -359,7 +371,7 @@
     left: 0;
     right: 0;
     height: 0;
-    border-top: 2px solid #dc3545;
+    border-top: 2px solid var(--bs-danger-text-emphasis);
     z-index: 40;
     pointer-events: none;
 }
@@ -370,8 +382,8 @@
     top: -0.85rem;
     font-size: 0.7rem;
     font-weight: 700;
-    color: #dc3545;
-    background: rgba(255, 255, 255, 0.9);
+    color: var(--bs-danger-text-emphasis);
+    background: var(--ui-surface);
     padding: 0 0.25rem;
     border-radius: 2px;
     line-height: 1;
@@ -384,7 +396,7 @@
     right: 0;
     top: var(--header-height);
     bottom: 0;
-    background: rgba(13, 110, 253, 0.05);
+    background: rgba(var(--ui-accent-rgb), 0.05);
     pointer-events: none;
     z-index: 10;
 }
@@ -398,8 +410,8 @@
     margin: 0 auto;
     padding: 0.5rem 1rem;
     border-radius: 4px;
-    background: rgba(255, 255, 255, 0.9);
-    color: #6c757d;
+    background: var(--ui-surface);
+    color: var(--ui-muted);
     font-weight: 500;
 }
 
@@ -407,14 +419,14 @@
 .schedule-timeline-empty-message {
     padding: 3rem 1rem;
     text-align: center;
-    color: #6c757d;
+    color: var(--ui-muted);
     font-weight: 500;
 }
 
 /* BREAK / JOIN: stable neutral look, no lifecycle chrome */
 .schedule-timeline-event--structural {
     border-style: dashed;
-    color: #495057;
+    color: var(--ui-muted);
     box-shadow: none;
 }
 
@@ -422,10 +434,10 @@
     opacity: 0.55;
     background: repeating-linear-gradient(
         -45deg,
-        #f8f9fa,
-        #f8f9fa 6px,
-        #e9ecef 6px,
-        #e9ecef 12px
+        var(--ui-surface-muted),
+        var(--ui-surface-muted) 6px,
+        var(--ui-surface-hover) 6px,
+        var(--ui-surface-hover) 12px
     );
     border-style: dashed;
 }
@@ -461,7 +473,7 @@
 
 .schedule-timeline-event-meta .schedule-timeline-event-field {
     font-size: 0.85em;
-    color: #555;
+    color: var(--ui-muted);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -472,7 +484,7 @@
 .schedule-timeline-event-meta .schedule-timeline-event-start {
     font-size: 0.85em;
     font-weight: 600;
-    color: #333;
+    color: var(--ui-text);
     font-variant-numeric: tabular-nums;
 }
 
@@ -562,6 +574,7 @@
     min-width: 120px;
     padding: 0.2rem 0;
     background: transparent;
+    color: var(--ui-text);
 }
 
 .team-token-chip {
@@ -571,13 +584,13 @@
     padding: 0.2rem 0.4rem;
     border-radius: 4px;
     font-size: 0.9em;
-    background: #e9ecef;
-    border: 1px solid #dee2e6;
+    background: var(--ui-surface-hover);
+    border: 1px solid var(--ui-border);
 }
 
 .team-token-chip-focused {
-    border-color: #0d6efd;
-    box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.25);
+    border-color: var(--ui-link);
+    box-shadow: 0 0 0 0.2rem rgba(var(--ui-accent-rgb), 0.25);
 }
 
 .team-token-chip-team .team-token-avatar {
@@ -587,15 +600,15 @@
     width: 1.4em;
     height: 1.4em;
     border-radius: 50%;
-    background: #6c757d;
-    color: white;
+    background: var(--ui-surface-hover);
+    color: var(--ui-text);
     font-size: 0.75em;
     font-weight: 600;
 }
 
 .team-token-chip-tag {
-    background: #e7f1ff;
-    border-color: #b6d4fe;
+    background: var(--ui-accent-soft);
+    border-color: var(--ui-link);
 }
 
 .team-token-chip-tag .team-token-icon,
@@ -605,8 +618,8 @@
 
 .team-token-chip-winner .team-token-badge,
 .winner-badge {
-    background: #198754;
-    color: white;
+    background: var(--bs-success-bg-subtle);
+    color: var(--bs-success-text-emphasis);
     padding: 0.1rem 0.35rem;
     border-radius: 3px;
     font-size: 0.75em;
@@ -615,8 +628,8 @@
 
 .team-token-chip-loser .team-token-badge,
 .loser-badge {
-    background: #dc3545;
-    color: white;
+    background: var(--bs-danger-bg-subtle);
+    color: var(--bs-danger-text-emphasis);
     padding: 0.1rem 0.35rem;
     border-radius: 3px;
     font-size: 0.75em;
@@ -631,13 +644,13 @@
     margin-left: 0.2rem;
     font-size: 1.1em;
     line-height: 1;
-    color: #6c757d;
+    color: var(--ui-muted);
     border-radius: 2px;
 }
 
 .team-token-remove:hover {
-    color: #dc3545;
-    background: #f8d7da;
+    color: var(--bs-danger-text-emphasis);
+    background: var(--bs-danger-bg-subtle);
 }
 
 .team-token-autocomplete {
@@ -680,7 +693,7 @@
 .ass-entry-editor {
     position: relative;
     /* Solid fill so a transparent textarea still looks like a form control. */
-    background-color: var(--bs-body-bg, #fff);
+    background-color: var(--bs-body-bg, var(--ui-surface));
     border-radius: 0.375rem;
 }
 
@@ -716,11 +729,11 @@
     color: transparent;
 }
 
-/* Matched pair — soft blue wash + outline so both ends read as a pair. */
+/* Matched pair — accent wash + outline so both ends read as a pair. */
 .ass-entry-bracket-match {
-    background-color: rgba(13, 110, 253, 0.28);
+    background-color: rgba(var(--ui-accent-rgb), 0.28);
     border-radius: 2px;
-    box-shadow: 0 0 0 1px rgba(13, 110, 253, 0.55);
+    box-shadow: 0 0 0 1px rgba(var(--ui-accent-rgb), 0.55);
 }
 
 /* Unmatched bracket — red so it's obvious something is wrong. */
@@ -751,8 +764,8 @@
     overflow-y: auto;
     margin-top: 2px;
     padding: 0.15rem 0;
-    background: white;
-    border: 1px solid #dee2e6;
+    background: var(--ui-surface);
+    border: 1px solid var(--ui-border);
     border-radius: 4px;
     box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
     list-style: none;
@@ -775,13 +788,13 @@
 }
 
 .ass-entry-ac-item-active {
-    background: #0d6efd;
-    color: white;
+    background: var(--ui-accent);
+    color: var(--ui-accent-contrast);
 }
 
 .ass-entry-ac-item-active .text-muted,
 .ass-entry-ac-item-active .ass-entry-ac-fn-desc {
-    color: rgba(255, 255, 255, 0.85) !important;
+    color: var(--ui-accent-contrast) !important;
 }
 
 .ass-entry-ac-fn-name {
@@ -812,14 +825,14 @@
     gap: 0.25rem;
     align-items: center;
     padding: 0.25rem 0.4rem;
-    background: #f8f9fa;
+    background: var(--ui-surface-muted);
     border-radius: 4px;
-    border: 1px dashed #ced4da;
+    border: 1px dashed var(--ui-border);
 }
 
 .ass-entry-preview-text {
     font-family: var(--bs-font-monospace, monospace);
-    color: #495057;
+    color: var(--ui-muted);
     white-space: pre;
 }
 
@@ -836,13 +849,13 @@
 }
 
 .team-token-chip-match {
-    background: #fff3cd;
-    border-color: #ffe69c;
+    background: var(--bs-warning-bg-subtle);
+    border-color: var(--bs-warning-border-subtle);
 }
 
 .ass-entry-preview-unknown {
-    background: #f8d7da;
-    border-color: #f5c2c7;
+    background: var(--bs-danger-bg-subtle);
+    border-color: var(--bs-danger-border-subtle);
 }
 
 .ass-entry-error {
@@ -856,7 +869,7 @@
     overflow-y: hidden;
     line-height: 1.5;
     /* Keep caret visible even when background is transparent. */
-    caret-color: var(--bs-body-color, #212529);
+    caret-color: var(--bs-body-color, var(--ui-text));
 }
 
 .ass-entry-simplified {
@@ -866,9 +879,9 @@
     gap: 0.25rem;
     align-items: center;
     padding: 0.25rem 0.4rem;
-    background: rgba(25, 135, 84, 0.06);
+    background: rgba(var(--ui-accent-rgb), 0.06);
     border-radius: 4px;
-    border: 1px dashed rgba(25, 135, 84, 0.35);
+    border: 1px dashed rgba(var(--ui-accent-rgb), 0.35);
 }
 
 .ass-entry-simplified-label {
@@ -882,8 +895,8 @@
     gap: 0.15rem;
     padding: 0 0.2rem;
     border-radius: 3px;
-    background: rgba(13, 110, 253, 0.07);
-    border: 1px solid rgba(13, 110, 253, 0.18);
+    background: rgba(var(--ui-accent-rgb), 0.07);
+    border: 1px solid rgba(var(--ui-accent-rgb), 0.18);
     font-size: 0.78em;
     line-height: 1.3;
     margin-right: 0.1rem;
@@ -896,7 +909,7 @@
 .ass-atom-unknown {
     background: rgba(220, 53, 69, 0.07);
     border-color: rgba(220, 53, 69, 0.25);
-    color: #842029;
+    color: var(--bs-danger-text-emphasis);
 }
 
 .ass-atom-avatar {
@@ -906,8 +919,8 @@
     align-items: center;
     justify-content: center;
     border-radius: 50%;
-    background: #6c757d;
-    color: white;
+    background: var(--ui-surface-hover);
+    color: var(--ui-text);
     font-size: 0.7em;
     font-weight: 600;
     object-fit: cover;
@@ -931,24 +944,23 @@
     font-weight: 700;
     padding: 0 0.25rem;
     border-radius: 2px;
-    color: white;
 }
 
 .ass-entry-ac-item .ass-atom {
-    background: rgba(0, 0, 0, 0.04);
-    border-color: rgba(0, 0, 0, 0.1);
+    background: var(--ui-surface-muted);
+    border-color: var(--ui-border);
 }
 
 .ass-entry-ac-item-active .ass-atom {
-    background: rgba(255, 255, 255, 0.18);
-    border-color: rgba(255, 255, 255, 0.3);
-    color: white;
+    background: transparent;
+    border-color: currentColor;
+    color: var(--ui-accent-contrast);
 }
 
 .ass-entry-ac-item-active .ass-atom-unknown {
-    background: rgba(255, 255, 255, 0.18);
-    border-color: rgba(255, 200, 200, 0.4);
-    color: #ffd9d9;
+    background: var(--bs-danger-bg-subtle);
+    border-color: var(--bs-danger-border-subtle);
+    color: var(--bs-danger-text-emphasis);
 }
 
 .ass-entry-ac-match-head {
@@ -1044,10 +1056,10 @@
 .schedule-drag-ghost {
     position: absolute;
     box-sizing: border-box;
-    border: 2px dashed #0d6efd;
+    border: 2px dashed var(--ui-accent);
     border-radius: 6px;
-    background: rgba(13, 110, 253, 0.12);
-    color: #0d6efd;
+    background: rgba(var(--ui-accent-rgb), 0.12);
+    color: var(--ui-link);
     font-size: 0.85em;
     font-weight: 600;
     padding: 0.25rem 0.4rem;
@@ -1060,9 +1072,9 @@
 }
 
 .schedule-drag-ghost--blocked {
-    border-color: #dc3545;
+    border-color: var(--bs-danger-text-emphasis);
     background: rgba(220, 53, 69, 0.12);
-    color: #dc3545;
+    color: var(--bs-danger-text-emphasis);
 }
 
 .schedule-drag-ghost-title {
@@ -1085,18 +1097,18 @@
 .schedule-drag-gap-line {
     position: absolute;
     height: 0;
-    border-top: 3px solid #0d6efd;
-    box-shadow: 0 0 4px rgba(13, 110, 253, 0.6);
+    border-top: 3px solid var(--ui-accent);
+    box-shadow: 0 0 4px rgba(var(--ui-accent-rgb), 0.6);
     pointer-events: none;
     z-index: 27;
 }
 
 /* Bulk-length tool: selected blocks. */
 .schedule-timeline-event--bulk-selected {
-    outline: 3px solid #0d6efd;
+    outline: 3px solid var(--ui-link);
     outline-offset: -1px;
-    background-color: rgba(13, 110, 253, 0.10) !important;
-    box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.25);
+    background-color: rgba(var(--ui-accent-rgb), 0.10) !important;
+    box-shadow: 0 0 0 3px rgba(var(--ui-accent-rgb), 0.25);
 }
 
 /* Alt-hover dependency view. Both the hovered source and every dependency
@@ -1108,17 +1120,17 @@
 }
 
 .schedule-timeline-event--dep-chain {
-    background-color: rgba(13, 110, 253, 0.12) !important;
+    background-color: var(--bs-info-bg-subtle) !important;
     z-index: 19 !important;
 }
 
 .schedule-timeline-event--dep-team {
-    background-color: rgba(25, 135, 84, 0.12) !important;
+    background-color: var(--bs-success-bg-subtle) !important;
     z-index: 19 !important;
 }
 
 .schedule-timeline-event--dep-ref {
-    background-color: rgba(253, 126, 20, 0.12) !important;
+    background-color: var(--bs-warning-bg-subtle) !important;
     z-index: 19 !important;
 }
 
@@ -1142,8 +1154,8 @@
     flex-wrap: wrap;
     gap: 0.6rem;
     align-items: center;
-    background: rgba(255, 255, 255, 0.95);
-    border: 1px solid #ccc;
+    background: var(--ui-surface);
+    border: 1px solid var(--ui-border);
     border-radius: 6px;
     padding: 0.25rem 0.5rem;
     font-size: 0.75rem;
@@ -1229,9 +1241,9 @@
 
 /* Pending-create placeholder: stays visible while the create card is open. */
 .schedule-drag-ghost--pending {
-    border-color: #198754;
-    background: rgba(25, 135, 84, 0.10);
-    color: #198754;
+    border-color: var(--ui-link);
+    background: rgba(var(--ui-accent-rgb), 0.10);
+    color: var(--ui-link);
 }
 
 /* Winner/Loser insertion chips: shown on block hover while an editor card has
@@ -1257,16 +1269,38 @@
     font-weight: 700;
     line-height: 1.2;
     padding: 0.15rem 0.5rem;
-    color: #fff;
+    color: var(--ui-text);
     cursor: pointer;
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
     pointer-events: auto;
 }
 
 .schedule-result-chip--winner {
-    background: #198754;
+    background: var(--bs-success-bg-subtle);
+    color: var(--bs-success-text-emphasis);
 }
 
 .schedule-result-chip--loser {
-    background: #dc3545;
+    background: var(--bs-danger-bg-subtle);
+    color: var(--bs-danger-text-emphasis);
+}
+
+/* Let controls wrap without changing grid measurements used by drag/drop. */
+.schedule-timeline-wrapper { border-color: var(--ui-border); border-radius: .8rem; }
+.schedule-timeline-nav { border-bottom-color: var(--ui-border); padding: .75rem; gap: .65rem; }
+.schedule-timeline-nav > * { max-width: 100%; }
+.schedule-timeline-date { overflow-wrap: anywhere; }
+.schedule-keyboard-focus:focus-visible { outline: 3px solid var(--ui-link); outline-offset: 4px; }
+@media (max-width: 991.98px) {
+    /* 100vw includes scrollbar width; contained mobile tools avoid page overflow. */
+    .schedule-editor-fullbleed { width: 100%; max-width: 100%; margin-inline: 0; padding-inline: 0; }
+    .schedule-editor-panel { width: 100%; min-width: 0; }
+}
+@media (max-width: 575.98px) {
+    .schedule-timeline-nav { align-items: flex-start; }
+    .schedule-timeline-date { width: 100%; margin-left: 0; }
+    .team-token-autocomplete { min-width: min(200px, 100%); }
+}
+@media (min-width: 992px) {
+    .schedule-editor-panel { top: calc(var(--header-height, 76px) + 1rem); max-height: calc(100dvh - var(--header-height, 76px) - 2rem); }
 }

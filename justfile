@@ -51,8 +51,11 @@ install:
 setup-frontend:
     #!/usr/bin/env bash
     set -euo pipefail
-    if ! command -v dx >/dev/null 2>&1; then
-      cargo install dioxus-cli
+    [ ! -f "$HOME/.cargo/env" ] || . "$HOME/.cargo/env"
+    command -v rustup >/dev/null || { echo "Install Rust from https://rustup.rs first."; exit 1; }
+    rustup target add wasm32-unknown-unknown
+    if ! command -v dx >/dev/null 2>&1 || [[ "$(dx --version)" != "dioxus 0.7.10"* ]]; then
+      cargo install dioxus-cli --version 0.7.10 --locked
       echo "Installed Dioxus CLI (dx)"
     else
       echo "Dioxus CLI (dx) is already installed"
@@ -120,16 +123,22 @@ run:
 
 # Run the backend for local dev: HTTP on :5006, no TLS.
 dev:
-    @ARCTOS_CORS_DEV=1 just bind=0.0.0.0:5006 certfile= keyfile= run
+    @ARCTOS_CORS_DEV=0 just bind=127.0.0.1:5006 certfile= keyfile= run
 
-# Serve the Dioxus frontend.
-frontend:
-    @cd frontend && dx serve
+# Serve the Dioxus frontend, forwarding optional dx flags (e.g. --addr 0.0.0.0).
+[positional-arguments]
+frontend *ARGS:
+    @cd frontend && dx serve "$@"
+
+# Isolated sample events/accounts for trying the interface locally.
+demo:
+    @uv run python -m scripts.dev_demo
 
 # Run frontend unit tests on the host target (`.cargo/config.toml` defaults to wasm32).
 frontend-test:
     #!/usr/bin/env bash
     set -euo pipefail
+    [ ! -f "$HOME/.cargo/env" ] || . "$HOME/.cargo/env"
     host="$(rustc -vV | sed -n 's/^host: //p')"
     cd frontend && cargo test --target "$host"
 

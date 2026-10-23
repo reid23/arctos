@@ -1,5 +1,32 @@
 /* Interactive bracket canvas */
 
+/* Field wire colors are categorical, so keep their meaning across palettes.
+   Separate dark values keep the darkest and palest field colors visible. */
+.bracket-keyboard-focus {
+    --bracket-field-0: #258235; --bracket-field-1: #4363d8;
+    --bracket-field-2: #c76317; --bracket-field-3: #911eb4;
+    --bracket-field-4: #008b8b; --bracket-field-5: #c521bb;
+    --bracket-field-6: #637d06; --bracket-field-7: #ae6464;
+    --bracket-field-8: #008080; --bracket-field-9: #9466af;
+    --bracket-field-10: #9a6324; --bracket-field-11: #8a7c38;
+    --bracket-field-12: #800000; --bracket-field-13: #2d8a58;
+    --bracket-field-14: #808000; --bracket-field-15: #a66b37;
+    --bracket-field-16: #000075; --bracket-field-17: #687078;
+    --bracket-field-18: #8b949e; --bracket-field-19: #202923;
+}
+[data-bs-theme="dark"] .bracket-keyboard-focus {
+    --bracket-field-0: #6ed77e; --bracket-field-1: #8da6ff;
+    --bracket-field-2: #ffac6b; --bracket-field-3: #cc8fe1;
+    --bracket-field-4: #46dada; --bracket-field-5: #f18fe9;
+    --bracket-field-6: #c6df6b; --bracket-field-7: #fabebe;
+    --bracket-field-8: #58c7c7; --bracket-field-9: #e6beff;
+    --bracket-field-10: #ce9d64; --bracket-field-11: #e5dba2;
+    --bracket-field-12: #d88080; --bracket-field-13: #aaffc3;
+    --bracket-field-14: #c4c46c; --bracket-field-15: #ffd8b1;
+    --bracket-field-16: #a1a1f7; --bracket-field-17: #adb5bd;
+    --bracket-field-18: #f1f3f5; --bracket-field-19: #c6d2ca;
+}
+
 .bracket-page-toolbar {
     display: flex;
     flex-wrap: wrap;
@@ -10,18 +37,18 @@
 
 .bracket-canvas-wrap {
     position: relative;
-    border: 1px solid #dee2e6;
+    border: 1px solid var(--ui-border);
     border-radius: 0.5rem;
-    background: #ffffff;
+    background: var(--ui-surface);
     overflow: hidden;
     user-select: none;
-    touch-action: none;
     width: 100%;
     box-sizing: border-box;
 }
 
 /* Edit mode: large viewport for pan/zoom workspace (inline style also sets this). */
 .bracket-canvas-wrap.edit-mode {
+    touch-action: none;
     cursor: default;
     min-height: 70vh;
     height: min(85vh, calc(100vh - 160px));
@@ -30,6 +57,9 @@
 
 /* View mode: height is set inline from width-fit scale. */
 .bracket-canvas-wrap.view-mode {
+    /* Read-only diagrams must allow ordinary page scrolling and browser zoom. */
+    touch-action: auto;
+    user-select: text;
     min-height: 120px;
     max-height: none;
     /* Static diagram — no pan chrome; clip to fit box. */
@@ -57,7 +87,7 @@
 
 .bracket-wire {
     fill: none;
-    stroke: #495057;
+    stroke: var(--ui-muted);
     stroke-width: 2;
     /* Visual only — clicks go to .bracket-wire-hit / the group. */
     pointer-events: none;
@@ -65,7 +95,7 @@
 
 .bracket-wire-group:hover .bracket-wire,
 .bracket-wire.selected {
-    stroke: #0d6efd;
+    stroke: var(--ui-accent);
     stroke-width: 3;
 }
 
@@ -95,8 +125,8 @@
 .bracket-match {
     position: absolute;
     z-index: 2;
-    background: #fff;
-    border: 2px solid #343a40;
+    background: var(--ui-surface);
+    border: 2px solid var(--ui-muted);
     border-radius: 6px;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
     /* Absolute children pin team rows to the same Y as the input ports
@@ -108,19 +138,19 @@
 }
 
 .bracket-match.selected {
-    border-color: #0d6efd;
-    box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.35);
+    border-color: var(--ui-link);
+    box-shadow: 0 0 0 2px rgba(var(--ui-accent-rgb), 0.35);
 }
 
 /* View-mode status outlines (hidden while editing so selection stays clear). */
 .bracket-match.status-in-progress {
-    border-color: #e6a800;
-    box-shadow: 0 0 0 1px rgba(230, 168, 0, 0.35);
+    border-color: var(--bs-warning-text-emphasis);
+    box-shadow: 0 0 0 1px rgba(217, 119, 6, 0.35);
 }
 
 .bracket-match.status-completed {
-    border-color: #198754;
-    box-shadow: 0 0 0 1px rgba(25, 135, 84, 0.28);
+    border-color: var(--bs-success-text-emphasis);
+    box-shadow: 0 0 0 1px var(--bs-success-border-subtle);
 }
 
 .bracket-team-slot .winner-badge {
@@ -146,7 +176,7 @@
     text-align: center;
     font-weight: 600;
     font-size: 0.8rem;
-    color: #212529;
+    color: var(--ui-text);
     line-height: 1.2;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -201,8 +231,8 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    background: #6c757d;
-    color: #fff;
+    background: var(--ui-surface-hover);
+    color: var(--ui-text);
     font-size: 0.7em;
     font-weight: 700;
     line-height: 1;
@@ -220,26 +250,26 @@
     width: 1.25rem;
     height: 1.25rem;
     border-radius: 3px;
-    background: #e9ecef;
-    color: #212529;
+    background: var(--ui-surface-hover);
+    color: var(--ui-text);
     font-size: 0.7rem;
     font-weight: 700;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    border: 1px solid #adb5bd;
+    border: 1px solid var(--ui-border);
 }
 
 .bracket-port-badge.winner {
-    background: #d1e7dd;
-    border-color: #198754;
-    color: #0f5132;
+    background: var(--bs-success-bg-subtle);
+    border-color: var(--bs-success-border-subtle);
+    color: var(--bs-success-text-emphasis);
 }
 
 .bracket-port-badge.loser {
-    background: #f8d7da;
-    border-color: #dc3545;
-    color: #842029;
+    background: var(--bs-danger-bg-subtle);
+    border-color: var(--bs-danger-text-emphasis);
+    color: var(--bs-danger-text-emphasis);
 }
 
 .bracket-port-badge.clickable {
@@ -248,7 +278,7 @@
 }
 .bracket-canvas-wrap.edit-mode .bracket-port-badge.clickable:hover {
     filter: brightness(0.92);
-    box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.35);
+    box-shadow: 0 0 0 2px rgba(var(--ui-accent-rgb), 0.35);
 }
 .bracket-port-badge.clickable.unused {
     opacity: 0.55;
@@ -263,8 +293,8 @@
     width: 10px;
     height: 10px;
     border-radius: 50%;
-    background: #343a40;
-    border: 2px solid #fff;
+    background: var(--ui-muted);
+    border: 2px solid var(--ui-surface);
     box-sizing: border-box;
     z-index: 3;
     transform: translate(-50%, -50%);
@@ -272,11 +302,11 @@
 }
 
 .bracket-port-stub.output {
-    background: #198754;
+    background: var(--bs-success-text-emphasis);
 }
 
 .bracket-port-stub.output.loser {
-    background: #dc3545;
+    background: var(--bs-danger-text-emphasis);
 }
 
 /* Net labels sitting on the input side */
@@ -286,8 +316,8 @@
     transform: translate(-100%, -50%);
     margin-left: -10px;
     max-width: 180px;
-    background: #fff;
-    border: 1px solid #adb5bd;
+    background: var(--ui-surface);
+    border: 1px solid var(--ui-border);
     border-radius: 999px;
     padding: 1px 8px 1px 6px;
     font-size: 0.75rem;
@@ -314,8 +344,8 @@
 }
 
 .bracket-net-label.editable:hover {
-    border-color: #0d6efd;
-    background: #e7f1ff;
+    border-color: var(--ui-link);
+    background: var(--ui-accent-soft);
 }
 
 .bracket-net-label img.token-icon {
@@ -323,8 +353,8 @@
     height: 0.95em;
     object-fit: contain;
     flex-shrink: 0;
-    /* Bootstrap primary blue-ish tint for SVG icons */
-    filter: invert(27%) sepia(98%) saturate(2476%) hue-rotate(226deg) brightness(99%) contrast(101%);
+    /* Keep the monochrome source icons legible in either appearance mode. */
+    filter: var(--ui-icon-filter, none);
 }
 
 .bracket-net-label img.avatar {
@@ -343,8 +373,8 @@
 .bracket-resize-handle {
     position: absolute;
     z-index: 6;
-    background: #0d6efd;
-    border: 2px solid #fff;
+    background: var(--ui-accent);
+    border: 2px solid var(--ui-surface);
     box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15);
 }
 
@@ -378,7 +408,7 @@
 .bracket-text {
     position: absolute;
     z-index: 3;
-    color: #212529;
+    color: var(--ui-text);
     font-weight: 500;
     line-height: 1.2;
     white-space: pre;
@@ -388,8 +418,8 @@
 }
 
 .bracket-text.selected {
-    outline: 2px solid #0d6efd;
-    background: rgba(13, 110, 253, 0.08);
+    outline: 2px solid var(--ui-link);
+    background: rgba(var(--ui-accent-rgb), 0.08);
 }
 
 .bracket-labeled-team {
@@ -399,8 +429,8 @@
     align-items: center;
     gap: 6px;
     padding: 4px 10px;
-    background: #fff;
-    border: 2px solid #343a40;
+    background: var(--ui-surface);
+    border: 2px solid var(--ui-muted);
     border-radius: 999px;
     box-sizing: border-box;
     width: fit-content;
@@ -411,8 +441,8 @@
 }
 
 .bracket-labeled-team.selected {
-    border-color: #0d6efd;
-    box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.35);
+    border-color: var(--ui-link);
+    box-shadow: 0 0 0 2px rgba(var(--ui-accent-rgb), 0.35);
 }
 
 .bracket-labeled-team .caption {
@@ -423,7 +453,7 @@
 }
 
 .bracket-labeled-team .caption-prefix {
-    color: #495057;
+    color: var(--ui-muted);
     font-weight: 600;
 }
 
@@ -447,14 +477,14 @@
 }
 
 .bracket-image.selected {
-    border-color: #0d6efd;
-    box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.35);
+    border-color: var(--ui-link);
+    box-shadow: 0 0 0 2px rgba(var(--ui-accent-rgb), 0.35);
 }
 
 .bracket-marquee {
     position: absolute;
-    border: 1px dashed #0d6efd;
-    background: rgba(13, 110, 253, 0.08);
+    border: 1px dashed var(--ui-accent);
+    background: rgba(var(--ui-accent-rgb), 0.08);
     z-index: 10;
     pointer-events: none;
 }
@@ -465,7 +495,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #6c757d;
+    color: var(--ui-muted);
     pointer-events: none;
     z-index: 0;
     padding: 2rem;
@@ -484,7 +514,7 @@
 }
 
 .bracket-add-modal {
-    background: #fff;
+    background: var(--ui-surface);
     border-radius: 0.5rem;
     width: min(480px, 100%);
     max-height: 70vh;
@@ -496,7 +526,7 @@
 .bracket-add-modal-header,
 .bracket-add-modal-footer {
     padding: 0.75rem 1rem;
-    border-bottom: 1px solid #dee2e6;
+    border-bottom: 1px solid var(--ui-border);
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -504,13 +534,13 @@
 
 .bracket-add-modal-footer {
     border-bottom: none;
-    border-top: 1px solid #dee2e6;
+    border-top: 1px solid var(--ui-border);
     justify-content: flex-end;
     gap: 0.5rem;
 }
 
 .bracket-add-modal-search {
-    border-bottom: 1px solid #f1f3f5;
+    border-bottom: 1px solid var(--ui-surface-muted);
 }
 
 .bracket-add-modal-body {
@@ -533,23 +563,24 @@
     text-align: left;
     border: none;
     background: transparent;
+    color: var(--ui-text);
     padding: 0.55rem 1rem;
-    border-bottom: 1px solid #f1f3f5;
+    border-bottom: 1px solid var(--ui-surface-muted);
 }
 
 .bracket-add-match-item:hover,
 .bracket-add-match-item:focus {
-    background: #e7f1ff;
+    background: var(--ui-accent-soft);
 }
 
 /* First filtered result — accepted by Enter in the search box */
 .bracket-add-match-item.is-top {
-    background: #e7f1ff;
+    background: var(--ui-accent-soft);
 }
 
 .bracket-add-match-item .meta {
     font-size: 0.8rem;
-    color: #6c757d;
+    color: var(--ui-muted);
 }
 
 .bracket-status {
@@ -559,10 +590,10 @@
 
 /* Infinite snap grid — dots (screen space, pan/zoom locked, max detail via --grid-size). */
 .bracket-canvas-wrap.show-grid {
-    background-color: #ffffff;
+    background-color: var(--ui-surface);
     background-image: radial-gradient(
         circle at center,
-        rgba(13, 110, 253, calc(0.45 * var(--grid-alpha, 1))) 1.1px,
+        rgba(var(--ui-accent-rgb), calc(0.45 * var(--grid-alpha, 1))) 1.1px,
         transparent 1.25px
     );
     background-size: var(--grid-size, 20px) var(--grid-size, 20px);
@@ -586,15 +617,15 @@
 .bracket-add-match-item.already-placed {
     opacity: 0.45;
     cursor: not-allowed;
-    background: #f1f3f5;
-    color: #6c757d;
+    background: var(--ui-surface-muted);
+    color: var(--ui-muted);
 }
 .bracket-add-match-item.already-placed:hover {
-    background: #f1f3f5;
+    background: var(--ui-surface-muted);
 }
 .bracket-add-match-item .already-tag {
     font-style: italic;
-    color: #868e96;
+    color: var(--ui-muted);
 }
 
 /* Airwires (refs / field) — always on top, straight strokes */
@@ -617,7 +648,7 @@
 }
 
 .bracket-airwire.ref {
-    stroke: #e6c200;
+    stroke: var(--bs-warning-text-emphasis);
 }
 
 .bracket-airwire.field {
@@ -646,8 +677,8 @@
 .bracket-canvas-wrap.field-hovering .bracket-match.field-hot {
     opacity: 1;
     filter: none;
-    border-color: #0d6efd;
-    box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.45), 0 4px 14px rgba(13, 110, 253, 0.2);
+    border-color: var(--ui-link);
+    box-shadow: 0 0 0 3px rgba(var(--ui-accent-rgb), 0.45), 0 4px 14px rgba(var(--ui-accent-rgb), 0.2);
     z-index: 8;
 }
 
@@ -666,8 +697,9 @@
     position: fixed;
     z-index: 10000;
     pointer-events: none;
-    background: rgba(33, 37, 41, 0.92);
-    color: #fff;
+    /* This imperative tooltip is attached to body, outside the app token scope. */
+    background: var(--ui-text, #202923);
+    color: var(--ui-surface, #fff);
     font-size: 0.75rem;
     line-height: 1.2;
     padding: 0.25rem 0.45rem;
@@ -692,5 +724,30 @@
 }
 
 .bracket-airwire.ref.rtl {
-    stroke: #e6194b;
+    stroke: var(--bs-danger-text-emphasis);
+}
+
+/* View controls do not change node sizes, ports, wire paths, or saved placement. */
+.bracket-page-toolbar { padding: .8rem 0; gap: .65rem; }
+.bracket-page-toolbar > * { max-width: 100%; }
+.bracket-shortcut-help { flex-basis: 100%; }
+.bracket-shortcut-help summary { cursor: pointer; padding: .5rem 0; }
+.bracket-view-controls { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; padding: .75rem; margin-bottom: .75rem; border: 1px solid var(--ui-border); border-radius: .75rem; background: var(--ui-surface-muted); }
+.bracket-zoom-controls, .bracket-pan-controls { display: flex; align-items: center; gap: .35rem; }
+.bracket-view-controls .btn { min-width: 44px; min-height: 44px; }
+.bracket-zoom-value { min-width: 4rem; text-align: center; font-variant-numeric: tabular-nums; }
+.bracket-mobile-hint { display: none; }
+.bracket-keyboard-focus:focus-visible { outline: 3px solid var(--ui-link); outline-offset: 4px; }
+.bracket-add-modal { border: 1px solid var(--ui-border); border-radius: .9rem; }
+@media (max-width: 767.98px) {
+    .bracket-page-toolbar { align-items: center; gap: .6rem; }
+    .bracket-page-toolbar .btn, .bracket-page-toolbar .form-select { min-height: 44px; }
+    .bracket-page-toolbar .form-check { display: flex; align-items: center; gap: .6rem; min-height: 44px; }
+    .bracket-mobile-hint { display: block; }
+    .bracket-view-controls { gap: .65rem; }
+    .bracket-add-modal-backdrop { padding: max(1rem, env(safe-area-inset-top)) .75rem max(1rem, env(safe-area-inset-bottom)); align-items: center; }
+    .bracket-add-modal { max-height: calc(100dvh - 2rem - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
+    .bracket-add-modal-body { overflow-y: auto; overscroll-behavior: contain; }
+    .bracket-add-modal-header, .bracket-add-modal-footer { gap: .6rem; flex-wrap: wrap; }
+    .bracket-add-match-item { min-height: 44px; padding-block: .75rem; }
 }

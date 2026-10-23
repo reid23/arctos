@@ -36,6 +36,9 @@ stuff is all set up):
 4. PR to `dev` submitted
     - describes everything that changed and any potential high level
       system impacts
+    - documentation and PR descriptions must stand on their own: explain
+      Arctos behavior and code using references other developers can access,
+      without relying on private conversations or unpublished materials.
     - describes any migration changes needed!!
     - make sure there are no merge conflicts before submitting. i dont
       care if you merge or rebase.

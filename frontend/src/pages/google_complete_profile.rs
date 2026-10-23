@@ -1,9 +1,10 @@
+use super::login::{go_to_next, take_google_return};
 use crate::api;
 use crate::pages::layout::use_auth_invalidate;
 use crate::types::GoogleCompleteProfileRequest;
 use crate::Route;
-use dioxus::prelude::*;
 use dioxus::prelude::use_navigator;
+use dioxus::prelude::*;
 
 fn validate_username(username: &str) -> Result<(), String> {
     let u = username.trim();
@@ -14,7 +15,9 @@ fn validate_username(username: &str) -> Result<(), String> {
         return Err("Username must be 50 characters or less".into());
     }
     let mut chars = u.chars().peekable();
-    let first = chars.next().ok_or_else(|| "Username is required".to_string())?;
+    let first = chars
+        .next()
+        .ok_or_else(|| "Username is required".to_string())?;
     let last = u.chars().last().unwrap_or(first);
     let valid_edge = |c: char| c.is_ascii_alphanumeric();
     if !valid_edge(first) || !valid_edge(last) {
@@ -73,6 +76,9 @@ pub fn GoogleCompleteProfile() -> Element {
 
     let onsubmit = move |evt: Event<FormData>| async move {
         evt.prevent_default();
+        if loading() {
+            return;
+        }
         loading.set(true);
         error.set(None);
 
@@ -88,13 +94,18 @@ pub fn GoogleCompleteProfile() -> Element {
         }
 
         let req = GoogleCompleteProfileRequest {
-            username: username(),
-            display_name: display_name(),
+            username: username().trim().to_string(),
+            display_name: display_name().trim().to_string(),
         };
         match api::google_complete_profile(&req).await {
             Ok(_) => {
                 auth_invalidate.set(auth_invalidate() + 1);
-                nav.push(Route::Index {});
+                match take_google_return() {
+                    Some(next) => go_to_next(&next),
+                    None => {
+                        nav.push(Route::Index {});
+                    }
+                }
             }
             Err(e) => {
                 error.set(Some(e));
@@ -104,11 +115,11 @@ pub fn GoogleCompleteProfile() -> Element {
     };
 
     rsx! {
-        div { class: "row justify-content-center",
-            div { class: "col-md-6",
-                div { class: "card",
+        div { class: "row justify-content-center auth-page",
+            div { class: "col-12 auth-column",
+                div { class: "card auth-card",
                     div { class: "card-header",
-                        h3 { class: "mb-0", "Complete Your Profile" }
+                        h1 { class: "mb-2", "Complete your profile" }
                         p { class: "mb-0 text-muted",
                             small { "Creating a {user_type()} account" }
                         }
@@ -120,17 +131,24 @@ pub fn GoogleCompleteProfile() -> Element {
                             ". Please choose your username and display name to complete your account setup."
                         }
                         if let Some(err) = error() {
-                            div { class: "alert alert-danger", "{err}" }
+                            div { class: "alert alert-danger", role: "alert", "{err}" }
                         }
                         form {
                             onsubmit: onsubmit,
                             div { class: "mb-3",
-                                label { class: "form-label", "Username *" }
+                                label { class: "form-label", r#for: "google-username", "Username" }
                                 input {
                                     class: "form-control",
                                     "type": "text",
+                                    id: "google-username",
+                                    name: "username",
+                                    autocomplete: "username",
+                                    autocapitalize: "none",
+                                    spellcheck: "false",
+                                    maxlength: 50,
+                                    disabled: loading(),
                                     value: "{username}",
-                                    oninput: move |e| username.set(e.value()),
+                                    oninput: move |e| { username.set(e.value()); username_status.set(None); },
                                     onblur: on_check_username,
                                     required: true
                                 }
@@ -139,22 +157,26 @@ pub fn GoogleCompleteProfile() -> Element {
                                     "Must be URL-safe: only letters, numbers, hyphens, and underscores. Cannot start or end with hyphen or underscore."
                                 }
                                 if let Some(msg) = username_status() {
-                                    div { class: "form-text", "{msg}" }
+                                    div { class: "form-text", role: "status", "{msg}" }
                                 }
                             }
                             div { class: "mb-3",
-                                label { class: "form-label", "Display Name *" }
+                                label { class: "form-label", r#for: "google-display-name", "Display name" }
                                 input {
                                     class: "form-control",
                                     "type": "text",
+                                    id: "google-display-name",
+                                    name: "display_name",
+                                    autocomplete: "nickname",
+                                    disabled: loading(),
                                     value: "{display_name}",
                                     oninput: move |e| display_name.set(e.value()),
                                     required: true
                                 }
-                                div { class: "form-text", "This is your public display name that others will see." }
+                                div { class: "form-text", "Your public name. You can change it later." }
                             }
                             div { class: "d-grid",
-                                button { class: "btn btn-primary", "type": "submit", disabled: "{loading}", "Create Account" }
+                                button { class: "btn btn-primary", "type": "submit", disabled: loading(), if loading() { "Please wait…" } else { "Create account" } }
                             }
                         }
                     }

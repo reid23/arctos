@@ -752,6 +752,8 @@ All players, by name, 50 to a page. `?search=` matches names and ids.
     "location": "Boston",
     "profile_photo": null,
     "bio": "Captain of Smith & Co.",
+    "pronouns": "she / her",
+    "pompfen": ["CHAIN", "STAFF"],
     "registrations": [
       {
         "tournament": {"id": "spring-open", "name": "Spring Open"},
@@ -767,6 +769,12 @@ All players, by name, 50 to a page. `?search=` matches names and ids.
 
 `registrations` lists confirmed registrations in published tournaments
 and leagues; exactly one of `tournament` and `league` is set.
+
+`pronouns` is optional public text (up to 64 characters), or `null`.
+`pompfen` lists the player's chosen roles in canonical order: `CHAIN`,
+`LONG`, `QTIP`, `STAFF`, `BOARD`, `FLORENTINE`, `SKULL`, `UNARMED`.
+It is an empty list when no choices are set. These profile preferences
+do not change a player's weapon selection for any side competition.
 
 #### `GET /players/{player_id}/injuries`
 

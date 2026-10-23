@@ -99,27 +99,27 @@ fn StandingsTableView(table: SideCompStandingTable) -> Element {
             if filtered.is_empty() {
                 p { class: "text-muted", "No players to show." }
             } else {
-                div { class: "table-responsive",
-                    table { class: "table table-striped align-middle",
+                div { class: "table-responsive", role: "region", "aria-label": "{table.title} standings", tabindex: "0",
+                    table { class: "table table-striped align-middle sidecomp-standings-table",
                         thead {
                             tr {
-                                th { "Rank" }
-                                th { "#" }
-                                th { "Player" }
-                                th { "Role" }
-                                th { "Wins" }
+                                th { class: "table-number", "Rank" }
+                                th { class: "table-number", "#" }
+                                th { class: "table-nowrap", "Player" }
+                                th { class: "table-nowrap", "Role" }
+                                th { class: "table-number", "Wins" }
                                 if table.track_losses {
-                                    th { "Losses" }
-                                    th { "Win %" }
+                                    th { class: "table-number", "Losses" }
+                                    th { class: "table-number", "Win %" }
                                 }
                             }
                         }
                         tbody {
                             for row in filtered.iter() {
                                 tr { key: "{row.registration_id}",
-                                    td { "{row.rank}" }
-                                    td { "{row.entry_number}" }
-                                    td {
+                                    td { class: "table-number", "{row.rank}" }
+                                    td { class: "table-number", "{row.entry_number}" }
+                                    td { class: "table-copy",
                                         div { class: "d-flex align-items-center",
                                             StandingAvatar { photo: row.profile_photo.clone(), is_team: false }
                                             div {
@@ -142,15 +142,15 @@ fn StandingsTableView(table: SideCompStandingTable) -> Element {
                                             }
                                         }
                                     }
-                                    td {
+                                    td { class: "table-nowrap",
                                         if let Some(w) = row.weapon.as_ref() {
                                             PompfenIcon { weapon: w.clone(), size: "1.5em".to_string() }
                                         }
                                     }
-                                    td { class: "fw-bold", "{row.wins}" }
+                                    td { class: "table-number fw-bold", "{row.wins}" }
                                     if table.track_losses {
-                                        td { "{row.losses.unwrap_or(0)}" }
-                                        td { class: "fw-bold",
+                                        td { class: "table-number", "{row.losses.unwrap_or(0)}" }
+                                        td { class: "table-number fw-bold",
                                             match row.win_percentage {
                                                 Some(percentage) => format!("{percentage:.0}%"),
                                                 None => "—".to_string(),
@@ -217,7 +217,7 @@ pub fn SideCompResults(url: String, comp_id: i32) -> Element {
                                 format!("{name} - Results (Unofficial)")
                             };
                             rsx! {
-                                h1 { "{title}" }
+                                h2 { "{title}" }
                                 for table in tables.into_iter() {
                                     StandingsTableView { key: "{table.id}", table }
                                 }

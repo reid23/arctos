@@ -1,4 +1,4 @@
-//! Shared registered teams table card.
+//! Shared registered teams section: one surface with compact, labeled rows.
 
 use crate::api;
 use crate::types::TeamWithCount;
@@ -27,56 +27,52 @@ pub fn EventTeamsList(props: EventTeamsListProps) -> Element {
     } = props;
     let backend = api::base_url();
     if teams.is_empty() {
-        return rsx! { };
+        return rsx! {};
     }
     let count = teams.len();
     let title = format!("{card_title} ({count})");
     rsx! {
         div { class: "row mt-4",
             div { class: "col-12",
-                div { class: "card",
+                div { class: "card data-section event-roster",
                     div { class: "card-header", h5 { class: "mb-0", "{title}" } }
                     div { class: "card-body",
                         div { class: "table-responsive",
-                            table { class: "table table-striped",
+                            table { class: "table roster-table",
                                 thead {
                                     tr {
-                                        th { "Team Name" }
-                                        th { "Players" }
+                                        th { scope: "col", "Team Name" }
+                                        th { scope: "col", class: "table-number", "Players" }
                                         if show_registered_at {
-                                            th { "Registration Date" }
+                                            th { scope: "col", class: "table-nowrap", "Registration Date" }
                                         }
                                     }
                                 }
                                 tbody {
                                     for team in teams.iter() {
                                         tr { key: "{team.team_id}",
-                                            td {
-                                                div { class: "d-flex align-items-center",
-                                                    div { class: "flex-shrink-0 me-2",
-                                                        if let Some(photo) = &team.profile_photo {
-                                                            img { src: "{backend}/static/{photo}", alt: "", class: "rounded-circle", style: "width: 40px; height: 40px; object-fit: cover;" }
-                                                        } else {
-                                                            div { class: "d-flex align-items-center justify-content-center bg-secondary rounded-circle", style: "width: 40px; height: 40px;",
-                                                                span { class: "text-white", "👥" }
-                                                            }
-                                                        }
+                                            td { class: "table-copy",
+                                                div { class: "roster-identity",
+                                                    if let Some(photo) = &team.profile_photo {
+                                                        img { src: "{backend}/static/{photo}", alt: "", class: "rounded-circle me-2", style: "width: 32px; height: 32px; object-fit: cover; flex-shrink: 0;" }
                                                     }
                                                     div {
-                                                        Link { to: Route::TeamProfilePage { id: team.team_id.clone() }, class: "text-decoration-none",
+                                                        Link { to: Route::TeamProfilePage { id: team.team_id.clone() }, class: "roster-name",
                                                             strong { "{team.pseudonym.as_deref().unwrap_or(&team.team_name)}" }
                                                         }
                                                     }
                                                 }
                                             }
-                                            td {
-                                                span { class: "badge bg-primary", "{team.player_count}" }
-                                                if let Some(max) = max_team_size_roster {
-                                                    span { " / {max}" }
+                                            td { class: "table-number", "data-label": "Players",
+                                                span { class: "table-nowrap",
+                                                    span { class: "roster-count", "{team.player_count}" }
+                                                    if let Some(max) = max_team_size_roster {
+                                                        span { " / {max}" }
+                                                    }
                                                 }
                                             }
                                             if show_registered_at {
-                                                td { "{team.registered_at.as_deref().unwrap_or(\"-\")}" }
+                                                td { class: "table-nowrap roster-wide", "data-label": "Registered", {crate::time_format::format_registration_timestamp(team.registered_at.as_deref().unwrap_or("—"))} }
                                             }
                                         }
                                     }

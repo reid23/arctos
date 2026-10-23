@@ -1,4 +1,5 @@
 use super::TeamSelectionField;
+use super::tournament_home::TournamentHomeContent;
 use crate::Route;
 use crate::api;
 use crate::components::{AssEntry, TeamLabel, TeamLabelStyle, TeamSlot};
@@ -504,6 +505,23 @@ fn apply_scroll_top(scroll_el_id: &str, scroll_top: i32) {
     }
 }
 
+fn focus_schedule_root() {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let Some(document) = web_sys::window().and_then(|window| window.document()) else {
+            return;
+        };
+        let Ok(Some(element)) = document.query_selector(".schedule-keyboard-focus") else {
+            return;
+        };
+        if let Some(element) = element.dyn_ref::<web_sys::HtmlElement>() {
+            let options = web_sys::FocusOptions::new();
+            options.set_prevent_scroll(true);
+            let _ = element.focus_with_options(&options);
+        }
+    }
+}
+
 /// Scroll the timeline body so the match block's vertical midpoint sits in the
 /// middle of the visible schedule. Returns false when the block is not in the DOM yet.
 fn scroll_match_to_center(scroll_el_id: &str, match_id: &str) -> bool {
@@ -657,12 +675,20 @@ pub(crate) struct MoveCommitPayload {
 #[component]
 pub fn Schedule(url: String, view: String, team: String, field: String) -> Element {
     rsx! {
-        SchedulePage {
-            url,
-            view,
-            team,
-            field,
-            editor: false,
+        TournamentHomeContent {
+            key: "{url}",
+            url: url.clone(),
+            initial_tab: Some("schedule".to_string()),
+            content: Some(rsx! {
+                SchedulePage {
+                    url,
+                    view,
+                    team,
+                    field,
+                    editor: false,
+                    embedded: true,
+                }
+            }),
         }
     }
 }
@@ -679,12 +705,20 @@ pub fn ScheduleEdit(url: String) -> Element {
             team: String::new(),
             field: String::new(),
             editor: true,
+            embedded: true,
         }
     }
 }
 
 #[component]
-fn SchedulePage(url: String, view: String, team: String, field: String, editor: bool) -> Element {
+fn SchedulePage(
+    url: String,
+    view: String,
+    team: String,
+    field: String,
+    editor: bool,
+    #[props(default)] embedded: bool,
+) -> Element {
     let url_data = url.clone();
     let mut setup_data = use_resource(move || {
         let u = url_data.clone();
@@ -982,15 +1016,7 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
         if active_modal() == "none" {
             spawn(async move {
                 gloo_timers::future::TimeoutFuture::new(0).await;
-                if let Some(window) = web_sys::window() {
-                    if let Some(doc) = window.document() {
-                        if let Ok(Some(el)) = doc.query_selector(".schedule-keyboard-focus") {
-                            if let Some(html_el) = el.dyn_ref::<web_sys::HtmlElement>() {
-                                let _ = html_el.focus();
-                            }
-                        }
-                    }
-                }
+                focus_schedule_root();
             });
         }
     });
@@ -1138,31 +1164,29 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                 div {
                     // The editor gets the full viewport width (escapes the layout's
                     // centered max-width container via the full-bleed class).
-                    class: if editor { "container-fluid mt-3 position-relative schedule-keyboard-focus schedule-editor-fullbleed" } else { "container-fluid mt-3 position-relative schedule-keyboard-focus" },
+                    class: if editor && !embedded { "container-fluid mt-3 position-relative schedule-keyboard-focus schedule-editor-fullbleed" } else if embedded { "mt-3 position-relative schedule-keyboard-focus" } else { "container-fluid mt-3 position-relative schedule-keyboard-focus" },
                     tabindex: 0,
                     onkeydown: handle_keydown,
-                    onmounted: move |ev| {
-                        spawn(async move {
-                            let _ = ev.data().set_focus(true).await;
-                        });
-                    },
+                    onmounted: move |_| focus_schedule_root(),
                     role: "application",
                     aria_label: "Schedule",
-                    div { class: "row mb-3",
-                        div { class: "col",
-                            h1 { "{data.tournament.name}" }
-                            nav { "aria-label": "breadcrumb",
-                                ol { class: "breadcrumb",
-                                    li { class: "breadcrumb-item",
-                                        Link { to: Route::TournamentHome { url: url.clone() }, "{data.tournament.name}" }
-                                    }
-                                    if editor {
+                    if !embedded {
+                        div { class: "row mb-3",
+                            div { class: "col",
+                                h1 { "{data.tournament.name}" }
+                                nav { "aria-label": "breadcrumb",
+                                    ol { class: "breadcrumb",
                                         li { class: "breadcrumb-item",
-                                            Link { to: Route::Schedule { url: url.clone(), view: String::new(), team: String::new(), field: String::new() }, "Schedule" }
+                                            Link { to: Route::TournamentHome { url: url.clone() }, "{data.tournament.name}" }
                                         }
-                                        li { class: "breadcrumb-item active", "Edit" }
-                                    } else {
-                                        li { class: "breadcrumb-item active", "Schedule" }
+                                        if editor {
+                                            li { class: "breadcrumb-item",
+                                                Link { to: Route::Schedule { url: url.clone(), view: String::new(), team: String::new(), field: String::new() }, "Schedule" }
+                                            }
+                                            li { class: "breadcrumb-item active", "Edit" }
+                                        } else {
+                                            li { class: "breadcrumb-item active", "Schedule" }
+                                        }
                                     }
                                 }
                             }
@@ -1211,8 +1235,8 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                         }
                     }
 
-                    div { class: "card mb-3 bg-light",
-                        div { class: "card-body p-2",
+                    div { class: if editor { "edit-toolbar mb-3" } else { "card mb-3 bg-light" },
+                        div { class: if editor { "edit-toolbar-body p-2" } else { "card-body p-2" },
                             div { class: "d-flex flex-wrap justify-content-between align-items-center gap-2",
                                 div { class: "d-flex flex-wrap align-items-center gap-2",
                                     if view_mode() != "team" {
@@ -1437,8 +1461,8 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                             }
                         }
                         if push_back_open() {
-                            div { class: "card mb-2 border-secondary",
-                                div { class: "card-body py-2 d-flex flex-wrap align-items-center gap-2",
+                            div { class: "edit-toolbar mb-2",
+                                div { class: "edit-toolbar-body py-2 d-flex flex-wrap align-items-center gap-2",
                                     strong { class: "small", "Push back day:" }
                                     span { class: "small text-muted",
                                         "push back all non-started matches on {viewed_day()}"
@@ -1493,8 +1517,8 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
                             }
                         }
                         if bulk_mode() {
-                            div { class: "card mb-2 border-secondary",
-                                div { class: "card-body py-2 d-flex flex-wrap align-items-center gap-2",
+                            div { class: "edit-toolbar mb-2",
+                                div { class: "edit-toolbar-body py-2 d-flex flex-wrap align-items-center gap-2",
                                     strong { class: "small", "Bulk length:" }
                                     span { class: "small text-muted",
                                         "click blocks to select — {bulk_selected().len()} selected"
@@ -1956,6 +1980,17 @@ fn SchedulePage(url: String, view: String, team: String, field: String, editor: 
         None => {
             // Check if it was an error or loading
             match val.read().as_ref() {
+                Some(Err(e)) if e == "Schedule not published" => rsx! {
+                    div { class: "card",
+                        div { class: "card-body",
+                            if !embedded { h1 { "Schedule" } }
+                            p { "The schedule has not been posted yet." }
+                            if !embedded {
+                                Link { to: Route::TournamentHome { url: url.clone() }, class: "btn btn-outline-primary", "Back to event" }
+                            }
+                        }
+                    }
+                },
                 Some(Err(e)) => rsx! { div { class: "alert alert-danger", "Error: {e}" } },
                 _ => rsx! { div { class: "text-center mt-5", "Loading..." } },
             }
@@ -2605,10 +2640,10 @@ fn CreateMatchModal(
             // Docked editor card (not a modal): the schedule stays visible and
             // interactive beside/below it.
             div {
-                class: "card schedule-editor-card",
+                class: "edit-section schedule-editor-card",
                 tabindex: -1,
                 onkeydown: modal_keydown,
-                div { class: "card-header d-flex justify-content-between align-items-center",
+                div { class: "edit-section-heading d-flex justify-content-between align-items-center",
                     h5 { class: "mb-0", "New Match" }
                     button {
                         class: "btn-close",
@@ -2617,7 +2652,7 @@ fn CreateMatchModal(
                         onclick: move |_| on_close.call(()),
                     }
                 }
-                    div { class: "card-body",
+                    div { class: "edit-section-body",
                         if let Some(err) = error() {
                             div { class: "alert alert-danger", "{err}" }
                         }
@@ -3088,10 +3123,10 @@ fn BreakGroupModal(
         // Docked editor card (not a modal): the schedule stays visible and
         // interactive beside/below it.
         div {
-            class: "card schedule-editor-card",
+            class: "edit-section schedule-editor-card",
             tabindex: -1,
             onkeydown: modal_keydown,
-            div { class: "card-header d-flex justify-content-between align-items-center",
+            div { class: "edit-section-heading d-flex justify-content-between align-items-center",
                 h5 { class: "mb-0", "Edit {type_label}: {group_name}" }
                 button {
                     class: "btn-close",
@@ -3100,7 +3135,7 @@ fn BreakGroupModal(
                     onclick: move |_| on_close.call(()),
                 }
             }
-                    div { class: "card-body",
+                    div { class: "edit-section-body",
                         if let Some(err) = error() {
                             div { class: "alert alert-danger", "{err}" }
                         }
@@ -3265,9 +3300,9 @@ fn FieldsModal(
                     div { class: "modal-body",
                         if let Some(err) = error() { div { class: "alert alert-danger", "{err}" } }
 
-                        div { class: "card mb-3",
-                            div { class: "card-header py-2", "Add field" }
-                            div { class: "card-body py-3",
+                        div { class: "edit-section mb-3",
+                            div { class: "edit-section-heading py-2", "Add field" }
+                            div { class: "edit-section-body py-3",
                                 div { class: "mb-3",
                                     label { class: "form-label", "Field name" }
                                     input {
@@ -4194,9 +4229,9 @@ fn TableView(
                         let structural = is_structural_match(m);
                         // Editor table: structural rows show real statuses like matches.
                         let (status_color, status_label) = if structural && !edit_mode {
-                            ("#e9ecef".to_string(), "—".to_string())
+                            ("var(--ui-surface-hover)".to_string(), "—".to_string())
                         } else if m.status.is_empty() {
-                            ("#e9ecef".to_string(), "-".to_string())
+                            ("var(--ui-surface-hover)".to_string(), "-".to_string())
                         } else {
                             status_color_and_label(&m.status)
                         };
@@ -4210,7 +4245,7 @@ fn TableView(
                                     }
                                 }
                                 td { "{m.field.as_deref().unwrap_or(\"\")}" }
-                                td {
+                                td { class: "table-nowrap",
                                     if let Some((start_utc, _)) = display_interval_utc(m, show_as_happened) {
                                         span { "{format_naive_utc_time_local(start_utc, tz_offset)}" }
                                     } else { "-" }
@@ -4249,10 +4284,10 @@ fn TableView(
                                     td { class: "small", "{fmt_str(&m.team1_initial)}" }
                                     td { class: "small", "{fmt_str(&m.team2_initial)}" }
                                     td { class: "small", "{fmt_str(&m.refs_initial)}" }
-                                    td { class: "small", "{fmt_dt(&m.scheduled_start_time)}" }
-                                    td { class: "small", "{fmt_dt(&m.nominal_start_time)}" }
-                                    td { class: "small", "{fmt_dt(&m.confirmed_start_time)}" }
-                                    td { class: "small", "{fmt_dt(&m.completed_time)}" }
+                                    td { class: "small table-nowrap", "{fmt_dt(&m.scheduled_start_time)}" }
+                                    td { class: "small table-nowrap", "{fmt_dt(&m.nominal_start_time)}" }
+                                    td { class: "small table-nowrap", "{fmt_dt(&m.confirmed_start_time)}" }
+                                    td { class: "small table-nowrap", "{fmt_dt(&m.completed_time)}" }
                                     td { class: "small", "{fmt_u32(&m.nominal_length)}" }
                                     td { class: "small", "{fmt_str(&m.set_type)}" }
                                     td { class: "small", "{fmt_u32(&m.nsets)}" }
@@ -4765,14 +4800,14 @@ fn ref_token_match_name(token: &str) -> Option<&str> {
 /// kind: 0 = chain (blue), 1 = team supplier (green), 2 = ref supplier (orange).
 fn dep_edge_color(kind: u8) -> &'static str {
     match kind {
-        0 => "#0d6efd",
-        1 => "#198754",
-        _ => "#fd7e14",
+        0 => "var(--schedule-dep-chain)",
+        1 => "var(--schedule-dep-team)",
+        _ => "var(--schedule-dep-ref)",
     }
 }
 
 /// Stacked outline rings for a block in the alt-dependency view: one 3px ring
-/// per edge (in order), colored like its line, with 1px translucent-white
+/// per edge (in order), colored like its line, with 1px surface-colored
 /// separators so adjacent same-color rings stay countable. Returns an inline
 /// `box-shadow: …;` declaration.
 fn dep_ring_shadow(kinds: &[u8]) -> String {
@@ -4782,7 +4817,7 @@ fn dep_ring_shadow(kinds: &[u8]) -> String {
         .map(|(i, kind)| {
             let inner = (i as u32) * 4;
             format!(
-                "0 0 0 {}px {}, 0 0 0 {}px rgba(255,255,255,0.9)",
+                "0 0 0 {}px {}, 0 0 0 {}px var(--ui-surface)",
                 inner + 3,
                 dep_edge_color(*kind),
                 inner + 4
@@ -4901,11 +4936,11 @@ mod dep_geometry_tests {
     fn ring_shadow_one_ring_per_distinct_edge_in_order() {
         let css = dep_ring_shadow(&[0, 1, 2]);
         assert!(css.starts_with("box-shadow: "));
-        assert_eq!(css.matches("rgba(255,255,255,0.9)").count(), 3);
+        assert_eq!(css.matches("var(--ui-surface)").count(), 3);
         // Ring order (inner→outer) follows edge order; colors match the lines.
-        let chain = css.find("#0d6efd").unwrap();
-        let team = css.find("#198754").unwrap();
-        let refc = css.find("#fd7e14").unwrap();
+        let chain = css.find("var(--schedule-dep-chain)").unwrap();
+        let team = css.find("var(--schedule-dep-team)").unwrap();
+        let refc = css.find("var(--schedule-dep-ref)").unwrap();
         assert!(chain < team && team < refc);
     }
 }
@@ -5491,7 +5526,7 @@ fn ScheduleTimeline(
             // Status tag palette only (never overwritten for highlight; highlight is on the block).
             // Editor: structural blocks (breaks/joins) show real statuses like matches.
             let (color, _) = if is_structural_match(m) && !editor {
-                ("#e9ecef".to_string(), "—".to_string())
+                ("var(--ui-surface-hover)".to_string(), "—".to_string())
             } else {
                 status_color_and_label(&m.status)
             };
@@ -6696,7 +6731,7 @@ fn ScheduleTimeline(
                             geom_by_id.insert(e.id.clone(), (left, width, start_slots, duration_slots));
                             let is_structural = is_structural_type(e.schedule_type.as_deref());
                             // Editor: structural blocks look like matches (statuses shown).
-                            let bg = if is_structural && !editor { "#f1f3f5" } else { "#ffffff" };
+                            let bg = if is_structural && !editor { "var(--ui-surface-muted)" } else { "var(--ui-surface)" };
                             let style = format!(
                                 "background-color: {bg}; position: absolute; box-sizing: border-box; \
                                  left: calc({left}% + 1px); width: calc({width}% - 2px); \
@@ -6937,15 +6972,15 @@ fn ScheduleTimeline(
                                 }
                                 div { class: "schedule-dep-legend",
                                     span { class: "schedule-dep-legend-item",
-                                        span { class: "schedule-dep-legend-swatch", style: "background:#0d6efd;" }
+                                        span { class: "schedule-dep-legend-swatch", style: "background:var(--schedule-dep-chain);" }
                                         "previous match"
                                     }
                                     span { class: "schedule-dep-legend-item",
-                                        span { class: "schedule-dep-legend-swatch", style: "background:#198754;" }
+                                        span { class: "schedule-dep-legend-swatch", style: "background:var(--schedule-dep-team);" }
                                         "supplies a team"
                                     }
                                     span { class: "schedule-dep-legend-item",
-                                        span { class: "schedule-dep-legend-swatch", style: "background:#fd7e14;" }
+                                        span { class: "schedule-dep-legend-swatch", style: "background:var(--schedule-dep-ref);" }
                                         "supplies a ref"
                                     }
                                 }
@@ -7237,10 +7272,10 @@ fn EditMatchModal(
             // Docked editor card (not a modal): the schedule stays visible and
             // interactive beside/below it.
             div {
-                class: "card schedule-editor-card",
+                class: "edit-section schedule-editor-card",
                 tabindex: -1,
                 onkeydown: modal_keydown,
-                div { class: "card-header d-flex justify-content-between align-items-center",
+                div { class: "edit-section-heading d-flex justify-content-between align-items-center",
                     h5 { class: "mb-0", "Edit Match: {name}" }
                     button {
                         class: "btn-close",
@@ -7249,7 +7284,7 @@ fn EditMatchModal(
                         onclick: move |_| on_close.call(()),
                     }
                 }
-                        div { class: "card-body",
+                        div { class: "edit-section-body",
                         // Locked matches stay editable client-side; the server decides
                         // what (if anything) it will accept and the error shows here.
                         if match_locked {
@@ -7494,12 +7529,12 @@ fn EditMatchModal(
 /// Status color and label for timeline blocks and table status column (same logic in both places).
 fn status_color_and_label(status: &str) -> (String, String) {
     let color = match status {
-        "COMPLETED" => "#7acb8b",
-        "IN_PROGRESS" => "#ffd666",
-        "TIME_FINALIZED" => "#a5adb5",
-        "READY_TO_START" => "#82b1ff",
-        "SKIPPED" => "#adb5bd",
-        _ => "#6cc5d4",
+        "COMPLETED" => "var(--bs-success-bg-subtle)",
+        "IN_PROGRESS" => "var(--bs-warning-bg-subtle)",
+        "TIME_FINALIZED" => "var(--ui-surface-hover)",
+        "READY_TO_START" => "var(--bs-info-bg-subtle)",
+        "SKIPPED" => "var(--ui-surface-hover)",
+        _ => "var(--ui-surface-muted)",
     };
     let label: String = match status {
         "COMPLETED" => "Completed".to_string(),

@@ -35,7 +35,7 @@ pub fn SideCompRegisterAsTo(url: String, comp_id: i32) -> Element {
                     class: "btn btn-link",
                     "<- Back to side competition"
                 }
-                h1 { "Quick Register players" }
+                h2 { "Quick Register players" }
                 input {
                     class: "form-control mb-3",
                     r#type: "text",
@@ -123,7 +123,7 @@ fn EligibleRow(
     let name_edit = comp_name.clone();
 
     rsx! {
-        li { class: "list-group-item d-flex justify-content-between align-items-center",
+        li { class: "list-group-item data-list-row d-flex justify-content-between align-items-center",
             div {
                 strong { "{p_render.player_name}" }
                 if let Some(team) = p_render.team_pseudonym.as_ref() {

@@ -99,9 +99,9 @@ pub fn EditInjury(player_id: String, injury_id: u32) -> Element {
         } else {
             div { class: "row justify-content-center",
                 div { class: "col-md-6",
-                    div { class: "card",
-                        div { class: "card-header", h5 { class: "mb-0", "Injury Details" } }
-                        div { class: "card-body",
+                    div { class: "edit-section",
+                        div { class: "edit-section-heading", h5 { class: "mb-0", "Injury Details" } }
+                        div { class: "edit-section-body",
                             if let Some(err) = error() {
                                 div { class: "alert alert-danger", "{err}" }
                             }

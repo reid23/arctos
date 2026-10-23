@@ -178,7 +178,7 @@ pub fn SideCompWeaponModal(
     let mut error = use_signal(|| None::<String>);
 
     let submit_label = match mode {
-        SideCompRegistrationMode::Register => "Submit",
+        SideCompRegistrationMode::Register => "Register",
         SideCompRegistrationMode::Edit => "Save",
     };
 

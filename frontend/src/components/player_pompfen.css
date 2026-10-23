@@ -1,0 +1,17 @@
+.arctos-app .player-pompfen-editor { min-width: 0; margin: 0 0 1.5rem; }
+.arctos-app .player-pompfen-editor legend { float: none; width: auto; margin: 0 0 .5rem; font-size: 1rem; font-weight: 600; }
+.arctos-app .player-pompfen-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: .5rem; }
+.arctos-app .player-pompfen-choice { display: flex; align-items: center; gap: .5rem; min-height: 48px; padding: .5rem; border: 1px solid var(--ui-border); border-radius: .5rem; color: var(--ui-muted); cursor: pointer; font-size: .8125rem; }
+.arctos-app .player-pompfen-choice .form-check-input { flex: 0 0 auto; margin: 0; }
+.arctos-app .player-pompfen-choice:focus-within { outline: 3px solid var(--ui-link); outline-offset: 2px; }
+.arctos-app .player-pompfen-list { display: flex; flex: 0 0 auto; align-self: center; justify-content: flex-end; gap: 4px; max-width: 100%; list-style: none; padding: 0; margin: 0; margin-inline-start: auto; }
+.arctos-app .player-pompfen-item { display: grid; place-items: center; flex: 0 0 28px; width: 28px; height: 28px; color: var(--ui-text); }
+.arctos-app .player-pompfen-choice.is-selected { color: var(--ui-accent-text); background: var(--ui-accent-soft); border-color: var(--ui-accent-border); }
+.arctos-app .player-pompfen-symbol { flex-shrink: 0; line-height: 1; }
+.arctos-app .player-pompfen-symbol img { filter: var(--ui-icon-filter); }
+.arctos-app .player-pompfen-item:not(.is-selected) .player-pompfen-symbol,
+.arctos-app .player-pompfen-choice:not(.is-selected) .player-pompfen-symbol { filter: grayscale(1); opacity: .4; }
+.arctos-app .player-pompfen-item .player-pompfen-symbol { pointer-events: none; }
+@media (max-width: 575.98px) {
+  .arctos-app .profile-meta > .player-pompfen-list { flex-basis: 100%; }
+}

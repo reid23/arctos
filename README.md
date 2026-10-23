@@ -94,100 +94,139 @@ Top-level files:
 - `init_db.py`, `reset_password.py` - small CLI utilities (legacy;
   prefer the factory-based flow for new code).
 
-## Running the app
+## Running the app locally
 
-### Backend
+The frontend uses Rust and Dioxus. Python packages are locked in `uv.lock` and
+Rust packages in `frontend/Cargo.lock`. Bootstrap 5.3.3 and Font Awesome 6.0.0
+are bundled locally with their licenses, so styling does not require a CDN.
 
-> Supported platforms: macOS on Apple Silicon and Ubuntu/Debian on
-> x86_64. Windows isn't supported directly; use WSL.
+Supported platforms: macOS on Apple Silicon and Ubuntu/Debian on x86_64
+(Windows users can use WSL).
 
-1. Install [uv](https://docs.astral.sh/uv/).
-2. Set up your SSL certs. If you're using nginx you can do this there
-   and use [certbot](https://certbot.eff.org/). If you're just testing, you can
-   generate self-signed certs with:
+### Install dependencies
 
-```bash
-openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -sha256 -days 365
-```
-
-or
+If starting on a fresh machine, install [uv](https://docs.astral.sh/uv/),
+[just](https://just.systems/), and [Rust](https://rustup.rs/), or use the
+platform bootstrap in `setup/README.md`. Then run:
 
 ```bash
-just certs
+uv sync --group test
+just setup-frontend
 ```
 
-   This writes `cert.pem` and `key.pem` to the repo root (valid for
-   365 days, `CN=localhost`). Override with
-   `just cert_days=730 cert_subject=/CN=arctos.example.com certs`,
-   and pass `force=1` to overwrite existing certs.
+`setup-frontend` installs the WebAssembly target and Dioxus CLI 0.7.10 if it
+is missing. If Rust was just installed, open a new terminal or run
+`source "$HOME/.cargo/env"` first.
 
-3. Create a `.env` file at the repo root with the variables you need:
+### Try the interface with sample events
+
+Run these in two terminals from the repository root:
 
 ```bash
-ARCTOS_CORS_DEV=1
-ARCTOS_API_BASE=http://127.0.0.1:8081
-YOUTUBE_API_KEY=your_youtube_api_key
-GOOGLE_CLIENT_SECRET=your_google_client_secret
-GOOGLE_CLIENT_ID=your_google_client_id
-SECRET_KEY=your_app_secret_key
+just demo       # sample Flask backend, http://127.0.0.1:5006
 ```
-
-If you don't have some of these, you can leave them empty; they are
-only needed for the sign in with google and youtube auto-seek
-features. The `SECRET_KEY` variable must be a random value for
-security reasons. You can get one by running
 
 ```bash
-python -c "import os; print(os.urandom(12).hex())"
+just frontend   # Dioxus app, http://127.0.0.1:8080
 ```
 
-> [!IMPORTANT]
->
-> The `ARCTOS_CORS_DEV` and `ARCTOS_API_BASE` are only for dev
-> environments where you don't have a reverse proxy set up to direct
-> traffic and are thus hosting the frontend and backend on different
-> ports.
+Open **http://127.0.0.1:8080**. Use `demo-organizer`, `demo-player`, or `demo-team` with the password
+`arctos-demo-only` (also printed at startup). It includes public events, league registration, rosters, live and
+completed matches, and side competitions. Two scoring examples each have 16 entrants: **Open Dueling — Practice** starts without results, while **Dueling Standings — Practice** has sample wins and losses. Both remain active so `demo-organizer` can enter or correct results. Demo records live only in
+`instance/demo.db`; rerunning preserves changes and never touches
+`instance/tournament.db`. These are local test accounts, not production users.
 
-1. Start the app:
+Existing databases need migrations `0023_profile_banners`, `0024_event_banners`, and `0025_player_profile_details` for uploaded banners and player pronouns/pompfen. Run `uv sync --group test`, back up each working database, and apply pending migrations before restarting the updated backend. Existing demo copies are preserved by `scripts.dev_demo`, so they are not automatically migrated on restart. Point Alembic at each working copy explicitly:
 
 ```bash
-just run
+SQLALCHEMY_DATABASE_URI=sqlite:////absolute/path/to/arctos/instance/snapshot-demo/demo.db uv run alembic upgrade head
 ```
 
-This loads `.env`, runs `uv sync`, and starts gunicorn. The defaults
-match the example above (5 workers, binding `0.0.0.0:8081`, using
-`cert.pem`/`key.pem`). Override any of them on the command line, e.g.:
+Use `instance/demo.db` instead for the ordinary demo, never the original snapshot source. See [the migration notes](migrations/README.md#profile-and-event-banners) for schema verification and stamping of unversioned databases. Fresh demos already include the current columns.
+
+Profile owners can preview text, avatars, and covers from Edit profile, then save
+all changes together. Player bios and team descriptions support Markdown,
+including headings, lists, bold text, and links, in both previews and public profiles.
+Cancel discards the draft. Tournament and league organizers
+can edit covers from Settings. Image controls support dragging or tapping to position, zoom, keyboard
+positioning, and resetting the position on the image. The server accepts
+still JPEG, PNG, and WebP images up to 8 MiB and removes embedded metadata.
+Keep `static/uploads` alongside database backups: image files are stored there,
+while the database stores their paths.
+
+Player, team, tournament, and league detail headers stay visible. Only the
+top-level Events, Leagues, Players, Teams, and Stones introductions can be
+collapsed with the chevron at their top-right and restored in Appearance settings.
+
+To preview an existing versioned SQLite snapshot, run the backend with:
 
 ```bash
-just workers=10 bind=0.0.0.0:9000 run
-just certfile= keyfile= run          # if you handle SSL elsewhere
-just env_file=.env.prod run          # use a different env file
+uv run python -m scripts.dev_demo --snapshot /absolute/path/to/snapshot.db
 ```
 
-#### Video footage
+This reads the source without modifying it, migrates a working copy at
+`instance/snapshot-demo/demo.db`, and adds the fictional demo accounts and
+examples. Repeating the command preserves the working copy and its edits.
+The ordinary `instance/demo.db` is kept separately. Snapshots with reserved
+demo IDs are rejected instead of changing existing accounts. The snapshot must
+have a known Alembic revision; the launcher never stamps an unknown or
+unversioned database. Add `--seed-only` to prepare the copy without starting
+the server. Uploaded media is not copied by this command; make its existing
+`static/uploads` files available separately.
 
-Match footage is attached through the footage API (a YouTube link or an
-uploaded video file plus optional point-timestamp anchors). Uploaded
-files are published to YouTube via the upload account configured by the
-`YOUTUBE_UPLOAD_*` variables (see [`docs/env-vars.md`](docs/env-vars.md));
-the local copy is deleted once the upload completes.
-
-### Frontend
-
-Install the Dioxus CLI:
+For a populated event to practice organizing, run this after preparing and migrating the working demo:
 
 ```bash
-cargo install dioxus-cli
+uv run python -m scripts.dev_practice --database instance/snapshot-demo/demo.db
 ```
 
-then (for development) serve the app:
+This adds **Practice Open — Demo** at `/demo-practice`, owned by `demo-organizer`: six teams with six players each, two fields, six completed matches, a ready match, a paused live match, and a later scheduled match. Its active dueling side event has 24 entrants, with sample wins/losses for twelve and no scores yet for twelve. The command prints direct Start, Run, Enter results, and Manage results links. Use `--database instance/demo.db` for the ordinary demo.
+
+The practice command makes only additive changes, rolls back the whole addition on failure, and does not run app startup or scheduling updates on other events. Repeating it preserves edits, scores, passwords, and deletions; use a fresh `--slug demo-practice-2` for another independent example. Colliding IDs are rejected rather than reused. Existing accounts and `demo-open` stay unchanged; the original snapshot is never an input to this command.
+
+For a phone on your local network, start the frontend with
+`just frontend --addr 0.0.0.0`, then open your computer's LAN address on port
+8080. The development server proxies `/_api/`, `/api/`, and `/static/` to
+Flask; the phone does not need to reach a second port. Camera recording and
+some browser APIs require HTTPS (or localhost), so test those on localhost
+or a trusted HTTPS development setup.
+
+### Use your own local database
+
+Copy `.env.example` to `.env` and set `SECRET_KEY` to a random value. Keep
+`ARCTOS_CORS_DEV=0` for the normal same-origin development setup. Initialize
+or migrate the database, then start the backend:
 
 ```bash
-just frontend            # equivalent to `cd frontend && dx serve`
+just db-migrate-safe
+just dev
 ```
 
-In production, you should run `dx bundle --release` and copy the
-output files to somewhere that your reverse proxy can serve.
+Run `just frontend` separately. By default, API URLs use the page's origin
+in both development and production. `ARCTOS_API_BASE` can be set **when
+building the frontend** for an intentional separate backend; that setup
+also needs the corresponding backend CORS/cookie configuration.
+
+For Google sign-in through the development proxy, set `GOOGLE_REDIRECT_URI`
+to the exact frontend callback URL registered with Google (for example,
+`http://127.0.0.1:8080/_api/auth/google/callback`).
+
+Google sign-in and YouTube upload require your own credentials; ordinary
+local account login and event workflows do not. See [environment
+variables](docs/env-vars.md) for integration configuration.
+
+### Production
+
+```bash
+cd frontend
+dx bundle --release
+```
+
+Serve the bundle behind nginx, proxying API/static requests to Flask as
+described in [the deployment guide](docs/DEPLOY.md). `just run` starts
+gunicorn using `.env`; it defaults to TLS on port 8081. Use
+`just certfile= keyfile= run` when TLS is handled by your reverse proxy.
+`just certs` creates local self-signed certificates if needed.
 
 ## Daily commands
 
@@ -198,13 +237,13 @@ output files to somewhere that your reverse proxy can serve.
 | Format | `just format` |
 | Apply migrations | `just db-migrate-safe` |
 | Generate a migration | `just db-revision "snake_case_message"` |
-| Start dev backend | `just dev` (HTTP, :5006) or `just run` (TLS, :8081) |
+| Start dev backend | `just demo` (sample data), `just dev` (HTTP, :5006), or `just run` (TLS, :8081) |
 | Start dev frontend | `just frontend` |
 
 Coverage is configured under `[tool.coverage.*]` in `pyproject.toml`
-with a soft `fail_under = 30` floor; current actual is around 33% with
-branch coverage on. See [`TESTING.md`](TESTING.md#coverage) for the
-HTML report path and how the threshold is meant to move.
+with a `fail_under = 30` floor and branch coverage enabled. See
+[`TESTING.md`](TESTING.md#coverage) for the current report and how the
+threshold is meant to move.
 
 ## Conventions
 

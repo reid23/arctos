@@ -12,21 +12,6 @@ pub enum EditRegistrationContext {
     Tournament { tournament_url: String },
 }
 
-impl EditRegistrationContext {
-    fn league_url(&self) -> Option<String> {
-        match self {
-            EditRegistrationContext::League { league_url } => Some(league_url.clone()),
-            _ => None,
-        }
-    }
-    fn tournament_url(&self) -> Option<String> {
-        match self {
-            EditRegistrationContext::Tournament { tournament_url } => Some(tournament_url.clone()),
-            _ => None,
-        }
-    }
-}
-
 #[component]
 pub fn EditRegistrationModal(
     context: EditRegistrationContext,
@@ -35,6 +20,7 @@ pub fn EditRegistrationModal(
     on_success: EventHandler<()>,
 ) -> Element {
     let mut show_deregister_confirm = use_signal(|| false);
+    let busy = use_signal(|| true);
     let is_team = user_type == "team";
 
     rsx! {
@@ -43,22 +29,26 @@ pub fn EditRegistrationModal(
             style: "background: rgba(0,0,0,0.5);",
             tabindex: "-1",
             role: "dialog",
+            aria_modal: "true",
+            aria_labelledby: "edit-registration-title",
             onclick: move |_| {
+                if busy() { return; }
                 on_close.call(());
                 show_deregister_confirm.set(false);
             },
             div {
-                class: "modal-dialog modal-dialog-centered",
+                class: "modal-dialog modal-dialog-centered modal-dialog-scrollable",
                 onclick: move |ev: Event<MouseData>| { ev.stop_propagation(); },
                 div { class: "modal-content",
                     div { class: "modal-header",
-                        h5 { class: "modal-title",
+                        h5 { class: "modal-title", id: "edit-registration-title",
                             if is_team { "Edit Team Registration" } else { "Edit Player Registration" }
                         }
                         button {
                             r#type: "button",
                             class: "btn-close",
                             aria_label: "Close",
+                            disabled: busy(),
                             onclick: move |_| {
                                 on_close.call(());
                                 show_deregister_confirm.set(false);
@@ -69,12 +59,14 @@ pub fn EditRegistrationModal(
                         if is_team {
                             EditTeamRegistrationContent {
                                 context: context.clone(),
+                                busy,
                                 on_close: on_close.clone(),
                                 on_success: on_success.clone(),
                             }
                         } else {
                             EditPlayerRegistrationContent {
                                 context: context.clone(),
+                                busy,
                                 on_close: on_close.clone(),
                                 on_success: on_success.clone(),
                             }
@@ -82,6 +74,7 @@ pub fn EditRegistrationModal(
                         if show_deregister_confirm() {
                             DeregisterConfirmOverlay {
                                 context: context.clone(),
+                                busy,
                                 is_team,
                                 on_close: on_close.clone(),
                                 on_success: on_success.clone(),
@@ -93,6 +86,7 @@ pub fn EditRegistrationModal(
                         button {
                             r#type: "button",
                             class: "btn btn-outline-danger",
+                            disabled: busy() || show_deregister_confirm(),
                             onclick: move |_| show_deregister_confirm.set(true),
                             if is_team { "Deregister Team" } else { "Deregister Player" }
                         }
@@ -100,7 +94,8 @@ pub fn EditRegistrationModal(
                             r#type: "submit",
                             form: if is_team { "edit-team-registration-form" } else { "edit-player-registration-form" },
                             class: "btn btn-primary",
-                            "Save"
+                            disabled: busy() || show_deregister_confirm(),
+                            if busy() { "Please wait…" } else { "Save changes" }
                         }
                     }
                 }
@@ -113,106 +108,65 @@ pub fn EditRegistrationModal(
 fn DeregisterConfirmOverlay(
     context: EditRegistrationContext,
     is_team: bool,
+    mut busy: Signal<bool>,
     on_close: EventHandler<()>,
     on_success: EventHandler<()>,
     on_cancel: EventHandler<()>,
 ) -> Element {
-    let league_url = context.league_url();
-    let tournament_url = context.tournament_url();
-    let deregister_error = use_signal(|| None::<String>);
+    let mut deregister_error = use_signal(|| None::<String>);
+    let scope_description = match &context {
+        EditRegistrationContext::League { .. } => {
+            "This changes your registration for the entire league season."
+        }
+        EditRegistrationContext::Tournament { .. } => {
+            "This changes your registration for this tournament."
+        }
+    };
     rsx! {
         div {
-            class: "position-absolute top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center",
+            class: "position-absolute top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center p-3",
             style: "background: rgba(0,0,0,0.3); z-index: 1050; border-radius: 0.25rem;",
-            onclick: move |_| on_cancel.call(()),
+            onclick: move |_| { if !busy() { on_cancel.call(()); } },
             div {
                 class: "card shadow",
+                role: "alertdialog",
+                aria_labelledby: "deregister-title",
+                aria_describedby: "deregister-description",
                 onclick: move |ev: Event<MouseData>| { ev.stop_propagation(); },
                 div { class: "card-body",
-                    p { class: "mb-3",
-                        if is_team {
-                            "Are you sure you want to deregister your team? Your team will be removed."
-                        } else {
-                            "Are you sure you want to deregister? You will be removed."
-                        }
-                    }
+                    h5 { id: "deregister-title", if is_team { "Withdraw your team?" } else { "Withdraw your registration?" } }
+                    p { id: "deregister-description", "{scope_description}" }
+                    p { class: "small text-muted", "Registration must be open to register again. Contact an organizer about any payment or refund." }
                     if let Some(ref err) = deregister_error() {
-                        div { class: "alert alert-danger small py-2 mb-3", "{err}" }
+                        div { class: "alert alert-danger small py-2 mb-3", role: "alert", "{err}" }
                     }
-                    div { class: "d-flex gap-2 justify-content-end",
-                        button {
-                            r#type: "button",
-                            class: "btn btn-secondary",
-                            onclick: move |_| on_cancel.call(()),
-                            "Cancel"
-                        }
+                    div { class: "d-flex gap-2 justify-content-end flex-wrap",
+                        button { r#type: "button", class: "btn btn-secondary", disabled: busy(), onclick: move |_| on_cancel.call(()), "Keep registration" }
                         button {
                             r#type: "button",
                             class: "btn btn-danger",
+                            disabled: busy(),
                             onclick: move |_| {
-                                if let Some(lu) = league_url.clone() {
-                                    if is_team {
-                                        let on_close = on_close.clone();
-                                        let on_success = on_success.clone();
-                                        let mut deregister_error = deregister_error.clone();
-                                        spawn(async move {
-                                            deregister_error.set(None);
-                                            match api::league_deregister_team(&lu).await {
-                                                Ok(_) => {
-                                                    on_close.call(());
-                                                    on_success.call(());
-                                                }
-                                                Err(e) => deregister_error.set(Some(e)),
-                                            }
-                                        });
-                                    } else {
-                                        let on_close = on_close.clone();
-                                        let on_success = on_success.clone();
-                                        let mut deregister_error = deregister_error.clone();
-                                        spawn(async move {
-                                            deregister_error.set(None);
-                                            match api::league_deregister_player(&lu).await {
-                                                Ok(_) => {
-                                                    on_close.call(());
-                                                    on_success.call(());
-                                                }
-                                                Err(e) => deregister_error.set(Some(e)),
-                                            }
-                                        });
+                                if busy() { return; }
+                                busy.set(true);
+                                deregister_error.set(None);
+                                let ctx = context.clone();
+                                spawn(async move {
+                                    let result = match (&ctx, is_team) {
+                                        (EditRegistrationContext::League { league_url }, true) => api::league_deregister_team(league_url).await,
+                                        (EditRegistrationContext::League { league_url }, false) => api::league_deregister_player(league_url).await,
+                                        (EditRegistrationContext::Tournament { tournament_url }, true) => api::deregister_team(tournament_url).await,
+                                        (EditRegistrationContext::Tournament { tournament_url }, false) => api::deregister_player(tournament_url).await,
+                                    };
+                                    busy.set(false);
+                                    match result {
+                                        Ok(res) if res.success => { on_close.call(()); on_success.call(()); }
+                                        Ok(res) => deregister_error.set(Some(res.error.unwrap_or_else(|| "Could not withdraw registration.".into()))),
+                                        Err(e) => deregister_error.set(Some(e)),
                                     }
-                                } else if let Some(tu) = tournament_url.clone() {
-                                    if is_team {
-                                        let on_close = on_close.clone();
-                                        let on_success = on_success.clone();
-                                        let mut deregister_error = deregister_error.clone();
-                                        spawn(async move {
-                                            deregister_error.set(None);
-                                            match api::deregister_team(&tu).await {
-                                                Ok(_) => {
-                                                    on_close.call(());
-                                                    on_success.call(());
-                                                }
-                                                Err(e) => deregister_error.set(Some(e)),
-                                            }
-                                        });
-                                    } else {
-                                        let on_close = on_close.clone();
-                                        let on_success = on_success.clone();
-                                        let mut deregister_error = deregister_error.clone();
-                                        spawn(async move {
-                                            deregister_error.set(None);
-                                            match api::deregister_player(&tu).await {
-                                                Ok(_) => {
-                                                    on_close.call(());
-                                                    on_success.call(());
-                                                }
-                                                Err(e) => deregister_error.set(Some(e)),
-                                            }
-                                        });
-                                    }
-                                }
+                                });
                             },
-                            "Deregister"
+                            if busy() { "Withdrawing…" } else { "Withdraw registration" }
                         }
                     }
                 }
@@ -224,10 +178,10 @@ fn DeregisterConfirmOverlay(
 #[component]
 fn EditPlayerRegistrationContent(
     context: EditRegistrationContext,
+    mut busy: Signal<bool>,
     on_close: EventHandler<()>,
     on_success: EventHandler<()>,
 ) -> Element {
-    let backend = api::base_url();
     let mut jersey_name = use_signal(|| "".to_string());
     let mut jersey_number = use_signal(|| "".to_string());
     let mut team = use_signal(|| "".to_string());
@@ -296,16 +250,21 @@ fn EditPlayerRegistrationContent(
                 (_, Err(e)) => error.set(Some(format!("Failed to load details: {}", e))),
             }
             loading.set(false);
+            busy.set(false);
         }
     });
 
     let context_for_submit = context.clone();
-    let onsubmit = move |_evt: Event<FormData>| {
+    let onsubmit = move |evt: Event<FormData>| {
+        evt.prevent_default();
         let ctx = context_for_submit.clone();
         let on_close = on_close.clone();
         let on_success = on_success.clone();
         async move {
-            loading.set(true);
+            if busy() || loading() {
+                return;
+            }
+            busy.set(true);
             error.set(None);
             let t_val = team();
             let team_opt = if t_val.is_empty() { None } else { Some(t_val) };
@@ -327,6 +286,7 @@ fn EditPlayerRegistrationContent(
                     api::update_my_player_registration(tournament_url, &req).await
                 }
             };
+            busy.set(false);
             match res {
                 Ok(_) => {
                     on_close.call(());
@@ -349,38 +309,41 @@ fn EditPlayerRegistrationContent(
             }
         } else {
             if let Some(err) = error() {
-                div { class: "alert alert-danger mb-3", "{err}" }
+                div { class: "alert alert-danger mb-3", role: "alert", "{err}" }
             }
             form {
                 id: "edit-player-registration-form",
                 onsubmit: onsubmit,
                 div { class: "mb-3",
-                    label { class: "form-label", "Jersey Name" }
+                    label { class: "form-label", r#for: "edit-jersey-name", "Jersey Name" }
                     input {
                         class: "form-control",
                         "type": "text",
+                        id: "edit-jersey-name",
                         value: "{jersey_name}",
                         oninput: move |e| jersey_name.set(e.value()),
                         required: true
                     }
-                    div { class: "form-text", "Your name for this tournament" }
+                    div { class: "form-text", "Your jersey name for this event or league season." }
                 }
                 div { class: "mb-3",
-                    label { class: "form-label", "Jersey Number" }
+                    label { class: "form-label", r#for: "edit-jersey-number", "Jersey Number" }
                     input {
                         class: "form-control",
                         "type": "text",
+                        id: "edit-jersey-number",
                         value: "{jersey_number}",
                         oninput: move |e| jersey_number.set(e.value())
                     }
                 }
                 div { class: "mb-3",
-                    label { class: "form-label", "Team" }
+                    label { class: "form-label", r#for: "edit-registration-team", "Team" }
                     select {
                         class: "form-select",
+                        id: "edit-registration-team",
                         value: "{team}",
                         onchange: move |e| team.set(e.value()),
-                        option { value: "", selected: team().is_empty(), "No Team (unattached/free merc)" }
+                        option { value: "", selected: team().is_empty(), "No team — join as a free merc" }
                         for (id, name) in teams() {
                             option { value: "{id}", selected: id == team(), "{name}" }
                         }
@@ -398,17 +361,20 @@ fn EditPlayerRegistrationContent(
                 }
                 if waiver_required() {
                     div { class: "mb-3",
-                        label { class: "form-label", "Waiver Signature" }
+                        label { class: "form-label", r#for: "edit-waiver-signature", "Waiver Signature" }
                         if let Some(link) = waiver_filepath() {
                             div { class: "form-text mb-2",
-                                "Waiver file: "
-                                a { href: "{backend}{link}", target: "_blank", class: "text-decoration-none", "{backend}{link}" }
+
+                                a { href: api::static_file_url(&link), target: "_blank", rel: "noopener noreferrer", class: "text-decoration-none", "Read the waiver (opens a new tab)" }
                                 if let Some(sha) = waiver_sha256() {
-                                    div { class: "text-muted mt-1", "Hash (SHA-256):" }
+                                    details { class: "waiver-verification mt-2",
+                                        summary { "Document verification (SHA-256)" }
                                     pre { class: "p-2 border rounded bg-light mt-1 mb-0", style: "white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;", code { "{sha}" } }
+                                    }
                                 }
                             }
                         }
+                        p { class: "form-text mb-2", "Your legal name is shared only with you and event organizers." }
                         p { class: "form-text mb-2", "By entering your full legal name below, you agree to the terms of the waiver linked above, and affirm that the waiver you viewed matches the SHA-256 hash displayed." }
                         input {
                             class: if waiver_signature_valid() {
@@ -417,7 +383,9 @@ fn EditPlayerRegistrationContent(
                                 "form-control"
                             },
                             r#type: "text",
-                            value: "{waiver_legal_name_signature}",
+                            autocomplete: "name",
+                            id: "edit-waiver-signature",
+                        value: "{waiver_legal_name_signature}",
                             disabled: waiver_signature_valid(),
                             required: !waiver_signature_valid(),
                             oninput: move |e| waiver_legal_name_signature.set(e.value()),
@@ -440,6 +408,7 @@ fn EditPlayerRegistrationContent(
 #[component]
 fn EditTeamRegistrationContent(
     context: EditRegistrationContext,
+    mut busy: Signal<bool>,
     on_close: EventHandler<()>,
     on_success: EventHandler<()>,
 ) -> Element {
@@ -469,16 +438,21 @@ fn EditTeamRegistrationContent(
                 Err(e) => error.set(Some(e)),
             }
             loading.set(false);
+            busy.set(false);
         }
     });
 
     let context_for_submit = context.clone();
-    let onsubmit = move |_evt: Event<FormData>| {
+    let onsubmit = move |evt: Event<FormData>| {
+        evt.prevent_default();
         let ctx = context_for_submit.clone();
         let on_close = on_close.clone();
         let on_success = on_success.clone();
         async move {
-            loading.set(true);
+            if busy() || loading() {
+                return;
+            }
+            busy.set(true);
             error.set(None);
             let trimmed_short = shortname().trim().to_string();
             let req = UpdateTeamRegistrationRequest {
@@ -493,6 +467,7 @@ fn EditTeamRegistrationContent(
                     api::update_my_team_registration(tournament_url, &req).await
                 }
             };
+            busy.set(false);
             match res {
                 Ok(_) => {
                     on_close.call(());
@@ -515,23 +490,24 @@ fn EditTeamRegistrationContent(
             }
         } else {
             if let Some(err) = error() {
-                div { class: "alert alert-danger mb-3", "{err}" }
+                div { class: "alert alert-danger mb-3", role: "alert", "{err}" }
             }
             form {
                 id: "edit-team-registration-form",
                 onsubmit: onsubmit,
                 div { class: "mb-3",
-                    label { class: "form-label", "Team Name for This Tournament" }
+                    label { class: "form-label", r#for: "edit-team-pseudonym", "Team name for this registration" }
                     input {
                         class: "form-control",
                         "type": "text",
+                        id: "edit-team-pseudonym",
                         value: "{pseudonym}",
                         oninput: move |e| pseudonym.set(e.value()),
                         required: true
                     }
                 }
                 div { class: "mb-3",
-                    label { class: "form-label", "Short name (optional)" }
+                    label { class: "form-label", r#for: "shortname", "Short name (optional)" }
                     input {
                         class: "form-control",
                         "type": "text",

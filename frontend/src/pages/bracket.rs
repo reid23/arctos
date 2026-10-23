@@ -12,6 +12,7 @@ use dioxus::prelude::*;
 use wasm_bindgen::{JsCast, JsValue};
 
 use super::legacy_bracket::LegacyBracketDiagrams;
+use super::tournament_home::TournamentHomeContent;
 use crate::display::short_or_truncate;
 use crate::pages::TeamSelectionField;
 use crate::types::{
@@ -35,13 +36,30 @@ const MIN_ZOOM: f64 = 0.02;
 const MAX_ZOOM: f64 = 3.0;
 /// Minimum on-screen spacing between grid dots before we thin the lattice.
 const MIN_GRID_SCREEN_PX: f64 = 10.0;
-const REF_AIRWIRE_COLOR: &str = "#e6c200";
-const REF_AIRWIRE_RTL_COLOR: &str = "#e6194b";
-/// Distinguishable field colors (yellow #ffe119 + red #e6194b reserved for refs).
+const REF_AIRWIRE_COLOR: &str = "var(--bs-warning-text-emphasis)";
+const REF_AIRWIRE_RTL_COLOR: &str = "var(--bs-danger-text-emphasis)";
+/// Categorical field colors resolve per appearance mode; warning/danger colors are reserved for refs.
 const FIELD_AIRWIRE_COLORS: &[&str] = &[
-    "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#46f0f0", "#f032e6", "#bcf60c", "#fabebe",
-    "#008080", "#e6beff", "#9a6324", "#fffac8", "#800000", "#aaffc3", "#808000", "#ffd8b1",
-    "#000075", "#808080", "#ffffff", "#000000",
+    "var(--bracket-field-0)",
+    "var(--bracket-field-1)",
+    "var(--bracket-field-2)",
+    "var(--bracket-field-3)",
+    "var(--bracket-field-4)",
+    "var(--bracket-field-5)",
+    "var(--bracket-field-6)",
+    "var(--bracket-field-7)",
+    "var(--bracket-field-8)",
+    "var(--bracket-field-9)",
+    "var(--bracket-field-10)",
+    "var(--bracket-field-11)",
+    "var(--bracket-field-12)",
+    "var(--bracket-field-13)",
+    "var(--bracket-field-14)",
+    "var(--bracket-field-15)",
+    "var(--bracket-field-16)",
+    "var(--bracket-field-17)",
+    "var(--bracket-field-18)",
+    "var(--bracket-field-19)",
 ];
 /// Available snap-grid densities (world px). 0 = off.
 #[allow(dead_code)]
@@ -341,7 +359,7 @@ fn update_hover_tooltip(text: Option<&str>, cursor: Option<(f64, f64)>) {
 }
 
 /// Track field/ref airwire hover via elementFromPoint (SVG enter/leave is flaky).
-fn track_field_hover_from_mouse(ev: &Event<MouseData>) {
+fn track_field_hover_from_pointer(ev: &Event<PointerData>) {
     #[cfg(target_arch = "wasm32")]
     {
         let cx = ev.client_coordinates().x;
@@ -1146,8 +1164,10 @@ fn focus_bracket_root() {
             if let Some(doc) = window.document() {
                 if let Some(el) = doc.get_element_by_id("bracket-keyboard-focus") {
                     if let Some(html_el) = el.dyn_ref::<web_sys::HtmlElement>() {
-                        // preventScroll so refocus on window-return doesn't jump the page.
-                        let _ = html_el.focus();
+                        // Keep the event banner and current viewport in place when restoring hotkeys.
+                        let options = web_sys::FocusOptions::new();
+                        options.set_prevent_scroll(true);
+                        let _ = html_el.focus_with_options(&options);
                     }
                 }
             }
@@ -1217,7 +1237,7 @@ fn next_add_stagger(
     placed + texts.len() + labeled.len() + images.len()
 }
 
-fn canvas_pointer(ev: &Event<MouseData>, zoom: f64, pan: (f64, f64)) -> (f64, f64) {
+fn canvas_pointer(ev: &Event<PointerData>, zoom: f64, pan: (f64, f64)) -> (f64, f64) {
     #[cfg(target_arch = "wasm32")]
     {
         if let Some(window) = web_sys::window() {
@@ -1238,8 +1258,36 @@ fn canvas_pointer(ev: &Event<MouseData>, zoom: f64, pan: (f64, f64)) -> (f64, f6
     ((c.x - pan.0) / z, (c.y - pan.1) / z)
 }
 
-fn screen_pointer(ev: &Event<MouseData>) -> (f64, f64) {
+fn screen_pointer(ev: &Event<PointerData>) -> (f64, f64) {
     (ev.client_coordinates().x, ev.client_coordinates().y)
+}
+
+/// Capture the original hit target so pointer-up/cancel still bubbles through the
+/// canvas outside its bounds, without retargeting ordinary clicks to the wrapper.
+fn capture_canvas_pointer(ev: &Event<PointerData>) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        use dioxus_web::WebEventExt;
+        if let Some(target) = ev.data().try_as_web_event()
+            .and_then(|event| event.target())
+            .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
+        {
+            let _ = target.set_pointer_capture(ev.pointer_id());
+        }
+    }
+}
+
+fn release_canvas_pointer(ev: &Event<PointerData>) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        use dioxus_web::WebEventExt;
+        if let Some(target) = ev.data().try_as_web_event()
+            .and_then(|event| event.target())
+            .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
+        {
+            let _ = target.release_pointer_capture(ev.pointer_id());
+        }
+    }
 }
 
 fn underline_label(label: &str, key: char) -> Element {
@@ -1302,6 +1350,21 @@ enum DragKind {
 struct Interaction {
     drag: Option<DragKind>,
     selected: HashSet<String>,
+}
+
+/// Unsaved pointer gestures can be cancelled by the browser (for example when
+/// a system gesture takes over). Keep their starting state so cancellation never
+/// leaves a half-dragged node to be saved by a later action.
+#[derive(Clone)]
+struct PointerGesture {
+    pointer_id: i32,
+    interaction: Interaction,
+    matches: Vec<BracketMatchData>,
+    texts: Vec<BracketTextData>,
+    labeled: Vec<BracketLabeledTeamData>,
+    images: Vec<BracketImageData>,
+    pan: (f64, f64),
+    dirty: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1378,6 +1441,18 @@ fn resolve_label(
 
 #[component]
 pub fn Bracket(url: String) -> Element {
+    rsx! {
+        TournamentHomeContent {
+            key: "{url}",
+            url: url.clone(),
+            initial_tab: Some("bracket".to_string()),
+            content: Some(rsx! { BracketContent { url } }),
+        }
+    }
+}
+
+#[component]
+fn BracketContent(url: String) -> Element {
     let url_for_data = url.clone();
     let mut data = use_resource(move || {
         let u = url_for_data.clone();
@@ -1401,7 +1476,6 @@ pub fn Bracket(url: String) -> Element {
     let mut bracket_published = use_signal(|| false);
     let mut team_options_sig = use_signal(|| Vec::<TeamOption>::new());
     let mut tags_sig = use_signal(|| Vec::<TagSetupData>::new());
-    let mut tournament_name_sig = use_signal(|| String::new());
     let mut is_to_sig = use_signal(|| false);
     let mut interaction = use_signal(Interaction::default);
     // Hold-H hand tool: pointer motion pans without a button (trackpad-friendly).
@@ -1430,6 +1504,36 @@ pub fn Bracket(url: String) -> Element {
     /// Cleared after the first Save (subsequent edits keep the element on cancel).
     let mut pending_create = use_signal(|| None::<(String, String)>);
     let navigator = use_navigator();
+    let mut pointer_gesture = use_signal(|| None::<PointerGesture>);
+    let mut begin_pointer_gesture = move |ev: &Event<PointerData>| {
+        // The first finger owns the drag; extra touches must not replace it.
+        if !ev.is_primary() || pointer_gesture.peek().is_some() { return false; }
+        pointer_gesture.set(Some(PointerGesture {
+            pointer_id: ev.pointer_id(),
+            interaction: interaction(),
+            matches: local_matches(),
+            texts: local_texts(),
+            labeled: local_labeled(),
+            images: local_images(),
+            pan: pan(),
+            dirty: dirty(),
+        }));
+        capture_canvas_pointer(ev);
+        true
+    };
+    let mut cancel_pointer_gesture = move || {
+        let origin = pointer_gesture.write().take();
+        let Some(origin) = origin else { return; };
+        interaction.set(origin.interaction);
+        local_matches.set(origin.matches);
+        local_texts.set(origin.texts);
+        local_labeled.set(origin.labeled);
+        local_images.set(origin.images);
+        pan.set(origin.pan);
+        dirty.set(origin.dirty);
+        hand_last.set(None);
+        clear_field_hover();
+    };
 
     // Hoist resource read handle so effects/rsx share one stable Readable
     // (calling data.value() inside use_effect can ValueDroppedError).
@@ -1469,7 +1573,6 @@ pub fn Bracket(url: String) -> Element {
             drop(borrow);
             team_options_sig.set(matches_resp.team_options.clone());
             tags_sig.set(matches_resp.tags.clone());
-            tournament_name_sig.set(layout.tournament.name.clone());
             is_to_sig.set(layout.is_to);
             legacy_brackets.set(layout.legacy_brackets.clone());
             bracket_published.set(layout.bracket_published || layout.tournament.bracket_published);
@@ -1622,7 +1725,6 @@ pub fn Bracket(url: String) -> Element {
                 let is_to = is_to_sig();
                 let team_options = team_options_sig();
                 let tags = tags_sig();
-                let tournament_name = tournament_name_sig();
                 let tournament_url = url.clone();
 
                 let matches_snap = local_matches();
@@ -2013,8 +2115,8 @@ pub fn Bracket(url: String) -> Element {
                         id: "bracket-keyboard-focus",
                         class: "bracket-keyboard-focus",
                         tabindex: 0,
-                        role: "application",
-                        aria_label: "Bracket editor",
+                        role: if edit_mode() { "application" } else { "region" },
+                        aria_label: if edit_mode() { "Bracket editor" } else { "Tournament bracket" },
                         onkeydown: handle_keydown,
                         onkeyup: move |ev: Event<KeyboardData>| {
                             let k = ev.key().to_string();
@@ -2034,19 +2136,11 @@ pub fn Bracket(url: String) -> Element {
                         onclick: move |_| {
                             focus_bracket_root();
                         },
-                        onmounted: move |ev| {
-                            spawn(async move { let _ = ev.data().set_focus(true).await; });
-                        },
+                        onmounted: move |_| focus_bracket_root(),
 
                         div { class: "row",
                             div { class: "col-12",
-                                h1 { "{tournament_name} - Bracket" }
                                 div { class: "bracket-page-toolbar",
-                                    Link {
-                                        to: Route::TournamentHome { url: tournament_url.clone() },
-                                        class: "btn btn-outline-secondary btn-sm",
-                                        "Back to Tournament"
-                                    }
                                     if is_to {
                                         div { class: "form-check form-switch mb-0 ms-2",
                                             input {
@@ -2371,8 +2465,9 @@ pub fn Bracket(url: String) -> Element {
                                                 }
                                             }
                                         }
-                                        span { class: "text-muted small ms-1",
-                                            "Scroll zoom · Right-drag pan · Shift+click multi-select · Alt/Meta drag = fine adjust"
+                                        details { class: "bracket-shortcut-help text-muted small",
+                                            summary { "Keyboard and mouse shortcuts" }
+                                            p { class: "mb-0 mt-2", "Drag an item to move it · Drag empty space to pan on touchscreens · Scroll to zoom · Right-drag to pan · Shift+click for multiple selection · Alt/Meta drag for fine adjustment" }
                                         }
                                         if saving() {
                                             span { class: "text-muted small", "Saving…" }
@@ -2436,6 +2531,41 @@ pub fn Bracket(url: String) -> Element {
                                     }
                                 }
                             }
+                        }
+
+                        if !show_legacy_fallback && edit_mode() {
+                            div { class: "bracket-view-controls", role: "group", aria_label: "Bracket canvas view",
+                                // Keep controls keyboard-focusable; the canvas root otherwise reclaims focus on clicks.
+                                onclick: move |event: Event<MouseData>| event.stop_propagation(),
+                                onkeydown: move |event: Event<KeyboardData>| event.stop_propagation(),
+                                div { class: "bracket-zoom-controls", role: "group", aria_label: "Zoom controls",
+                                    button {
+                                        r#type: "button", class: "btn btn-outline-secondary btn-sm",
+                                        aria_label: "Zoom out", title: "Zoom out",
+                                        disabled: zoom() <= MIN_ZOOM,
+                                        onclick: move |_| { zoom.set((zoom() / 1.2).clamp(MIN_ZOOM, MAX_ZOOM)); },
+                                        "−"
+                                    }
+                                    output { class: "bracket-zoom-value", aria_label: "Zoom level", "{(zoom() * 100.0).round()}%" }
+                                    button {
+                                        r#type: "button", class: "btn btn-outline-secondary btn-sm",
+                                        aria_label: "Zoom in", title: "Zoom in",
+                                        disabled: zoom() >= MAX_ZOOM,
+                                        onclick: move |_| { zoom.set((zoom() * 1.2).clamp(MIN_ZOOM, MAX_ZOOM)); },
+                                        "+"
+                                    }
+                                }
+                                div { class: "bracket-pan-controls", role: "group", aria_label: "Move diagram",
+                                    button { r#type: "button", class: "btn btn-outline-secondary btn-sm", aria_label: "Move diagram left", title: "Move diagram left", onclick: move |_| { let (x, y) = pan(); pan.set((x - 120.0, y)); }, "←" }
+                                    button { r#type: "button", class: "btn btn-outline-secondary btn-sm", aria_label: "Move diagram up", title: "Move diagram up", onclick: move |_| { let (x, y) = pan(); pan.set((x, y - 120.0)); }, "↑" }
+                                    button { r#type: "button", class: "btn btn-outline-secondary btn-sm", aria_label: "Move diagram down", title: "Move diagram down", onclick: move |_| { let (x, y) = pan(); pan.set((x, y + 120.0)); }, "↓" }
+                                    button { r#type: "button", class: "btn btn-outline-secondary btn-sm", aria_label: "Move diagram right", title: "Move diagram right", onclick: move |_| { let (x, y) = pan(); pan.set((x + 120.0, y)); }, "→" }
+                                }
+                                button { r#type: "button", class: "btn btn-outline-secondary btn-sm", onclick: move |_| { zoom.set(1.0); pan.set((0.0, 0.0)); }, "Reset view" }
+                            }
+                        }
+                        if !show_legacy_fallback && !edit_mode() {
+                            p { class: "bracket-mobile-hint text-muted small", "Pinch to zoom in. Tap a match name for its details." }
                         }
 
                         if !show_legacy_fallback {
@@ -2523,8 +2653,11 @@ pub fn Bracket(url: String) -> Element {
                                 pan.set((sx - wx * new_z, sy - wy * new_z));
                                 zoom.set(new_z);
                             },
-                            onmousemove: move |ev: Event<MouseData>| {
-                                if edit_mode() && hand_pan() {
+                            onpointermove: move |ev: Event<PointerData>| {
+                                let active_pointer = pointer_gesture.read().as_ref().map(|gesture| gesture.pointer_id);
+                                if active_pointer.is_some_and(|id| id != ev.pointer_id()) { return; }
+                                if active_pointer.is_none() && ev.pointer_type() != "mouse" { return; }
+                                if edit_mode() && hand_pan() && active_pointer.is_none() {
                                     let (sx, sy) = screen_pointer(&ev);
                                     if let Some((lx, ly)) = hand_last() {
                                         let (px, py) = pan();
@@ -2538,7 +2671,7 @@ pub fn Bracket(url: String) -> Element {
                                     // No drag: continuously resolve field-airwire hover from
                                     // the element under the cursor (fixes sticky SVG leave).
                                     drop(ix);
-                                    track_field_hover_from_mouse(&ev);
+                                    track_field_hover_from_pointer(&ev);
                                     return;
                                 };
                                 // Dragging: force-clear so highlight never sticks mid-gesture.
@@ -2652,9 +2785,12 @@ pub fn Bracket(url: String) -> Element {
                                     }
                                 }
                             },
-                            onmouseup: {
+                            onpointerup: {
                                 let u_up = tournament_url.clone();
-                                move |_ev: Event<MouseData>| {
+                                move |ev: Event<PointerData>| {
+                                if pointer_gesture.read().as_ref().map(|gesture| gesture.pointer_id) != Some(ev.pointer_id()) { return; }
+                                pointer_gesture.set(None);
+                                release_canvas_pointer(&ev);
                                 let mut ix = interaction.write();
                                 let Some(drag) = ix.drag.take() else { return };
                                 match drag {
@@ -2722,41 +2858,48 @@ pub fn Bracket(url: String) -> Element {
                                     DragKind::Pan { .. } => {}
                                 }
                             }},
-                            onmousedown: move |ev: Event<MouseData>| {
-                                // Right-click (or middle-click) drag pans the canvas.
+                            onpointercancel: move |ev: Event<PointerData>| {
+                                if pointer_gesture.read().as_ref().map(|gesture| gesture.pointer_id) == Some(ev.pointer_id()) {
+                                    cancel_pointer_gesture();
+                                    release_canvas_pointer(&ev);
+                                }
+                            },
+                            onlostpointercapture: move |ev: Event<PointerData>| {
+                                if pointer_gesture.read().as_ref().map(|gesture| gesture.pointer_id) == Some(ev.pointer_id()) {
+                                    cancel_pointer_gesture();
+                                }
+                            },
+                            onpointerdown: move |ev: Event<PointerData>| {
+                                if !edit_mode() || !ev.is_primary() { return; }
                                 let btn = ev.trigger_button();
-                                if edit_mode()
-                                    && matches!(btn, Some(MouseButton::Secondary) | Some(MouseButton::Auxiliary))
+                                // Touch the background to pan; mouse users retain right/middle
+                                // drag and the H hand tool. Touching an item still moves it.
+                                if matches!(btn, Some(MouseButton::Secondary) | Some(MouseButton::Auxiliary))
+                                    || ev.pointer_type() == "touch" || hand_pan()
                                 {
+                                    if !begin_pointer_gesture(&ev) { return; }
                                     ev.prevent_default();
                                     clear_field_hover();
                                     let (sx, sy) = screen_pointer(&ev);
-                                    let mut ix = interaction.write();
-                                    ix.drag = Some(DragKind::Pan {
-                                        pointer_start: (sx, sy),
-                                        pan_start: pan(),
+                                    interaction.write().drag = Some(DragKind::Pan {
+                                        pointer_start: (sx, sy), pan_start: pan(),
                                     });
                                     return;
                                 }
-                                if !edit_mode() || hand_pan() { return; }
+                                if btn != Some(MouseButton::Primary) || !begin_pointer_gesture(&ev) { return; }
                                 let mods = ev.modifiers();
                                 let (cx, cy) = canvas_pointer(&ev, zoom(), pan());
                                 let mut ix = interaction.write();
-                                if !mods.shift() {
-                                    ix.selected.clear();
-                                }
-                                ix.drag = Some(DragKind::Marquee {
-                                    start: (cx, cy),
-                                    current: (cx, cy),
-                                });
+                                if !mods.shift() { ix.selected.clear(); }
+                                ix.drag = Some(DragKind::Marquee { start: (cx, cy), current: (cx, cy) });
                             },
                             // Suppress the browser context menu so right-drag can pan.
                             oncontextmenu: move |ev: Event<MouseData>| {
-                                ev.prevent_default();
+                                if edit_mode() { ev.prevent_default(); }
                             },
                             // Safety net: leaving the viewport always drops field highlight
                             // (SVG stroke mouseleave is unreliable at edges / while panning).
-                            onmouseleave: move |_| {
+                            onpointerleave: move |_| {
                                 clear_field_hover();
                                 hand_last.set(None);
                             },
@@ -2846,8 +2989,9 @@ pub fn Bracket(url: String) -> Element {
                                                 key: "img-{img.id}",
                                                 class: if selected { "bracket-image selected" } else { "bracket-image" },
                                                 style: "left: {img.x_pos}px; top: {img.y_pos}px; width: {img.width}px; height: {img.height}px;",
-                                                onmousedown: move |ev: Event<MouseData>| {
-                                                    if !edit_mode() { return; }
+                                                onpointerdown: move |ev: Event<PointerData>| {
+                                                    if !edit_mode() || ev.trigger_button() != Some(MouseButton::Primary) || hand_pan() { return; }
+                                                    if !begin_pointer_gesture(&ev) { return; }
                                                     ev.stop_propagation();
                                                     let (cx, cy) = canvas_pointer(&ev, zoom(), pan());
                                                     let mut ix = interaction.write();
@@ -2871,7 +3015,8 @@ pub fn Bracket(url: String) -> Element {
                                                 if edit_mode() {
                                                     div {
                                                         class: "bracket-resize-handle corner",
-                                                        onmousedown: move |ev: Event<MouseData>| {
+                                                        onpointerdown: move |ev: Event<PointerData>| {
+                                                            if ev.trigger_button() != Some(MouseButton::Primary) || !begin_pointer_gesture(&ev) { return; }
                                                             ev.stop_propagation();
                                                             let (cx, cy) = canvas_pointer(&ev, zoom(), pan());
                                                             let aspect = if ih > 0.0 { iw / ih } else { 1.0 };
@@ -2887,7 +3032,8 @@ pub fn Bracket(url: String) -> Element {
                                                     }
                                                     div {
                                                         class: "bracket-resize-handle edge-e",
-                                                        onmousedown: move |ev: Event<MouseData>| {
+                                                        onpointerdown: move |ev: Event<PointerData>| {
+                                                            if ev.trigger_button() != Some(MouseButton::Primary) || !begin_pointer_gesture(&ev) { return; }
                                                             ev.stop_propagation();
                                                             let (cx, cy) = canvas_pointer(&ev, zoom(), pan());
                                                             interaction.write().drag = Some(DragKind::Resize {
@@ -2902,7 +3048,8 @@ pub fn Bracket(url: String) -> Element {
                                                     }
                                                     div {
                                                         class: "bracket-resize-handle edge-s",
-                                                        onmousedown: move |ev: Event<MouseData>| {
+                                                        onpointerdown: move |ev: Event<PointerData>| {
+                                                            if ev.trigger_button() != Some(MouseButton::Primary) || !begin_pointer_gesture(&ev) { return; }
                                                             ev.stop_propagation();
                                                             let (cx, cy) = canvas_pointer(&ev, zoom(), pan());
                                                             interaction.write().drag = Some(DragKind::Resize {
@@ -2934,8 +3081,9 @@ pub fn Bracket(url: String) -> Element {
                                                 key: "txt-{t.id}",
                                                 class: if selected { "bracket-text selected" } else { "bracket-text" },
                                                 style: "left: {t.x_pos}px; top: {t.y_pos}px; font-size: {t.size}px;",
-                                                onmousedown: move |ev: Event<MouseData>| {
-                                                    if !edit_mode() { return; }
+                                                onpointerdown: move |ev: Event<PointerData>| {
+                                                    if !edit_mode() || ev.trigger_button() != Some(MouseButton::Primary) || hand_pan() { return; }
+                                                    if !begin_pointer_gesture(&ev) { return; }
                                                     ev.stop_propagation();
                                                     let (cx, cy) = canvas_pointer(&ev, zoom(), pan());
                                                     let mut ix = interaction.write();
@@ -3028,8 +3176,9 @@ pub fn Bracket(url: String) -> Element {
                                                 key: "lt-{lt.id}",
                                                 class: if selected { "bracket-labeled-team selected" } else { "bracket-labeled-team" },
                                                 style: "left: {lt.x_pos}px; top: {lt.y_pos}px; height: {LABELED_TEAM_H}px;",
-                                                onmousedown: move |ev: Event<MouseData>| {
-                                                    if !edit_mode() { return; }
+                                                onpointerdown: move |ev: Event<PointerData>| {
+                                                    if !edit_mode() || ev.trigger_button() != Some(MouseButton::Primary) || hand_pan() { return; }
+                                                    if !begin_pointer_gesture(&ev) { return; }
                                                     ev.stop_propagation();
                                                     let (cx, cy) = canvas_pointer(&ev, zoom(), pan());
                                                     let mut ix = interaction.write();
@@ -3239,8 +3388,8 @@ pub fn Bracket(url: String) -> Element {
                                                 // Used by instant DOM field-hover highlight (see set_field_hover).
                                                 "data-field": "{match_field_key(&m)}",
                                                 style: format!("left: {x}px; top: {y}px; width: {w}px; height: {h}px; cursor: {};", if edit_mode() { "grab" } else { "pointer" }),
-                                                onmousedown: move |ev: Event<MouseData>| {
-                                                    if !edit_mode() { return; }
+                                                onpointerdown: move |ev: Event<PointerData>| {
+                                                    if !edit_mode() || !ev.is_primary() || ev.trigger_button() != Some(MouseButton::Primary) || hand_pan() { return; }
                                                     // Ctrl/Cmd+click opens the match page instead of dragging.
                                                     let mods = ev.modifiers();
                                                     if mods.ctrl() || mods.meta() {
@@ -3252,6 +3401,7 @@ pub fn Bracket(url: String) -> Element {
                                                         });
                                                         return;
                                                     }
+                                                    if !begin_pointer_gesture(&ev) { return; }
                                                     ev.stop_propagation();
                                                     let (cx, cy) = canvas_pointer(&ev, zoom(), pan());
                                                     let mut ix = interaction.write();
@@ -3316,7 +3466,7 @@ pub fn Bracket(url: String) -> Element {
                                                                     );
                                                                 }
                                                             },
-                                                            onmousedown: move |ev: Event<MouseData>| {
+                                                            onpointerdown: move |ev: Event<PointerData>| {
                                                                 // Don't start a drag when clicking W/L.
                                                                 ev.stop_propagation();
                                                             },
@@ -3389,7 +3539,7 @@ pub fn Bracket(url: String) -> Element {
                                                                     );
                                                                 }
                                                             },
-                                                            onmousedown: move |ev: Event<MouseData>| {
+                                                            onpointerdown: move |ev: Event<PointerData>| {
                                                                 ev.stop_propagation();
                                                             },
                                                             "L"
@@ -3399,7 +3549,8 @@ pub fn Bracket(url: String) -> Element {
                                                 if edit_mode() {
                                                     div {
                                                         class: "bracket-resize-handle corner",
-                                                        onmousedown: move |ev: Event<MouseData>| {
+                                                        onpointerdown: move |ev: Event<PointerData>| {
+                                                            if ev.trigger_button() != Some(MouseButton::Primary) || !begin_pointer_gesture(&ev) { return; }
                                                             ev.stop_propagation();
                                                             let (cx, cy) = canvas_pointer(&ev, zoom(), pan());
                                                             interaction.write().drag = Some(DragKind::Resize {
@@ -3973,7 +4124,7 @@ pub fn Bracket(url: String) -> Element {
                                                                     img {
                                                                         src: "{backend}/static/{bimg}",
                                                                         alt: "{bname}",
-                                                                        style: "width: 64px; height: 40px; object-fit: cover; border-radius: 4px; background: #eee;"
+                                                                        style: "width: 64px; height: 40px; object-fit: cover; border-radius: 4px; background: var(--ui-surface-muted);"
                                                                     }
                                                                     div { class: "text-truncate",
                                                                         strong { "{bname}" }
@@ -4062,8 +4213,6 @@ pub fn Bracket(url: String) -> Element {
         } else if let Some(Err(e)) = val.read().as_ref() {
             div { class: "row",
                 div { class: "col-12",
-                    h1 { "Bracket" }
-                    Link { to: Route::TournamentHome { url: url.clone() }, class: "btn btn-outline-secondary mb-3", "Back to Tournament" }
                     p { class: "text-danger", "{e}" }
                 }
             }
@@ -4197,7 +4346,7 @@ fn NetLabelView(
                 ev.stop_propagation();
                 on_click.call(ev);
             },
-            onmousedown: move |ev: Event<MouseData>| {
+            onpointerdown: move |ev: Event<PointerData>| {
                 if editable {
                     ev.stop_propagation();
                 }

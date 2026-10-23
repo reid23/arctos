@@ -513,10 +513,9 @@ trials/finals seeding at Fog of War 2025 - teams for day 2 were set to
 tags like "seed 1", "seed 2", etc., and after day 1, we compiled the
 results, completed the rankings, and updated the tags accordingly.
 
-This is meant to be a very generic tool because of the whole
-[unonpinionated design](#design-philosophy) theme--I'm not trying to
-tell you how you should do rankings, so you can just do it however
-you'd like.
+Tags let you apply the seeding rules for your event. The Results tab
+also provides calculated standings, described below; it does not set
+tags or advance teams through a bracket.
 
 
 ### Static Scheduling
@@ -604,6 +603,20 @@ Ribbon games are matches that are not counted in tournament results
 matches, practice games, or matches that don't affect standings. When
 creating or editing a match, you can check the "Ribbon Game" checkbox
 to mark it as such.
+
+### Results and Standings
+
+Tournament and league results rank teams by match win percentage,
+then point win percentage (points won divided by total points played).
+Teams tied on both share a rank, with the next place skipped: 1, 1, 3.
+Teams without a decided match remain unranked. If a team has no
+recorded points, its point win percentage is treated as zero.
+
+Gold, silver, and bronze trophies mark ranks 1, 2, and 3. These are
+calculated standings, not organizer-assigned final bracket placements.
+Selecting **Include ribbon games** recalculates the standings with
+those matches included. Sorting a column changes the display order,
+not the ranks. Expand a team to see its matches.
 
 ### Skip Conditions
 

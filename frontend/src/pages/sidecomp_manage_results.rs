@@ -53,7 +53,7 @@ pub fn SideCompManageResults(url: String, comp_id: i32) -> Element {
                             "Permanently finalize results".to_string()
                         };
                         rsx! {
-                            h1 { "Manage results — {name}" }
+                            h2 { "Manage results — {name}" }
                             div { class: "mb-3 d-flex flex-wrap align-items-center gap-2",
                                 if finalized {
                                     span { class: "badge bg-dark", "Finalized" }
@@ -85,17 +85,17 @@ pub fn SideCompManageResults(url: String, comp_id: i32) -> Element {
                             if results.is_empty() {
                                 p { class: "text-muted", "No points logged yet." }
                             } else {
-                                div { class: "table-responsive",
-                                    table { class: "table table-sm align-middle",
+                                div { class: "table-responsive", role: "region", "aria-label": "Side event result management", tabindex: "0",
+                                    table { class: "table table-sm align-middle sidecomp-management-table",
                                         thead {
                                             tr {
-                                                th { "Time" }
-                                                th { "Player" }
-                                                th { "Role" }
-                                                th { "Points" }
-                                                th { "Ref" }
-                                                th { "Flagged" }
-                                                th { "Valid" }
+                                                th { class: "table-nowrap", "Time" }
+                                                th { class: "table-nowrap", "Player" }
+                                                th { class: "table-nowrap", "Role" }
+                                                th { class: "table-number", "Points" }
+                                                th { class: "table-nowrap", "Ref" }
+                                                th { class: "table-nowrap", "Flagged" }
+                                                th { class: "table-nowrap", "Valid" }
                                             }
                                         }
                                         tbody {
@@ -132,9 +132,9 @@ pub fn SideCompManageResults(url: String, comp_id: i32) -> Element {
                                                             class: "{row_class}",
                                                             style: "{row_style}",
                                                             title: "{row_title}",
-                                                            td { class: "text-nowrap small", "{stamp}" }
-                                                            td { "{label}" }
-                                                            td {
+                                                            td { class: "table-nowrap small", "{stamp}" }
+                                                            td { class: "table-copy", "{label}" }
+                                                            td { class: "table-nowrap",
                                                                 if !row.registered {
                                                                     i {
                                                                         class: "fas fa-exclamation-triangle text-warning",
@@ -146,18 +146,18 @@ pub fn SideCompManageResults(url: String, comp_id: i32) -> Element {
                                                                 }
                                                             }
                                                             td {
-                                                                class: if row.untracked { "fw-bold text-muted" } else if row.points >= 0 { "fw-bold text-success" } else { "fw-bold text-danger" },
+                                                                class: if row.untracked { "table-number fw-bold text-muted" } else if row.points >= 0 { "table-number fw-bold text-success" } else { "table-number fw-bold text-danger" },
                                                                 "{points_label}"
                                                             }
-                                                            td { class: "small", "{row.result_ref}" }
-                                                            td {
+                                                            td { class: "small table-copy", "{row.result_ref}" }
+                                                            td { class: "table-nowrap",
                                                                 if is_flagged {
                                                                     span { class: "badge bg-warning text-dark", "Flagged" }
                                                                 } else {
                                                                     span { class: "text-muted", "—" }
                                                                 }
                                                             }
-                                                            td {
+                                                            td { class: "table-nowrap",
                                                                 div { class: "form-check form-switch m-0",
                                                                     input {
                                                                         class: "form-check-input",

@@ -1,0 +1,25 @@
+/* More contains the same utility actions for guests and signed-in accounts. */
+.arctos-app .appearance-panel { position: absolute; z-index: 2; top: calc(100% + 12px); right: 0; width: min(360px, calc(100vw - 32px)); max-height: calc(100dvh - 100px); overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--ui-border); border-radius: 12px; background: var(--ui-surface); color: var(--ui-text); box-shadow: 0 12px 40px var(--ui-shadow-strong); }
+.arctos-app .appearance-panel-header { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px; padding: 8px; border-bottom: 1px solid var(--ui-border); background: var(--ui-surface); }
+.arctos-app .appearance-panel-header h2 { flex: 1; min-width: 0; margin: 0; font-size: 1rem; text-align: center; }
+.arctos-app .appearance-back { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 8px; border: 0; border-radius: 8px; background: transparent; color: var(--ui-link); font-size: .875rem; }
+.arctos-app .appearance-back:hover { background: var(--ui-surface-hover); }
+.arctos-app .appearance-panel-body { padding: 16px; }
+.arctos-app .appearance-section { border: 0; padding: 0; margin: 0; min-width: 0; }
+.arctos-app .appearance-section + .appearance-section { margin-top: 20px; }
+.arctos-app .appearance-section legend { float: none; width: auto; font-size: .875rem; font-weight: 650; margin-bottom: 10px; }
+.arctos-app .appearance-mode-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.arctos-app .appearance-mode-option { display: flex; align-items: center; justify-content: center; gap: 6px; min-width: 0; min-height: 44px; padding: 10px 6px; border: 1px solid var(--ui-control-border); border-radius: 8px; background: var(--ui-surface); color: var(--ui-text); font-size: .8125rem; cursor: pointer; }
+.arctos-app .appearance-theme-options { display: grid; gap: 10px; }
+.arctos-app .appearance-theme-option { display: grid; grid-template-columns: 16px minmax(0, 1fr); align-items: center; gap: 10px; min-width: 0; min-height: 44px; padding: 12px; font-size: .875rem; font-weight: 600; border: 1px solid var(--ui-control-border); border-radius: 10px; background: var(--ui-surface); color: var(--ui-text); cursor: pointer; }
+.arctos-app .appearance-mode-option:hover, .arctos-app .appearance-theme-option:hover { background: var(--ui-surface-hover); }
+.arctos-app .appearance-mode-option.is-selected, .arctos-app .appearance-theme-option.is-selected { background: var(--ui-accent-soft); color: var(--ui-accent-text); border-color: var(--ui-accent-border); }
+.arctos-app .appearance-mode-option:focus-within, .arctos-app .appearance-theme-option:focus-within { outline: 3px solid var(--ui-link); outline-offset: 2px; }
+.arctos-app .appearance-mode-option input, .arctos-app .appearance-theme-option input { flex: 0 0 auto; width: 16px; height: 16px; margin: 0; accent-color: var(--ui-link); }
+.arctos-app .appearance-page-setting label { display: flex; align-items: center; gap: 10px; min-height: 44px; margin: 0; padding: 8px 0; color: var(--ui-text); font-size: .875rem; cursor: pointer; }
+.arctos-app .appearance-page-setting input { flex: 0 0 auto; width: 18px; height: 18px; margin: 0; accent-color: var(--ui-link); }
+.arctos-app .appearance-page-setting label:focus-within { outline: 3px solid var(--ui-link); outline-offset: 3px; border-radius: 4px; }
+@media (max-width: 575px) {
+  .arctos-app .profile-dropdown { position: fixed; top: calc(64px + env(safe-area-inset-top)); right: 16px; max-height: calc(100dvh - 80px - env(safe-area-inset-top)); }
+  .arctos-app .appearance-panel { position: fixed; top: calc(64px + env(safe-area-inset-top)); right: 16px; max-height: calc(100dvh - 80px - env(safe-area-inset-top)); }
+}

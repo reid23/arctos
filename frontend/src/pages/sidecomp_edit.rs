@@ -21,6 +21,7 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
     let mut top_n_text = use_signal(String::new);
     let mut initialised = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
+    let mut submitting = use_signal(|| false);
 
     if !initialised() {
         if let Some(Ok(d)) = detail.read().as_ref() {
@@ -70,9 +71,10 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
     let url_for_delete = url.clone();
 
     rsx! {
+        style { {include_str!("../components/organizer_tools.css")} }
         div { class: "row",
-            div { class: "col-12",
-                h1 { "Edit side competition" }
+            div { class: "col-12 sidecomp-form",
+                h2 { "Edit side competition" }
                 div { class: "mb-3",
                     Link {
                         to: Route::SideCompDetail { url: url_for_back, comp_id },
@@ -83,6 +85,7 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
                 form {
                     onsubmit: move |evt| {
                         evt.prevent_default();
+                        if submitting() { return; }
                         let url_inner = url_for_submit.clone();
                         let n = name();
                         let t = type_();
@@ -109,6 +112,7 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
                             }
                         };
                         error.set(None);
+                        submitting.set(true);
                         spawn(async move {
                             match api::sidecomp_update(
                                 comp_id,
@@ -128,11 +132,13 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
                                 }
                                 Err(e) => error.set(Some(e)),
                             }
+                            submitting.set(false);
                         });
                     },
                     div { class: "mb-3",
-                        label { class: "form-label", "Name" }
+                        label { class: "form-label", r#for: "sidecomp-name", "Name" }
                         input {
+                            id: "sidecomp-name",
                             class: "form-control",
                             r#type: "text",
                             value: "{name}",
@@ -140,8 +146,9 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
                         }
                     }
                     div { class: "mb-3",
-                        label { class: "form-label", "Type" }
+                        label { class: "form-label", r#for: "sidecomp-type", "Type" }
                         select {
+                            id: "sidecomp-type",
                             class: "form-select",
                             value: "{type_}",
                             onchange: move |evt| type_.set(evt.value()),
@@ -151,8 +158,9 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
                         }
                     }
                     div { class: "mb-3",
-                        label { class: "form-label", "Description" }
+                        label { class: "form-label", r#for: "sidecomp-description", "Description" }
                         textarea {
+                            id: "sidecomp-description",
                             class: "form-control",
                             rows: "4",
                             value: "{description}",
@@ -160,7 +168,7 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
                         }
                         div { class: "form-text", "Optional. Leave blank to clear." }
                     }
-                    div { class: "mb-3 form-check form-switch",
+                    div { class: "mb-3 form-check",
                         input {
                             class: "form-check-input",
                             r#type: "checkbox",
@@ -174,10 +182,10 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
                             "Registration open"
                         }
                         div { class: "form-text",
-                            "When off, only TO check-in can add players."
+                            "When unchecked, only organizers can register players."
                         }
                     }
-                    div { class: "mb-3 form-check form-switch",
+                    div { class: "mb-3 form-check",
                         input {
                             class: "form-check-input",
                             r#type: "checkbox",
@@ -195,12 +203,19 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
                             if finalized() {
                                 "Results are finalized; this side competition cannot be activated again."
                             } else {
-                                "When off, results cannot be entered."
+                                "When unchecked, results cannot be entered."
                             }
                         }
                     }
+                    details { class: "settings-advanced", id: "sidecomp-advanced",
+                        summary { "Advanced options" small {
+                            "Loss tracking, weapon rules, and standings"
+                            if allowed_weapons().len() != default_allowed_weapons().len() { " · restricted weapons" }
+                            if !top_n_text().trim().is_empty() { " · limited results" }
+                        } }
+                        div { class: "settings-advanced-body",
                     if type_() == "CHAIN_BREAKING" {
-                        div { class: "mb-3 form-check form-switch",
+                        div { class: "mb-3 form-check",
                             input {
                                 class: "form-check-input",
                                 r#type: "checkbox",
@@ -214,7 +229,7 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
                                 "Track losses (chains)"
                             }
                         }
-                        div { class: "mb-3 form-check form-switch",
+                        div { class: "mb-3 form-check",
                             input {
                                 class: "form-check-input",
                                 r#type: "checkbox",
@@ -228,11 +243,11 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
                                 "Track losses (breakers)"
                             }
                             div { class: "form-text",
-                                "When off, only wins are entered and ranked for that group."
+                                "When unchecked, only wins are entered and ranked for that group."
                             }
                         }
                     } else {
-                        div { class: "mb-3 form-check form-switch",
+                        div { class: "mb-3 form-check",
                             input {
                                 class: "form-check-input",
                                 r#type: "checkbox",
@@ -246,7 +261,7 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
                                 "Track losses"
                             }
                             div { class: "form-text",
-                                "When on, standings rank by win percentage. When off, only wins are entered and ranked."
+                                "When checked, standings rank by win percentage. Otherwise, only wins are entered and ranked."
                             }
                         }
                     }
@@ -258,8 +273,9 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
                         disabled_warning_count,
                     }
                     div { class: "mb-3",
-                        label { class: "form-label", "Only show top N results" }
+                        label { class: "form-label", r#for: "sidecomp-top-n", "Only show top N results" }
                         input {
+                            id: "sidecomp-top-n",
                             class: "form-control",
                             r#type: "number",
                             min: "0",
@@ -268,15 +284,21 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
                             oninput: move |evt| top_n_text.set(evt.value()),
                         }
                     }
-                    if let Some(err) = error() {
-                        div { class: "alert alert-danger", "{err}" }
+                        }
                     }
-                    button { class: "btn btn-primary", r#type: "submit", "Save" }
+                    if let Some(err) = error() {
+                        div { class: "alert alert-danger", role: "alert", "{err}" }
+                    }
+                    button { class: "btn btn-primary", r#type: "submit", disabled: submitting(), if submitting() { "Saving…" } else { "Save" } }
                 }
                 hr {}
                 button {
-                    class: "btn btn-danger",
+                    class: "btn btn-outline-danger", r#type: "button", disabled: submitting(),
                     onclick: move |_| {
+                        if submitting() { return; }
+                        let confirmed = web_sys::window().and_then(|window| window.confirm_with_message("Delete this side competition and its registrations and results? This cannot be undone.").ok()).unwrap_or(false);
+                        if !confirmed { return; }
+                        submitting.set(true);
                         let url_inner = url_for_delete.clone();
                         spawn(async move {
                             match api::sidecomp_delete(comp_id).await {
@@ -288,6 +310,7 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
                                 }
                                 Err(e) => error.set(Some(e)),
                             }
+                            submitting.set(false);
                         });
                     },
                     "Delete this side competition"

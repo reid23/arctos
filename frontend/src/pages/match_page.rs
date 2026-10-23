@@ -1,7 +1,7 @@
-use crate::Route;
 use crate::api;
 use crate::components::{
-    PenaltyDisplay, TeamLabel, TeamLabelStyle, TeamSlot, all_tokens_known, resolve_value_to_team_ids,
+    all_tokens_known, resolve_value_to_team_ids, PenaltyDisplay, TeamLabel, TeamLabelStyle,
+    TeamSlot,
 };
 use crate::display::short_or_truncate;
 use crate::pages::TeamSelectionField;
@@ -9,6 +9,7 @@ use crate::time_format::format_match_display_local;
 use crate::types::{
     ConflictingMatchInfo, ForceStartMatchRequest, MatchDetailData, PointData, PointTimestamp,
 };
+use crate::Route;
 #[cfg(target_arch = "wasm32")]
 use chrono;
 use dioxus::prelude::*;
@@ -488,8 +489,16 @@ fn fallback_ref_slots(m: &MatchDetailData) -> Vec<TeamSlot> {
         };
         out.push(TeamSlot {
             token: token.to_string(),
-            team_id: if id.is_empty() { None } else { Some(id.to_string()) },
-            name: if name.is_empty() { None } else { Some(name.to_string()) },
+            team_id: if id.is_empty() {
+                None
+            } else {
+                Some(id.to_string())
+            },
+            name: if name.is_empty() {
+                None
+            } else {
+                Some(name.to_string())
+            },
             shortname: None,
             photo: None,
         });
@@ -1084,7 +1093,6 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
         }
     });
 
-
     // When switching camera with pending same-time seek, poll video until ready then seek.
     #[cfg(target_arch = "wasm32")]
     {
@@ -1231,9 +1239,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                     Some(c) if c.camera_type == "youtube" => c,
                     _ => return,
                 };
-                let stream_start = cam
-                    .stream_start_time
-                    .clone();
+                let stream_start = cam.stream_start_time.clone();
                 let Some(stream_start) = stream_start else {
                     return;
                 };
@@ -1327,9 +1333,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                             return;
                         }
                         let stamp = d.points.get(pi).and_then(|p| p.stamp.as_deref());
-                        let stream_start_time: Option<String> = cam
-                            .stream_start_time
-                            .clone();
+                        let stream_start_time: Option<String> = cam.stream_start_time.clone();
                         if let Some(secs) = in_video_start_for_world_stamp_interpolated(
                             stamp,
                             cam.time_world.as_ref(),
@@ -1354,9 +1358,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                             return;
                         }
                         let stamp = d.points.get(new_idx).and_then(|p| p.stamp.as_deref());
-                        let stream_start_time: Option<String> = cam
-                            .stream_start_time
-                            .clone();
+                        let stream_start_time: Option<String> = cam.stream_start_time.clone();
                         if let Some(secs) = in_video_start_for_world_stamp_interpolated(
                             stamp,
                             cam.time_world.as_ref(),
@@ -1382,9 +1384,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                             return;
                         }
                         let stamp = d.points.get(new_idx).and_then(|p| p.stamp.as_deref());
-                        let stream_start_time: Option<String> = cam
-                            .stream_start_time
-                            .clone();
+                        let stream_start_time: Option<String> = cam.stream_start_time.clone();
                         if let Some(secs) = in_video_start_for_world_stamp_interpolated(
                             stamp,
                             cam.time_world.as_ref(),
@@ -1460,6 +1460,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
         style { "#match-page-keyboard:focus {{ outline: none; }}" }
         div {
             id: "match-page-keyboard",
+            class: "match-page",
             tabindex: "-1",
             onkeydown: keydown_handler,
             onmounted: move |ev: Event<MountedData>| {
@@ -1497,7 +1498,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                     let time_video_next = time_video_go.clone();
 
                     rsx! {
-                        div { class: "card mt-3",
+                        div { class: "card mt-3 match-video",
                         div { class: "card-header d-flex justify-content-between align-items-center",
                             h5 { class: "mb-0", "Match Footage" }
                             if cameras.len() > 1 {
@@ -1578,7 +1579,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                 if status == "UPLOADING" {
                                     p { class: "text-muted", "Video is still processing." }
                                 } else if status == "FAILED" {
-                                    p { class: "text-danger", "error processing video." }
+                                    p { class: "text-danger", "This video could not be processed. Try another camera or contact the event organizer." }
                                 } else {
                                     div {
                                         id: "youtube-player-container",
@@ -1593,6 +1594,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                         span { "Seek to point:" }
                                         select {
                                             id: "points-dropdown",
+                                            aria_label: "Jump footage to point",
                                             class: "form-select form-select-sm",
                                             style: "width: auto;",
                                             value: "{selected_point_index().min(points.len().saturating_sub(1))}",
@@ -1747,14 +1749,20 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                 }
                             }
                             li { class: "breadcrumb-item",
-                                Link {
-                                    to: Route::Schedule {
-                                        url: url.clone(),
-                                        view: String::new(),
-                                        team: String::new(),
-                                        field: String::new(),
-                                    },
-                                    "Schedule"
+                                if d.can_view_schedule {
+                                    Link {
+                                        to: Route::Schedule {
+                                            url: url.clone(),
+                                            view: String::new(),
+                                            team: String::new(),
+                                            field: String::new(),
+                                        },
+                                        if d.schedule_published { "Schedule" } else { "Preview schedule" }
+                                    }
+                                } else {
+                                    span { class: "text-muted",
+                                        if d.schedule_published { "Schedule unavailable" } else { "Schedule not posted" }
+                                    }
                                 }
                             }
                             li { class: "breadcrumb-item active", "{d.match_data.name}" }
@@ -1766,7 +1774,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
             div { class: "row",
                 div { class: "col-md-8",
                     // Match Information Card
-                    div { class: "card",
+                    div { class: "card match-overview",
                         div { class: "card-header",
                             h5 { class: "mb-0", "Match Information" }
                         }
@@ -1990,7 +1998,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                     }
 
                     // Live Match Status Card
-                    div { class: "card mt-3",
+                    div { class: "card mt-3 match-live",
                         div { class: "card-header",
                             h5 { class: "mb-0",
                                 "Match Status: "
@@ -2151,7 +2159,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                     }
 
                     // Points Table - update from state
-                    div { class: "card mt-3",
+                    div { class: "card data-section mt-3",
                         div { class: "card-header",
                             h5 { class: "mb-0", "Points" }
                         }
@@ -2194,9 +2202,9 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                             table { class: "table table-sm",
                                                 thead {
                                                     tr {
-                                                        th { "#" }
-                                                        th { "Set" }
-                                                        th { "Stones Elapsed" }
+                                                        th { class: "table-number", "#" }
+                                                        th { class: "table-number", "Set" }
+                                                        th { class: "table-number", "Stones Elapsed" }
                                                         th { "Winner" }
                                                         th { "Rerun" }
                                                         if d.is_head_ref {
@@ -2207,10 +2215,11 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                                 tbody { id: "live-points-table",
                                                     for (idx, (pt, note_elems)) in points_with_note_displays.iter().enumerate() {
                                                         tr { key: "{pt.uuid}", id: "live-point-row-{pt.uuid}",
-                                                            td { "{idx + 1}" }
-                                                            td { "{pt.set_number.unwrap_or(1)}" }
+                                                            td { class: "table-number", "{idx + 1}" }
+                                                            td { class: "table-number", "{pt.set_number.unwrap_or(1)}" }
                                                             td {
                                                                 id: "live-stones-{pt.uuid}",
+                                                                class: "table-number",
                                                                 "data-stamp": pt.stamp.as_deref().unwrap_or(""),
                                                                 "data-end": pt.end_stamp.as_deref().unwrap_or(""),
                                                                 "data-stones-at-start": pt.stones_at_start.map(|s: u32| s.to_string()).unwrap_or_default(),

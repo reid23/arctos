@@ -1,0 +1,39 @@
+/* Editing sections share headings and dividers, without a separate card frame. */
+.arctos-app .edit-section { min-width: 0; margin-bottom: 1.5rem; overflow-wrap: anywhere; }
+.arctos-app .edit-section-heading { min-width: 0; margin-bottom: 1rem; padding: .75rem 0; border-bottom: 1px solid var(--ui-border); color: var(--ui-text); }
+.arctos-app .edit-section-heading > :last-child { margin-bottom: 0; }
+.arctos-app .edit-section-heading > :is(h1, h2, h3, h4, h5, h6) { min-width: 0; }
+.arctos-app .edit-section-body { min-width: 0; }
+.arctos-app .penalty-types-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem 1rem; padding-block: .5rem; }
+.arctos-app .penalty-types-heading h2 { font-size: 1rem; }
+.arctos-app .penalty-types-toggle { display: inline-flex; align-items: center; gap: .65rem; min-height: 44px; padding: 0; border: 0; background: transparent; color: var(--ui-text); font: inherit; font-weight: 600; text-align: left; }
+.arctos-app .penalty-types-toggle i { width: .75rem; font-size: .8rem; }
+.arctos-app .penalty-types-toggle:focus-visible { outline: 3px solid var(--ui-accent); outline-offset: 3px; }
+.arctos-app .penalty-types-add { flex: 0 0 auto; min-height: 44px; margin-left: auto; }
+.arctos-app #penalty-types-content[hidden] { display: none; }
+/* Read-only rows must not widen a neighbouring full-width penalty editor. */
+.arctos-app .penalty-types-section .table td.table-copy { min-width: 0; }
+.arctos-app .penalty-edit-cell { padding-block: 1rem; }
+.arctos-app .penalty-edit-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; text-align: left; }
+.arctos-app .penalty-edit-grid > div { min-width: 0; }
+.arctos-app .penalty-edit-description, .arctos-app .penalty-edit-actions { grid-column: 1 / -1; }
+.arctos-app .penalty-edit-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.arctos-app .penalty-edit-actions .btn { margin: 0; min-width: 80px; }
+.arctos-app .penalty-color-swatch { display: block; width: 44px; height: 44px; padding: 0; border: 1px solid var(--ui-border); border-radius: .4rem; }
+.arctos-app .penalty-color-swatch:focus-visible { outline: 3px solid var(--ui-accent); outline-offset: 3px; }
+.arctos-app .penalty-color-options { margin-top: .75rem; }
+.arctos-app .penalty-color-presets { display: grid; grid-template-columns: repeat(auto-fill, 44px); gap: .5rem; margin-bottom: .75rem; }
+@media (min-width: 768px) {
+  .arctos-app .penalty-edit-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.arctos-app .edit-section .table-responsive { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.arctos-app .edit-section .list-group-flush { border-radius: 0; }
+.arctos-app details.edit-section > summary.edit-section-heading { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; min-height: 48px; margin-bottom: 0; border-radius: 0; cursor: pointer; list-style: none; }
+.arctos-app details.edit-section[open] > summary.edit-section-heading { margin-bottom: 1rem; }
+.arctos-app details.edit-section > summary.edit-section-heading::-webkit-details-marker { display: none; }
+.arctos-app .edit-toolbar { min-width: 0; padding-block: .5rem; border-block: 1px solid var(--ui-border); }
+.arctos-app .edit-toolbar-body { min-width: 0; }
+.arctos-app .schedule-editor-card.edit-section { box-shadow: none; }
+@media (min-width: 1200px) {
+  .arctos-app .schedule-editor-panel .edit-section { padding-left: 1rem; border-left: 1px solid var(--ui-border); }
+}

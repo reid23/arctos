@@ -1,6 +1,6 @@
-use crate::Route;
 use crate::api;
 use crate::components::PenaltyDisplay;
+use crate::Route;
 use dioxus::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use gloo_timers::callback::Interval;
@@ -243,7 +243,6 @@ fn scores_by_set_from_points(points: &[&Value]) -> Vec<(String, u64, u64)> {
         .collect()
 }
 
-
 /// Optimistically write set_number for a point in match-state JSON. Returns true if found.
 fn set_number_in_state(state: &mut Value, point_id: &str, new_set: u32) -> bool {
     let Some(points) = state.get_mut("points").and_then(|p| p.as_array_mut()) else {
@@ -257,8 +256,6 @@ fn set_number_in_state(state: &mut Value, point_id: &str, new_set: u32) -> bool 
     }
     false
 }
-
-
 
 /// Highlight a point row once, then clear so live re-renders do not restart the animation.
 #[cfg(target_arch = "wasm32")]
@@ -307,6 +304,7 @@ fn SetNumberControls(
             button {
                 class: "set-step-btn",
                 r#type: "button",
+                aria_label: "Increase set number",
                 onclick: move |_| {
                     let prev = state_signal().clone();
                     let current = shown();
@@ -341,6 +339,7 @@ fn SetNumberControls(
             button {
                 class: "set-step-btn",
                 r#type: "button",
+                aria_label: "Decrease set number",
                 onclick: move |_| {
                     let prev = state_signal().clone();
                     let current = shown();
@@ -795,7 +794,9 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                             .to_string();
                         let set_number = pt
                             .get("set_number")
-                            .and_then(|n| n.as_u64().or_else(|| n.as_i64().map(|i| i.max(0) as u64)))
+                            .and_then(|n| {
+                                n.as_u64().or_else(|| n.as_i64().map(|i| i.max(0) as u64))
+                            })
                             .unwrap_or(1) as u32;
                         let winner = pt
                             .get("winner")
@@ -837,7 +838,8 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                     pt.get("stones_at_start").and_then(|s| s.as_u64())?;
                                 let stamp = pt.get("stamp").and_then(|s| s.as_str());
                                 #[cfg(target_arch = "wasm32")]
-                                let elapsed = stones_elapsed_with_filter(stamp, None, &time_sync) as u64;
+                                let elapsed =
+                                    stones_elapsed_with_filter(stamp, None, &time_sync) as u64;
                                 #[cfg(not(target_arch = "wasm32"))]
                                 let elapsed = stones_elapsed_beats(stamp, None) as u64;
                                 Some((at_start.saturating_sub(elapsed)) as u32)
@@ -1002,7 +1004,15 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                         let stones_at_start = if set_type_stones { stones_val } else { None };
                         spawn(async move {
                             err_out.set(None);
-                            match api::add_point(&u, &id, default_set, Some(point_start_ms), stones_at_start).await {
+                            match api::add_point(
+                                &u,
+                                &id,
+                                default_set,
+                                Some(point_start_ms),
+                                stones_at_start,
+                            )
+                            .await
+                            {
                                 Ok(resp) => {
                                     let real_id = resp
                                         .get("point_id")
@@ -1161,7 +1171,15 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                         let stones_at_start = if set_type_stones { stones_val } else { None };
                         spawn(async move {
                             err_out.set(None);
-                            match api::add_point(&u, &id, default_set, Some(point_start_ms), stones_at_start).await {
+                            match api::add_point(
+                                &u,
+                                &id,
+                                default_set,
+                                Some(point_start_ms),
+                                stones_at_start,
+                            )
+                            .await
+                            {
                                 Ok(resp) => {
                                     let real_id = resp
                                         .get("point_id")
@@ -1248,11 +1266,11 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                     #quick-timer-scrim{position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,0.6);pointer-events:none;display:flex;align-items:flex-start;justify-content:center}\
                     #quick-timer-scrim .qt-scrim-text{margin-top:20vh;color:#fff;text-align:center;font-size:1.5rem;line-height:1.5}\
                     #quick-timer-scrim .qt-scrim-title{font-size:2rem;font-weight:600}\
-                    @keyframes point-row-flash-kf{0%{background-color:#adb5bd}100%{background-color:transparent}}\
+                    @keyframes point-row-flash-kf{0%{background-color:var(--ui-accent-soft)}100%{background-color:transparent}}\
                     #points-table tbody tr.point-row-flash>td{animation:point-row-flash-kf 1.1s ease-out both}\
                     #point-button,.mobile-button-wrapper .btn{animation:none!important}\
                     #points-table tr.point-row-no-border>td{border-bottom-width:0}\
-                    @media (max-width:768px){.mobile-button-wrapper{position:fixed;bottom:0;left:0;right:0;z-index:1000;background:white;padding:0;margin:0;box-shadow:0 -2px 10px rgba(0,0,0,0.1);display:flex;flex-direction:row}\
+                    @media (max-width:767.98px){.mobile-button-wrapper{position:fixed;bottom:0;left:0;right:0;z-index:1000;background:white;padding:0;margin:0;box-shadow:0 -2px 10px rgba(0,0,0,0.1);display:flex;flex-direction:row}\
                     #quick-timer{position:fixed;top:64px;right:8px;z-index:1030;min-width:3rem;height:3rem;padding:0 0.5rem;font-size:1.5rem;box-shadow:0 2px 6px rgba(0,0,0,0.2)}\
                     .mobile-button-wrapper .btn{border-radius:0;margin:0;flex:1;min-height:96px}\
                     .container .mobile-sticky-button,.container #finalize-match-btn{display:none}\
@@ -1314,9 +1332,13 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                             tr {
                                 key: "{pt_id}",
                                 id: "point-row-{pt_id}",
-                                class: "{main_row_class}",
-                                td { class: "text-muted text-center align-middle", "{point_index}" }
-                                td {
+                                class: "point-entry {main_row_class}",
+                                td { class: "point-index text-muted text-center align-middle",
+                                    span { class: "point-mobile-label", aria_hidden: "true", "Point" }
+                                    "{point_index}"
+                                }
+                                td { class: "point-set",
+                                    span { class: "point-mobile-label", aria_hidden: "true", "Set" }
                                     SetNumberControls {
                                         key: "set-{pt_id}",
                                         point_id: pid.clone(),
@@ -1326,13 +1348,19 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                         action_error: action_error,
                                     }
                                 }
-                                td { class: "align-middle", id: "stones-{pt_id}", "{elapsed}" }
-                                td {
+                                td { class: "point-stones align-middle", id: "stones-{pt_id}",
+                                    span { class: "point-mobile-label", aria_hidden: "true", "Stones" }
+                                    "{elapsed}"
+                                }
+                                td { class: "point-winner",
+                                    span { class: "point-mobile-label", aria_hidden: "true", "Winner" }
                                     div { class: "winner-cell",
                                         div { class: "winner-options-group",
                                         button {
                                             class: format!("winner-option{}", if winner_val == "TEAM1" { " active" } else { "" }),
                                             r#type: "button",
+                                            aria_label: "{team1} wins point {point_index}",
+                                            aria_pressed: "{winner_is_t1}",
                                             onclick: move |_| {
                                                 let val = if winner_is_t1 { "none" } else { "TEAM1" };
                                                 let prev = state_signal().clone();
@@ -1368,6 +1396,8 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                         button {
                                             class: format!("winner-option{}", if winner_val == "TEAM2" { " active" } else { "" }),
                                             r#type: "button",
+                                            aria_label: "{team2} wins point {point_index}",
+                                            aria_pressed: "{winner_is_t2}",
                                             onclick: move |_| {
                                                 let val = if winner_is_t2 { "none" } else { "TEAM2" };
                                                 let prev = state_signal().clone();
@@ -1403,12 +1433,13 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                         }
                                     }
                                 }
-                                td { class: "align-middle",
-                                    div { class: "form-check",
+                                td { class: "point-rerun align-middle",
+                                    label { class: "form-check point-rerun-toggle",
                                         input {
                                             class: "form-check-input",
                                             r#type: "checkbox",
                                             checked: rerolled,
+                                            aria_label: "Rerun this point",
                                             onchange: move |ev| {
                                                 let checked = ev.checked();
                                                 let prev = state_signal().clone();
@@ -1465,10 +1496,11 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                 });
                                             },
                                         }
+                                        span { class: "point-mobile-label", aria_hidden: "true", "Rerun" }
                                     }
                                 }
-                                td { class: "align-middle",
-                                    div { class: "d-flex flex-column gap-1",
+                                td { class: "point-notes align-middle",
+                                    div { class: "point-note-actions d-flex flex-column gap-1",
                                         {
                                             let pid_notes = pid.clone();
                                             let pid_penalties = pid.clone();
@@ -1478,6 +1510,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                 button {
                                                     class: "btn btn-sm btn-outline-secondary",
                                                     title: "Point Note",
+                                                    aria_label: "Edit point note",
                                                     onclick: move |_| {
                                                         notes_modal_point_id.set(Some(pid_notes.clone()));
                                                         notes_modal_notes.set(None);
@@ -1512,6 +1545,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                 button {
                                                     class: "btn btn-sm btn-outline-danger",
                                                     title: "Penalties",
+                                                    aria_label: "Manage point penalties",
                                                     onclick: move |_| {
                                                         penalties_modal_point_id.set(Some(pid_penalties.clone()));
                                                         penalties_step.set(1);
@@ -1545,10 +1579,11 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                         }
                                     }
                                 }
-                                td { class: "align-middle",
+                                td { class: "point-delete align-middle",
                                     button {
                                         class: "delete-point-btn",
                                         title: "Delete",
+                                        aria_label: "Delete point",
                                         onclick: move |_| {
                                             #[cfg(target_arch = "wasm32")]
                                             {
@@ -1586,7 +1621,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                 }
                             }
                             if has_notes {
-                                tr { key: "{pt_id}-notes",
+                                tr { key: "{pt_id}-notes", class: "point-note-details",
                                     td { colspan: "7", class: "pt-0 pb-2",
                                         div { class: "d-flex flex-wrap gap-1",
                                             for note_val in notes_for_point.iter() {
@@ -1643,8 +1678,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                         start_stones,
                     } => {
                         #[cfg(target_arch = "wasm32")]
-                        let now_server =
-                            time_sync.server_now_secs();
+                        let now_server = time_sync.server_now_secs();
                         #[cfg(not(target_arch = "wasm32"))]
                         let now_server = now_epoch_secs();
                         let current = quick_timer_current(start_time, start_stones, now_server);
@@ -1736,7 +1770,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                 };
 
                 rsx! {
-                    div { class: "container mt-4",
+                    div { class: "container mt-4 run-match-page",
                         style { "{run_match_css}" }
                         if quick_timer_dragging {
                             div { id: "quick-timer-scrim",
@@ -1748,7 +1782,8 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                         }
                         div { class: "row",
                             div { class: "col-md-12",
-                                h2 { "Run Match: {m.name}" }
+                                h2 { "{m.name}" }
+                                p { class: "text-muted mb-3", "Record each point, then review and finalize the result." }
                                 div { class: "row d-none d-md-flex",
                                     div { class: "col-md-4",
                                         p { class: "mb-0",
@@ -1839,6 +1874,9 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                             r#type: "number",
                                                             class: "form-control-plaintext text-center display-4 m-0 p-0",
                                                             id: "stones-remaining",
+                                                            aria_label: "Stones remaining",
+                                                            min: "0",
+                                                            inputmode: "numeric",
                                                             style: "width: 6ch; line-height: 1; font-size: 3rem; height: 64px; min-width: 6ch;",
                                                             value: "{stones_input_value}",
                                                             onfocus: move |_| {
@@ -1894,7 +1932,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                         }
 
                         if let Some(e) = action_error() {
-                            div { class: "alert alert-danger mt-2", "{e}" }
+                            div { class: "alert alert-danger mt-2", role: "alert", "{e}" }
                         }
 
                         div { class: "row",
@@ -1904,17 +1942,17 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                         h5 { class: "mb-0", "Points" }
                                     }
                                     div { class: "card-body",
-                                        div { class: "table-responsive",
+                                        div { class: "table-responsive point-history",
                                             table { class: "table table-sm", id: "points-table",
                                                 thead {
                                                     tr {
-                                                        th { "#" }
-                                                        th { "Set" }
-                                                        th { "🪨" }
-                                                        th { "Winner" }
-                                                        th { "Rerun" }
-                                                        th { "Notes" }
-                                                        th { "" }
+                                                        th { scope: "col", "#" }
+                                                        th { scope: "col", "Set" }
+                                                        th { scope: "col", "Stones" }
+                                                        th { scope: "col", "Winner" }
+                                                        th { scope: "col", "Rerun" }
+                                                        th { scope: "col", "Notes" }
+                                                        th { scope: "col", span { class: "visually-hidden", "Delete" } }
                                                     }
                                                 }
                                                 tbody { id: "points-table-body",
@@ -1951,7 +1989,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                         }
                     }
 
-                    div { class: "mobile-button-wrapper d-md-none",
+                    div { class: "mobile-button-wrapper operator-match-controls d-md-none",
                         if !has_in_progress {
                             button {
                                 class: "btn btn-warning btn-lg",
@@ -2257,10 +2295,10 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                                             tr {
                                                                                 td { style: format!("border-left: 8px solid #{}; background-color: #{}22;", row_color, row_color), "{item.penalty_type_name}" }
                                                                                 td { "{item.match_name}" }
-                                                                                td { "{item.date}" }
+                                                                                td { class: "table-nowrap", "{item.date}" }
                                                                                 td {
                                                                                     if item.is_current_match {
-                                                                                        span { class: "badge bg-info", "current match" }
+                                                                                        span { class: "badge bg-info table-nowrap", "current match" }
                                                                                     }
                                                                                 }
                                                                                 td { class: "text-end align-middle",
@@ -2319,7 +2357,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                             rsx! {
                                                                 button {
                                                                     class: if selected { "btn btn-dark" } else { "btn btn-outline-dark" },
-                                                                    style: if selected { format!("background-color: #{}; border-color: #{};", pt.color, pt.color) } else { format!("color: black; border-color: #{}; background-color: white;", pt.color) },
+                                                                    style: if selected { format!("background-color: #{}; border-color: #{};", pt.color, pt.color) } else { format!("color: var(--ui-text); border-color: #{}; background-color: var(--ui-surface);", pt.color) },
                                                                     onclick: move |_| {
                                                                         if penalties_selected_type() == Some(pt_id) {
                                                                             penalties_selected_type.set(None);
@@ -2478,7 +2516,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                 div { class: "modal-content",
                                     div { class: "modal-header",
                                         h5 { class: "modal-title", "Penalty description" }
-                                        button { r#type: "button", class: "btn-close", onclick: move |_| penalty_desc_modal.set(None) }
+                                        button { r#type: "button", class: "btn-close", aria_label: "Close penalty description", onclick: move |_| penalty_desc_modal.set(None) }
                                     }
                                     div { class: "modal-body", "{penalty_desc_modal().as_ref().unwrap_or(&String::new())}" }
                                     div { class: "modal-footer",

@@ -10,3 +10,13 @@ title = "Arctos"
 [build]
 release = false
 
+
+# Same-origin development keeps cookies and API URLs usable on phones as well.
+[[web.proxy]]
+backend = "http://127.0.0.1:5006/_api/"
+
+[[web.proxy]]
+backend = "http://127.0.0.1:5006/static/"
+
+[[web.proxy]]
+backend = "http://127.0.0.1:5006/api/"

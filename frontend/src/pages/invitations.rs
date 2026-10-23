@@ -18,7 +18,7 @@ pub fn Invitations(url: String) -> Element {
         if let Some(Ok(d)) = val.read().as_ref() {
             div { class: "row",
                 div { class: "col-12",
-                    h1 { "{d.tournament.name} - {d.team_registration.pseudonym} Roster" }
+                    h2 { "{d.team_registration.pseudonym} roster" }
                     nav { aria_label: "breadcrumb",
                         ol { class: "breadcrumb",
                             li { class: "breadcrumb-item", Link { to: Route::TournamentHome { url: url.clone() }, "{d.tournament.name}" } }
@@ -30,7 +30,7 @@ pub fn Invitations(url: String) -> Element {
 
             div { class: "row",
                 div { class: "col-12",
-                    div { class: "card",
+                    div { class: "card data-section",
                         div { class: "card-header",
                             h5 { class: "mb-0", "Pending Player Requests" }
                         }
@@ -44,7 +44,7 @@ pub fn Invitations(url: String) -> Element {
                             if d.invitations.is_empty() {
                                 p { class: "text-muted", "No pending requests." }
                             } else {
-                                div { class: "alert alert-info",
+                                p { class: "data-section-summary",
                                     strong { "Current Team Size: " }
                                     "{d.current_team_size}"
                                     if let Some(max) = d.tournament.max_team_size_roster {
@@ -52,13 +52,13 @@ pub fn Invitations(url: String) -> Element {
                                     }
                                 }
                                 div { class: "table-responsive",
-                                    table { class: "table table-striped",
+                                    table { class: "table roster-table",
                                         thead {
                                             tr {
-                                                th { "Player" }
-                                                th { "Jersey Name" }
-                                                th { "Jersey Number" }
-                                                th { "Actions" }
+                                                th { class: "table-nowrap", "Player" }
+                                                th { class: "table-nowrap", "Jersey Name" }
+                                                th { class: "table-number", "Jersey Number" }
+                                                th { class: "table-nowrap", "Actions" }
                                             }
                                         }
                                         tbody {
@@ -71,25 +71,25 @@ pub fn Invitations(url: String) -> Element {
                                                     let at_cap = d.tournament.max_team_size_roster.map(|max| d.current_team_size >= max).unwrap_or(false);
                                                     rsx! {
                                                         tr { key: "{invitation.registration.id}",
-                                                            td {
+                                                            td { class: "table-copy",
                                                                 div { class: "d-flex align-items-center",
                                                                     div { class: "flex-shrink-0 me-2",
                                                                         if let Some(photo) = &invitation.player.profile_photo {
-                                                                            img { src: "{backend}/static/{photo}", alt: "{invitation.player.name}", class: "rounded-circle", style: "width: 40px; height: 40px; object-fit: cover;" }
+                                                                            img { src: "{backend}/static/{photo}", alt: "{invitation.player.name}", class: "rounded-circle", style: "width: 32px; height: 32px; object-fit: cover;" }
                                                                         } else {
-                                                                            div { class: "d-flex align-items-center justify-content-center bg-secondary rounded-circle", style: "width: 40px; height: 40px;",
+                                                                            div { class: "d-flex align-items-center justify-content-center bg-secondary rounded-circle", style: "width: 32px; height: 32px;",
                                                                                 i { class: "fas fa-user text-white" }
                                                                             }
                                                                         }
                                                                     }
                                                                     div { class: "flex-grow-1",
-                                                                        Link { to: Route::PlayerProfilePage { id: invitation.player.id.clone() }, "{invitation.player.name}" }
+                                                                        Link { to: Route::PlayerProfilePage { id: invitation.player.id.clone() }, class: "roster-name", "{invitation.player.name}" }
                                                                     }
                                                                 }
                                                             }
-                                                            td { "{invitation.registration.jersey_name.as_deref().unwrap_or(\"N/A\")}" }
-                                                            td { "{invitation.registration.jersey_number.as_deref().unwrap_or(\"N/A\")}" }
-                                                            td {
+                                                            td { class: "table-copy", "data-label": "Jersey name", "{invitation.registration.jersey_name.as_deref().unwrap_or(\"N/A\")}" }
+                                                            td { class: "table-number", "data-label": "Jersey number", "{invitation.registration.jersey_number.as_deref().unwrap_or(\"N/A\")}" }
+                                                            td { class: "roster-actions", "data-label": "Actions",
                                                                 div { class: "btn-group", role: "group",
                                                                     button {
                                                                         r#type: "button",
@@ -140,63 +140,63 @@ pub fn Invitations(url: String) -> Element {
                     }
 
                     if !d.team_roster.is_empty() {
-                        div { class: "card mt-3",
+                        div { class: "card data-section mt-3",
                             div { class: "card-header",
                                 h5 { class: "mb-0", "Team Roster" }
                             }
                             div { class: "card-body",
                                 div { class: "table-responsive",
-                                    table { class: "table table-striped",
+                                    table { class: "table roster-table",
                                         thead {
                                             tr {
-                                                th { "Player" }
-                                                th { "Jersey Name" }
-                                                th { "Jersey Number" }
-                                                th { "Status" }
-                                                th { "Payment" }
+                                                th { class: "table-nowrap", "Player" }
+                                                th { class: "table-nowrap", "Jersey Name" }
+                                                th { class: "table-number", "Jersey Number" }
+                                                th { class: "table-nowrap", "Status" }
+                                                th { class: "table-nowrap", "Payment" }
                                             }
                                         }
                                         tbody {
                                             for roster_item in d.team_roster.iter() {
                                                 tr { key: "{roster_item.registration.id}",
-                                                    td {
+                                                    td { class: "table-copy",
                                                         div { class: "d-flex align-items-center",
                                                             div { class: "flex-shrink-0 me-2",
                                                                 if let Some(photo) = &roster_item.player.profile_photo {
-                                                                    img { src: "{backend}/static/{photo}", alt: "{roster_item.player.name}", class: "rounded-circle", style: "width: 40px; height: 40px; object-fit: cover;" }
+                                                                    img { src: "{backend}/static/{photo}", alt: "{roster_item.player.name}", class: "rounded-circle", style: "width: 32px; height: 32px; object-fit: cover;" }
                                                                 } else {
-                                                                    div { class: "d-flex align-items-center justify-content-center bg-secondary rounded-circle", style: "width: 40px; height: 40px;",
+                                                                    div { class: "d-flex align-items-center justify-content-center bg-secondary rounded-circle", style: "width: 32px; height: 32px;",
                                                                         i { class: "fas fa-user text-white" }
                                                                     }
                                                                 }
                                                             }
                                                             div { class: "flex-grow-1",
-                                                                Link { to: Route::PlayerProfilePage { id: roster_item.player.id.clone() }, "{roster_item.player.name}" }
+                                                                Link { to: Route::PlayerProfilePage { id: roster_item.player.id.clone() }, class: "roster-name", "{roster_item.player.name}" }
                                                             }
                                                         }
                                                     }
-                                                    td { "{roster_item.registration.jersey_name.as_deref().unwrap_or(\"N/A\")}" }
-                                                    td { "{roster_item.registration.jersey_number.as_deref().unwrap_or(\"N/A\")}" }
-                                                    td {
+                                                    td { class: "table-copy", "data-label": "Jersey name", "{roster_item.registration.jersey_name.as_deref().unwrap_or(\"N/A\")}" }
+                                                    td { class: "table-number", "data-label": "Jersey number", "{roster_item.registration.jersey_number.as_deref().unwrap_or(\"N/A\")}" }
+                                                    td { class: "roster-wide", "data-label": "Status",
                                                         match roster_item.registration.status.as_str() {
-                                                            "CONFIRMED" => rsx! { span { class: "badge bg-success", "Confirmed" } },
-                                                            "PENDING_TEAM_APPROVAL" => rsx! { span { class: "badge bg-warning", "Pending Approval" } },
-                                                            "REJECTED" => rsx! { span { class: "badge bg-danger", "Rejected" } },
-                                                            "CANCELLED" => rsx! { span { class: "badge bg-secondary", "Cancelled" } },
-                                                            _ => rsx! { span { class: "badge bg-secondary", "{roster_item.registration.status}" } },
+                                                            "CONFIRMED" => rsx! { span { class: "badge table-nowrap bg-success", "Confirmed" } },
+                                                            "PENDING_TEAM_APPROVAL" => rsx! { span { class: "badge table-nowrap bg-warning", "Pending Approval" } },
+                                                            "REJECTED" => rsx! { span { class: "badge table-nowrap bg-danger", "Rejected" } },
+                                                            "CANCELLED" => rsx! { span { class: "badge table-nowrap bg-secondary", "Cancelled" } },
+                                                            _ => rsx! { span { class: "badge table-nowrap bg-secondary", "{roster_item.registration.status}" } },
                                                         }
                                                     }
-                                                    td {
+                                                    td { "data-label": "Payment",
                                                         if roster_item.registration.paid {
-                                                            span { class: "badge bg-success", "Paid" }
+                                                            span { class: "badge table-nowrap bg-success", "Paid" }
                                                             if roster_item.registration.amount_paid > 0.0 {
                                                                 {
                                                                     let paid_amount = format!("${:.2}", roster_item.registration.amount_paid);
-                                                                    rsx! { small { class: "text-muted ms-1", "{paid_amount}" } }
+                                                                    rsx! { small { class: "text-muted ms-1 table-number", "{paid_amount}" } }
                                                                 }
                                                             }
                                                         } else {
-                                                            span { class: "badge bg-warning", "Unpaid" }
+                                                            span { class: "badge table-nowrap bg-warning", "Unpaid" }
                                                         }
                                                     }
                                                 }

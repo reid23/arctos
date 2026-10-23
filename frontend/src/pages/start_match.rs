@@ -3,8 +3,8 @@ use crate::components::PenaltyDisplay;
 use crate::types::StartMatchPlayer;
 use crate::Route;
 use dioxus::prelude::*;
-use std::collections::HashSet;
 use serde_json::Value;
+use std::collections::HashSet;
 
 #[component]
 pub fn StartMatch(url: String, match_id: String) -> Element {
@@ -14,7 +14,9 @@ pub fn StartMatch(url: String, match_id: String) -> Element {
         let u = url_for_data.clone();
         let id = match_id_for_data.clone();
         async move {
-            api::start_match_data(&u, &id).await.map_err(|e| e.to_string())
+            api::start_match_data(&u, &id)
+                .await
+                .map_err(|e| e.to_string())
         }
     });
     let val = data.value();
@@ -28,6 +30,8 @@ pub fn StartMatch(url: String, match_id: String) -> Element {
     let mut notes_modal_content = use_signal(|| None as Option<Result<Vec<Value>, String>>);
     let mut penalty_desc_modal = use_signal(|| None::<String>);
     let mut match_notes = use_signal(String::new);
+    let mut submit_error = use_signal(|| None::<String>);
+    let mut submitting = use_signal(|| false);
     let navigator = use_navigator();
     let submit_url = url.clone();
     let notes_url_team1 = url.clone();
@@ -44,9 +48,19 @@ pub fn StartMatch(url: String, match_id: String) -> Element {
         if let Some(d) = data_ready {
             if !has_initialized_teams() {
                 team1_all.set(d.team1_players.iter().map(|p| p.id.clone()).collect());
-                team1_selected.set(d.team1_players.iter().map(|p| p.id.clone()).collect::<HashSet<_>>());
+                team1_selected.set(
+                    d.team1_players
+                        .iter()
+                        .map(|p| p.id.clone())
+                        .collect::<HashSet<_>>(),
+                );
                 team2_all.set(d.team2_players.iter().map(|p| p.id.clone()).collect());
-                team2_selected.set(d.team2_players.iter().map(|p| p.id.clone()).collect::<HashSet<_>>());
+                team2_selected.set(
+                    d.team2_players
+                        .iter()
+                        .map(|p| p.id.clone())
+                        .collect::<HashSet<_>>(),
+                );
                 has_initialized_teams.set(true);
             }
         }
@@ -60,10 +74,18 @@ pub fn StartMatch(url: String, match_id: String) -> Element {
             let team1_name = d.match_info.team1_name.clone();
             let team2_name = d.match_info.team2_name.clone();
             let team1_has_unpaid = team1_selected().iter().any(|id| {
-                d.all_players.iter().find(|p| &p.id == id).map(|p| !p.paid).unwrap_or(false)
+                d.all_players
+                    .iter()
+                    .find(|p| &p.id == id)
+                    .map(|p| !p.paid)
+                    .unwrap_or(false)
             });
             let team2_has_unpaid = team2_selected().iter().any(|id| {
-                d.all_players.iter().find(|p| &p.id == id).map(|p| !p.paid).unwrap_or(false)
+                d.all_players
+                    .iter()
+                    .find(|p| &p.id == id)
+                    .map(|p| !p.paid)
+                    .unwrap_or(false)
             });
             // Use route param for POST so backend receives the same id we navigated to
             let route_match_id_for_submit = match_id.clone();
@@ -72,7 +94,8 @@ pub fn StartMatch(url: String, match_id: String) -> Element {
             rsx! {
                 div { class: "row",
                     div { class: "col-12",
-                        h1 { "Start Match" }
+                        h1 { "Start match" }
+                        p { class: "text-muted", "Review both rosters before starting the match." }
                         nav { aria_label: "breadcrumb",
                             ol { class: "breadcrumb",
                                 li { class: "breadcrumb-item",
@@ -84,14 +107,20 @@ pub fn StartMatch(url: String, match_id: String) -> Element {
                                     }
                                 }
                                 li { class: "breadcrumb-item",
-                                    Link {
-                                        to: Route::Schedule {
-                                            url: schedule_url.clone(),
-                                            view: String::new(),
-                                            team: String::new(),
-                                            field: String::new(),
-                                        },
-                                        "Schedule"
+                                    if d.can_view_schedule {
+                                        Link {
+                                            to: Route::Schedule {
+                                                url: schedule_url.clone(),
+                                                view: String::new(),
+                                                team: String::new(),
+                                                field: String::new(),
+                                            },
+                                            if d.tournament.schedule_published { "Schedule" } else { "Preview schedule" }
+                                        }
+                                    } else {
+                                        span { class: "text-muted",
+                                            if d.tournament.schedule_published { "Schedule unavailable" } else { "Schedule not posted" }
+                                        }
                                     }
                                 }
                                 li { class: "breadcrumb-item active", "Start Match" }
@@ -101,15 +130,17 @@ pub fn StartMatch(url: String, match_id: String) -> Element {
                 }
 
                 div { class: "row",
-                    div { class: "col-md-8",
-                        div { class: "card",
-                            div { class: "card-header",
+                    div { class: "col-md-8 operator-setup",
+                        div { class: "edit-section",
+                            div { class: "edit-section-heading",
                                 h5 { class: "mb-0", "Match Setup" }
                             }
-                            div { class: "card-body",
+                            div { class: "edit-section-body",
                                 form {
                                     onsubmit: move |ev| {
                                         ev.prevent_default();
+                                        if submitting() { return; }
+                                        submit_error.set(None);
                                         let team1_count = team1_selected().len();
                                         let team2_count = team2_selected().len();
                                         #[cfg(target_arch = "wasm32")]
@@ -135,6 +166,7 @@ pub fn StartMatch(url: String, match_id: String) -> Element {
                                                 }
                                             }
                                         }
+                                        submitting.set(true);
                                         let nav = navigator.clone();
                                         let team1_players: Vec<String> = team1_selected().iter().cloned().collect();
                                         let team2_players: Vec<String> = team2_selected().iter().cloned().collect();
@@ -149,12 +181,16 @@ pub fn StartMatch(url: String, match_id: String) -> Element {
                                                 match_notes,
                                                 stones_per_set: None,
                                             };
-                                            if let Ok(resp) = api::start_match(&u, &req).await {
-                                                nav.push(Route::RunMatch {
-                                                    url: u.clone(),
-                                                    match_id: resp.match_id.clone(),
-                                                });
+                                            match api::start_match(&u, &req).await {
+                                                Ok(resp) => {
+                                                    nav.push(Route::RunMatch {
+                                                        url: u.clone(),
+                                                        match_id: resp.match_id.clone(),
+                                                    });
+                                                }
+                                                Err(error) => submit_error.set(Some(format!("The match could not start. {error}"))),
                                             }
+                                            submitting.set(false);
                                         });
                                     },
                                     input {
@@ -247,6 +283,7 @@ pub fn StartMatch(url: String, match_id: String) -> Element {
                                                         r#type: "text",
                                                         class: "form-control",
                                                         id: "team1_search",
+                                                        aria_label: "Search players to add to this roster",
                                                         placeholder: "Search players...",
                                                         value: "{team1_search()}",
                                                         oninput: move |ev| team1_search.set(ev.value().clone()),
@@ -367,6 +404,7 @@ pub fn StartMatch(url: String, match_id: String) -> Element {
                                                         r#type: "text",
                                                         class: "form-control",
                                                         id: "team2_search",
+                                                        aria_label: "Search players to add to this roster",
                                                         placeholder: "Search players...",
                                                         value: "{team2_search()}",
                                                         oninput: move |ev| team2_search.set(ev.value().clone()),
@@ -419,15 +457,19 @@ pub fn StartMatch(url: String, match_id: String) -> Element {
                                             oninput: move |ev| match_notes.set(ev.value().clone()),
                                         }
                                     }
+                                    if let Some(error) = submit_error() {
+                                        div { class: "alert alert-danger", role: "alert", "{error}" }
+                                    }
+                                    p { class: "form-text", "Starting locks in the match roster. Check the selected players before continuing." }
                                     div { class: "d-grid",
                                         button {
                                             r#type: "submit",
                                             class: "btn btn-success btn-lg",
-                                            disabled: team1_selected().len() > d.tournament.max_team_size_field.unwrap_or(0) as usize
+                                            disabled: submitting() || team1_selected().len() > d.tournament.max_team_size_field.unwrap_or(0) as usize
                                                 || team2_selected().len() > d.tournament.max_team_size_field.unwrap_or(0) as usize
                                                 || team1_has_unpaid
                                                 || team2_has_unpaid,
-                                            "Start Match"
+                                            if submitting() { "Starting match…" } else { "Start match" }
                                         }
                                     }
                                 }

@@ -1,13 +1,16 @@
+use super::login::{go_to_next, is_safe_return_path, remember_google_return};
 use crate::api;
 use crate::pages::layout::use_auth_invalidate;
-use crate::Route;
 use dioxus::prelude::*;
 
 fn get_query_param(name: &str) -> Option<String> {
     #[cfg(target_arch = "wasm32")]
     {
         let window = web_sys::window()?;
-        let search = window.location().search().ok()?;
+        let search = ["/register", "/register/player", "/register/team"]
+            .iter()
+            .find_map(|path| crate::initial_query(path))
+            .unwrap_or_else(|| window.location().search().unwrap_or_default());
         let params = web_sys::UrlSearchParams::new_with_str(&search).ok()?;
         params.get(name)
     }
@@ -22,13 +25,6 @@ fn initial_user_type_from_query() -> String {
     match get_query_param("type").as_deref() {
         Some("team") => "team".to_string(),
         _ => "player".to_string(),
-    }
-}
-
-fn register_title(user_type: &str) -> String {
-    match user_type {
-        "team" => "Register as Team".to_string(),
-        _ => "Register as Player".to_string(),
     }
 }
 
@@ -65,39 +61,54 @@ fn RegisterPage(account_type: Option<String>) -> Element {
     let mut name = use_signal(|| String::new());
     let mut user_type = use_signal(move || initial);
     let mut err = use_signal(|| None::<String>);
+    let mut busy = use_signal(|| false);
     let navigator = use_navigator();
     let auth_invalidate = use_auth_invalidate();
-    let google_base = format!("{}/_api/auth/google/login", api::base_url());
+    let next = get_query_param("next").filter(|path| is_safe_return_path(path));
+    let next_suffix = next
+        .as_ref()
+        .map(|path| format!("&next={}", urlencoding::encode(path)))
+        .unwrap_or_default();
+    let google_url = format!(
+        "{}/_api/auth/google/login?type={}{}",
+        api::base_url(),
+        user_type(),
+        next_suffix
+    );
+    let login_url = next
+        .as_ref()
+        .map(|path| format!("/login?next={}", urlencoding::encode(path)))
+        .unwrap_or_else(|| "/login".into());
 
     rsx! {
-        div { class: "row justify-content-center",
-            div { class: "col-md-6",
-                div { class: "card",
+        div { class: "row justify-content-center auth-page",
+            div { class: "col-12 auth-column",
+                div { class: "card auth-card",
                     div { class: "card-header",
-                        div { class: "d-flex justify-content-between align-items-center",
-                            h3 { class: "mb-0", "{register_title(&user_type())}" }
-                            div { class: "btn-group btn-group-sm", role: "group",
-                                Link {
-                                    to: Route::RegisterPlayer {},
-                                    class: if user_type() == "player" { "btn btn-primary" } else { "btn btn-outline-primary" },
-                                    "Player"
-                                }
-                                Link {
-                                    to: Route::RegisterTeam {},
-                                    class: if user_type() == "team" { "btn btn-primary" } else { "btn btn-outline-primary" },
-                                    "Team"
-                                }
-                            }
-                        }
+                        h1 { class: "mb-2", "Create your account" }
+                        p { class: "text-muted mb-0", "Choose a player or team account." }
                     }
                     div { class: "card-body",
+                        if let Some(e) = err.read().as_ref() {
+                            div { class: "alert alert-danger mb-3", role: "alert", "{e}" }
+                        }
+                        div { class: "account-type-picker mb-4", role: "group", aria_label: "Account type",
+                            button { r#type: "button", class: if user_type() == "player" { "account-type-option is-selected" } else { "account-type-option" }, aria_pressed: user_type() == "player", disabled: busy(), onclick: move |_| user_type.set("player".into()),
+                                strong { "Player" } small { "Join events, play, and referee." }
+                            }
+                            button { r#type: "button", class: if user_type() == "team" { "account-type-option is-selected" } else { "account-type-option" }, aria_pressed: user_type() == "team", disabled: busy(), onclick: move |_| user_type.set("team".into()),
+                                strong { "Team" } small { "Register one team and manage its roster." }
+                            }
+                        }
+                        p { class: "form-text mb-3", "Both account types can organize events. Use a player account to referee matches." }
                         form {
                             onsubmit: move |ev| {
                                 ev.prevent_default();
-                                let u = username().clone();
+                                if busy() { return; }
+                                let u = username().trim().to_string();
                                 let p = password().clone();
                                 let cp = confirm_password().clone();
-                                let n = name().clone();
+                                let n = name().trim().to_string();
                                 let t = user_type().clone();
                                 if u.is_empty() || p.is_empty() || n.is_empty() {
                                     err.set(Some("Username, password, and display name required".into()));
@@ -108,16 +119,20 @@ fn RegisterPage(account_type: Option<String>) -> Element {
                                     return;
                                 }
                                 err.set(None);
+                                busy.set(true);
                                 let nav = navigator.clone();
                                 let mut auth_invalidate = auth_invalidate;
-                                let next = get_query_param("next").filter(|s| s.starts_with('/'));
+                                let next = get_query_param("next").filter(|path| is_safe_return_path(path));
                                 spawn(async move {
                                     match api::register(&u, &p, &n, &t).await {
                                         Ok(_) => {
                                             auth_invalidate.set(auth_invalidate() + 1);
-                                            let _ = nav.push(next.as_deref().unwrap_or("/"));
+                                            match next.as_deref() {
+                                                Some(next) => go_to_next(next),
+                                                None => { let _ = nav.push("/"); }
+                                            }
                                         }
-                                        Err(e) => err.set(Some(e)),
+                                        Err(e) => { err.set(Some(e)); busy.set(false); },
                                     }
                                 });
                             },
@@ -128,10 +143,15 @@ fn RegisterPage(account_type: Option<String>) -> Element {
                                     class: "form-control",
                                     id: "username",
                                     name: "username",
+                                    autocomplete: "username",
+                                    autocapitalize: "none",
+                                    spellcheck: "false",
+                                    maxlength: 50,
+                                    disabled: busy(),
                                     value: "{username()}",
                                     oninput: move |ev| username.set(ev.value().clone()),
                                     required: true,
-                                    pattern: "[a-zA-Z0-9][a-zA-Z0-9_-]*[a-zA-Z0-9]|[a-zA-Z0-9]",
+                                    pattern: r"[a-zA-Z0-9][a-zA-Z0-9_\-]*[a-zA-Z0-9]|[a-zA-Z0-9]",
                                 }
                                 div { class: "form-text",
                                     "This will be your unique identifier. "
@@ -146,11 +166,13 @@ fn RegisterPage(account_type: Option<String>) -> Element {
                                     class: "form-control",
                                     id: "name",
                                     name: "name",
+                                    autocomplete: if user_type() == "team" { "organization" } else { "nickname" },
+                                    disabled: busy(),
                                     value: "{name()}",
                                     oninput: move |ev| name.set(ev.value().clone()),
                                     required: true,
                                 }
-                                div { class: "form-text", "Your public display name" }
+                                div { class: "form-text", "Your public name. You can change it later." }
                             }
                             div { class: "mb-3",
                                 label { r#for: "password", class: "form-label", "Password" }
@@ -159,6 +181,8 @@ fn RegisterPage(account_type: Option<String>) -> Element {
                                     class: "form-control",
                                     id: "password",
                                     name: "password",
+                                    autocomplete: "new-password",
+                                    disabled: busy(),
                                     value: "{password()}",
                                     oninput: move |ev| password.set(ev.value().clone()),
                                     required: true,
@@ -171,13 +195,15 @@ fn RegisterPage(account_type: Option<String>) -> Element {
                                     class: "form-control",
                                     id: "confirm_password",
                                     name: "confirm_password",
+                                    autocomplete: "new-password",
+                                    disabled: busy(),
                                     value: "{confirm_password()}",
                                     oninput: move |ev| confirm_password.set(ev.value().clone()),
                                     required: true,
                                 }
                             }
                             div { class: "d-grid",
-                                button { r#type: "submit", class: "btn btn-primary", id: "submitBtn", "Register" }
+                                button { r#type: "submit", class: "btn btn-primary", id: "submitBtn", disabled: busy(), if busy() { "Creating account…" } else { "Create account" } }
                             }
                         }
                         hr {}
@@ -185,7 +211,7 @@ fn RegisterPage(account_type: Option<String>) -> Element {
                             p { class: "text-muted", "Or" }
                         }
                         div { class: "d-grid mb-3",
-                            a { href: "{google_base}?type={user_type()}", class: "btn btn-outline-secondary",
+                            a { href: "{google_url}", class: "btn btn-outline-secondary", onclick: move |_| remember_google_return(get_query_param("next").as_deref()),
                                 span { style: "margin-right: 8px; vertical-align: middle; display: inline-block; width: 18px; height: 18px;",
                                     svg { width: "18", height: "18", view_box: "0 0 18 18",
                                         path { fill: "#4285F4", d: "M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z" }
@@ -199,17 +225,9 @@ fn RegisterPage(account_type: Option<String>) -> Element {
                         }
                         hr {}
                         div { class: "text-center",
-                            p { "Already have an account? " Link { to: Route::Login {}, "Login here" } }
-                            p {
-                                "Or register as a "
-                                Link { to: Route::RegisterPlayer {}, class: "text-decoration-none", "player" }
-                                " or "
-                                Link { to: Route::RegisterTeam {}, class: "text-decoration-none", "team" }
-                            }
+                            p { "Already have an account? " a { href: "{login_url}", "Sign in" } }
                         }
-                        if let Some(e) = err.read().as_ref() {
-                            div { class: "alert alert-danger mt-3 mb-0", "{e}" }
-                        }
+
                     }
                 }
             }

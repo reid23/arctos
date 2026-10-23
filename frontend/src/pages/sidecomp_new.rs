@@ -18,9 +18,10 @@ pub fn SideCompNew(url: String) -> Element {
     let url_for_submit = url.clone();
 
     rsx! {
+        style { {include_str!("../components/organizer_tools.css")} }
         div { class: "row",
-            div { class: "col-12",
-                h1 { "Create side competition" }
+            div { class: "col-12 sidecomp-form",
+                h2 { "Create side competition" }
                 div { class: "mb-3",
                     Link {
                         to: Route::TournamentHomeWithTab {
@@ -34,6 +35,7 @@ pub fn SideCompNew(url: String) -> Element {
                 form {
                     onsubmit: move |evt| {
                         evt.prevent_default();
+                        if submitting() { return; }
                         let url_inner = url_for_submit.clone();
                         let n = name();
                         let t = type_();
@@ -79,8 +81,9 @@ pub fn SideCompNew(url: String) -> Element {
                         });
                     },
                     div { class: "mb-3",
-                        label { class: "form-label", "Name" }
+                        label { class: "form-label", r#for: "sidecomp-name", "Name" }
                         input {
+                            id: "sidecomp-name",
                             class: "form-control",
                             r#type: "text",
                             value: "{name}",
@@ -89,8 +92,9 @@ pub fn SideCompNew(url: String) -> Element {
                         }
                     }
                     div { class: "mb-3",
-                        label { class: "form-label", "Type" }
+                        label { class: "form-label", r#for: "sidecomp-type", "Type" }
                         select {
+                            id: "sidecomp-type",
                             class: "form-select",
                             value: "{type_}",
                             onchange: move |evt| type_.set(evt.value()),
@@ -100,8 +104,9 @@ pub fn SideCompNew(url: String) -> Element {
                         }
                     }
                     div { class: "mb-3",
-                        label { class: "form-label", "Description" }
+                        label { class: "form-label", r#for: "sidecomp-description", "Description" }
                         textarea {
+                            id: "sidecomp-description",
                             class: "form-control",
                             rows: "4",
                             value: "{description}",
@@ -109,10 +114,18 @@ pub fn SideCompNew(url: String) -> Element {
                         }
                         div { class: "form-text", "Optional. Shown on the side competition page." }
                     }
+                    details { class: "settings-advanced", id: "sidecomp-advanced",
+                        summary { "Advanced options" small {
+                            "Weapon rules and standings"
+                            if allowed_weapons().len() != default_allowed_weapons().len() { " · restricted weapons" }
+                            if !top_n_text().trim().is_empty() { " · limited results" }
+                        } }
+                        div { class: "settings-advanced-body",
                     AllowedWeaponsCheckboxes { selected: allowed_weapons }
                     div { class: "mb-3",
-                        label { class: "form-label", "Only show top N results" }
+                        label { class: "form-label", r#for: "sidecomp-top-n", "Only show top N results" }
                         input {
+                            id: "sidecomp-top-n",
                             class: "form-control",
                             r#type: "number",
                             min: "0",
@@ -121,14 +134,16 @@ pub fn SideCompNew(url: String) -> Element {
                             oninput: move |evt| top_n_text.set(evt.value()),
                         }
                     }
+                        }
+                    }
                     if let Some(err) = error() {
-                        div { class: "alert alert-danger", "{err}" }
+                        div { class: "alert alert-danger", role: "alert", "{err}" }
                     }
                     button {
                         class: "btn btn-primary",
                         r#type: "submit",
                         disabled: submitting(),
-                        "Create"
+                        if submitting() { "Creating…" } else { "Create side competition" }
                     }
                 }
             }

@@ -1,23 +1,111 @@
 use crate::api;
+use crate::appearance::{focus_control, use_appearance};
+use crate::components::AppearanceMenu;
 use crate::Route;
 use dioxus::prelude::*;
+
+// These ordinary event tools share their event's identity and navigation.
+// Public schedule/results/bracket pages already supply this shell themselves;
+// live match controls, scoring keypads, and overlays keep their dedicated space.
+fn event_tool_shell(route: &Route) -> Option<(bool, String, String, Option<String>)> {
+    let (league, url, tab, title) = match route {
+        Route::TournamentSettings { url } => (false, url, "settings", Some("Settings")),
+        Route::TournamentRegister { url } => (false, url, "registration", Some("Registration")),
+        Route::Manage { url } => (false, url, "manage", Some("Registration management")),
+        Route::ManageFootage { url } => (false, url, "footage", Some("Footage")),
+        Route::Invitations { url } => (false, url, "roster", Some("Manage roster")),
+        Route::ScheduleEdit { url } => (false, url, "schedule-edit", Some("Edit schedule")),
+        Route::LegacyBracket { url } => (false, url, "legacy-bracket", Some("Legacy bracket")),
+        Route::SideCompNew { url }
+        | Route::SideCompDetail { url, .. }
+        | Route::SideCompEdit { url, .. }
+        | Route::SideCompRegisterAsTo { url, .. }
+        | Route::SideCompResults { url, .. }
+        | Route::SideCompManageResults { url, .. } => (false, url, "sidecomps", None),
+        Route::LeagueSettings { league_url } => (true, league_url, "settings", Some("Settings")),
+        Route::LeagueRegister { league_url } => (true, league_url, "registration", Some("Registration")),
+        Route::LeagueManage { league_url } => (true, league_url, "manage", Some("Registration management")),
+        Route::LeagueInvitations { league_url } => (true, league_url, "roster", Some("Manage roster")),
+        Route::LeagueNewTournament { league_url } => (true, league_url, "new-event", Some("Add event")),
+        _ => return None,
+    };
+    Some((league, url.clone(), tab.to_string(), title.map(str::to_string)))
+}
 
 /// Signal bumped when login/logout succeeds so the layout refetches user.
 pub fn use_auth_invalidate() -> Signal<u32> {
     use_context::<Signal<u32>>()
 }
 
+#[derive(Clone, Copy)]
+struct PageBannerPreferences(Signal<std::collections::HashSet<String>>);
+
+pub fn use_page_banner_preferences() -> Signal<std::collections::HashSet<String>> {
+    use_context::<PageBannerPreferences>().0
+}
+
+#[cfg(target_arch = "wasm32")]
+const PAGE_BANNERS_STORAGE_KEY: &str = "arctos.page-banners.hidden.v1";
+
+fn stored_page_banners() -> std::collections::HashSet<String> {
+    #[cfg(target_arch = "wasm32")]
+    if let Some(storage) = web_sys::window().and_then(|window| window.local_storage().ok().flatten()) {
+        if let Some(saved) = storage.get_item(PAGE_BANNERS_STORAGE_KEY).ok().flatten() {
+            if let Ok(keys) = serde_json::from_str(&saved) {
+                return keys;
+            }
+        }
+        // Keep the previous Events banner preference when upgrading.
+        if storage.get_item("arctos.introduction.hidden.v1").ok().flatten().as_deref() == Some("true") {
+            return std::collections::HashSet::from(["events".to_string()]);
+        }
+    }
+    std::collections::HashSet::new()
+}
+
+pub fn set_page_banner_hidden(
+    mut preferences: Signal<std::collections::HashSet<String>>,
+    key: &str,
+    hidden: bool,
+) {
+    if hidden {
+        preferences.write().insert(key.to_string());
+    } else {
+        preferences.write().remove(key);
+    }
+    #[cfg(target_arch = "wasm32")]
+    if let Some(storage) = web_sys::window().and_then(|window| window.local_storage().ok().flatten()) {
+        if let Ok(saved) = serde_json::to_string(&*preferences.read()) {
+            let _ = storage.set_item(PAGE_BANNERS_STORAGE_KEY, &saved);
+        }
+    }
+}
+
+pub fn page_banner_key(route: &Route) -> Option<String> {
+    match route {
+        Route::Index {} => Some("events".into()),
+        Route::LeaguesIndex {} => Some("leagues".into()),
+        Route::PlayersList {} => Some("players".into()),
+        Route::TeamsList {} => Some("teams".into()),
+        Route::Stones {} => Some("stones".into()),
+        _ => None,
+    }
+}
+
 /// Returns a short page name for the tab title: "Page Name | Arctos".
 fn page_title_for_route(route: &Route) -> String {
     match route {
-        Route::Index { .. } => "Home".into(),
+        Route::Index { .. } => "Events".into(),
+        Route::NotFound { .. } => "Page not found".into(),
         Route::Login { .. } => "Login".into(),
         Route::Register { .. } => "Register".into(),
         Route::RegisterPlayer { .. } => "Register as Player".into(),
         Route::RegisterTeam { .. } => "Register as Team".into(),
         Route::GoogleChooseAccountType { .. } => "Choose Account Type".into(),
         Route::GoogleCompleteProfile { .. } => "Complete Profile".into(),
-        Route::TournamentHome { url } | Route::TournamentHomeWithTab { url, .. } => format!("{url}"),
+        Route::TournamentHome { url } | Route::TournamentHomeWithTab { url, .. } => {
+            format!("{url}")
+        }
         Route::Schedule { url, .. } => format!("{url} Schedule"),
         Route::ScheduleEdit { url } => format!("{url} Edit Schedule"),
         Route::Results { url } => format!("{url} Results"),
@@ -40,16 +128,16 @@ fn page_title_for_route(route: &Route) -> String {
         Route::EditPlayerProfile { .. } => "Edit Profile".into(),
         Route::EditTeamProfile { .. } => "Edit Profile".into(),
         Route::PlayersList { .. } => "Players".into(),
-        Route::PlayerProfilePage { id } => format!("{id}"),
+        Route::PlayerProfilePage { id } | Route::PlayerProfilePageWithTab { id, .. } => format!("{id}"),
         Route::TeamsList { .. } => "Teams".into(),
-        Route::TeamProfilePage { id } => format!("{id}"),
+        Route::TeamProfilePage { id } | Route::TeamProfilePageWithTab { id, .. } => format!("{id}"),
         Route::Stones { .. } => "Stones".into(),
         Route::About { .. } => "About".into(),
-        Route::NewTournament { .. } => "Create Tournament".into(),
+        Route::NewTournament { .. } => "Create an Event".into(),
         Route::LeaguesIndex { .. } => "Leagues".into(),
         Route::CreateEvent { .. } => "Create event".into(),
         Route::NewLeague { .. } => "Create League".into(),
-        Route::LeagueHome { league_url } => league_url.clone(),
+        Route::LeagueHome { league_url } | Route::LeagueHomeWithTab { league_url, .. } => league_url.clone(),
         Route::LeagueRegister { .. } => "Register".into(),
         Route::LeagueResults { .. } => "Results".into(),
         Route::LeagueSettings { .. } => "Settings".into(),
@@ -76,232 +164,273 @@ fn page_title_for_route(route: &Route) -> String {
     }
 }
 
+const BOOTSTRAP: Asset = asset!("/assets/vendor/bootstrap.min.css");
+const ICONS: Asset = asset!("/assets/vendor/fontawesome");
+
 #[component]
 pub fn Layout() -> Element {
     let auth_version = use_signal(|| 0u32);
     provide_context(auth_version);
-
+    let banner_preferences = use_signal(stored_page_banners);
+    provide_context(PageBannerPreferences(banner_preferences));
     let user = use_resource(move || {
-        let av = auth_version;
-        async move {
-            let _ = av();
-            api::me().await
-        }
+        let _ = auth_version();
+        async move { api::me().await }
     });
-    let mut nav_expanded = use_signal(|| false);
-    let mut user_dropdown_open = use_signal(|| false);
-    let mut register_dropdown_open = use_signal(|| false);
+    let mut account_open = use_signal(|| false);
+    let mut utility_open = use_signal(|| false);
+    let mut appearance_open = use_signal(|| false);
+    let appearance = use_appearance();
+    let palette = appearance.preferences().palette.id();
+    let color_scheme = appearance.scheme();
+    let mut logging_out = use_signal(|| false);
+    let mut auth_error = use_signal(|| None::<String>);
     let navigator = use_navigator();
     let route = use_route::<Route>();
     let page_title = format!("{} | Arctos", page_title_for_route(&route));
+    let path = route.to_string();
+    let event_shell = event_tool_shell(&route);
+    let event_page = event_shell.is_some() || matches!(route, Route::TournamentHome { .. } | Route::TournamentHomeWithTab { .. }
+        | Route::Schedule { .. } | Route::Results { .. } | Route::Bracket { .. }
+        | Route::LeagueHome { .. } | Route::LeagueHomeWithTab { .. } | Route::LeagueResults { .. }
+        | Route::PlayerProfilePage { .. } | Route::PlayerProfilePageWithTab { .. }
+        | Route::TeamProfilePage { .. } | Route::TeamProfilePageWithTab { .. });
+    let current_user = user
+        .read()
+        .as_ref()
+        .and_then(|result| result.as_ref().ok())
+        .cloned();
+    let account_label = current_user.as_ref().map_or_else(String::new, |user| {
+        format!("Account: {} ({})", user.name, user.user_type)
+    });
+    use_effect(use_reactive(&route, move |_| {
+        account_open.set(false);
+        utility_open.set(false);
+        appearance_open.set(false);
+    }));
 
-    // Offline overlay frames are screenshotted at a fixed size, so they get no page styles at all.
+    // Exact-size offline frames and OBS overlays intentionally have no app theme.
     if matches!(route, Route::ScoreboardRender { .. }) {
         return rsx! { Outlet::<Route> {} };
     }
-    // Scoreboard is embedded elsewhere (e.g. OBS); render only the raw scoreboard, no nav/footer.
-    // Enter-results is a mobile scoring surface — same minimal chrome.
-    if matches!(route, Route::Scoreboard { .. } | Route::SideCompEnterResults { .. }) {
+    if matches!(route, Route::Scoreboard { .. }) {
         return rsx! {
             Title { "{page_title}" }
-            link { rel: "stylesheet", href: "https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" }
-            link { rel: "stylesheet", href: "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" }
+            link { rel: "stylesheet", href: BOOTSTRAP }
+            link { rel: "stylesheet", href: "{ICONS}/css/all.min.css" }
             Outlet::<Route> {}
+        };
+    }
+    // Keep the side competition keypad's full-height, purpose-built mobile layout.
+    if matches!(route, Route::SideCompEnterResults { .. }) {
+        return rsx! {
+            Title { "{page_title}" }
+            link { rel: "stylesheet", href: BOOTSTRAP }
+            link { rel: "stylesheet", href: "{ICONS}/css/all.min.css" }
+            style { {include_str!("../theme.css")} }
+            div {
+                class: "arctos-app arctos-scoring-surface",
+                "data-palette": palette, "data-bs-theme": color_scheme,
+                Outlet::<Route> {}
+            }
         };
     }
 
     rsx! {
         Title { "{page_title}" }
-        link { rel: "stylesheet", href: "https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" }
-        link { rel: "stylesheet", href: "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" }
-        style { r#"
-            .navbar-brand {{ font-weight: bold; }}
-            .tournament-card {{ margin-bottom: 1rem; }}
-            .status-badge {{ font-size: 0.8em; }}
-            .container-wide {{ max-width: 1600px; margin-left: auto; margin-right: auto; padding-left: 15px; padding-right: 15px; width: 100%; }}
-            .error {{ color: var(--bs-danger); }}
-            .muted {{ color: var(--bs-secondary); }}
-            .layout-nav .nav-link {{ color: rgba(255,255,255,.85) !important; }}
-            .layout-nav .nav-link:hover {{ color: #fff !important; }}
-            .dropdown-menu {{ position: absolute; z-index: 1050; }}
-            .markdown-content {{ line-height: 1.6; }}
-            .markdown-content h1, .markdown-content h2, .markdown-content h3, .markdown-content h4, .markdown-content h5, .markdown-content h6 {{ margin-top: 1em; margin-bottom: 0.5em; font-weight: 600; }}
-            .markdown-content h1 {{ font-size: 1.5em; }} .markdown-content h2 {{ font-size: 1.3em; }} .markdown-content h3 {{ font-size: 1.15em; }}
-            .markdown-content p {{ margin-bottom: 0.75em; }}
-            .markdown-content ul, .markdown-content ol {{ margin-bottom: 0.75em; padding-left: 1.5em; }}
-            .markdown-content li {{ margin-bottom: 0.25em; }}
-            .markdown-content blockquote {{ border-left: 4px solid var(--bs-secondary, #6c757d); padding-left: 1em; margin: 0.75em 0; color: var(--bs-secondary); }}
-            .markdown-content code {{ padding: 0.2em 0.4em; font-size: 0.9em; background: rgba(0,0,0,0.06); border-radius: 4px; }}
-            .markdown-content pre {{ padding: 0.75em; overflow-x: auto; background: rgba(0,0,0,0.06); border-radius: 4px; margin-bottom: 0.75em; }}
-            .markdown-content pre code {{ padding: 0; background: none; }}
-            .markdown-content table {{ border-collapse: collapse; margin-bottom: 0.75em; width: 100%; }}
-            .markdown-content th, .markdown-content td {{ border: 1px solid var(--bs-border-color, #dee2e6); padding: 0.4em 0.6em; text-align: left; }}
-            .markdown-content th {{ font-weight: 600; background: rgba(0,0,0,0.04); }}
-            .markdown-content a {{ color: var(--bs-link-color, #0d6efd); text-decoration: none; }}
-            .markdown-content a:hover {{ text-decoration: underline; }}
-            .markdown-content img {{ max-width: 100%; height: auto; }}
-            .markdown-content hr {{ margin: 1em 0; border: 0; border-top: 1px solid var(--bs-border-color, #dee2e6); }}
-            .markdown-content .admonition {{ margin: 1em 0; padding: 0; border-radius: 6px; border: 1px solid; overflow: hidden; }}
-            .markdown-content .admonition .admonition-title {{ margin: 0; padding: 0.5em 0.75em; font-weight: 600; }}
-            .markdown-content .admonition p:not(.admonition-title) {{ padding: 0.5em 0.75em; margin-bottom: 0.5em; }}
-            .markdown-content .admonition p:not(.admonition-title):last-child {{ margin-bottom: 0; }}
-            .markdown-content .admonition.note {{ border-color: #0d6efd; background: rgba(13, 110, 253, 0.08); }}
-            .markdown-content .admonition.note .admonition-title {{ background: rgba(13, 110, 253, 0.2); color: #0a58ca; }}
-            .markdown-content .admonition.warning {{ border-color: #ffc107; background: rgba(255, 193, 7, 0.12); }}
-            .markdown-content .admonition.warning .admonition-title {{ background: rgba(255, 193, 7, 0.25); color: #856404; }}
-            .markdown-content .admonition.attention {{ border-color: #ffc107; background: rgba(255, 193, 7, 0.12); }}
-            .markdown-content .admonition.attention .admonition-title {{ background: rgba(255, 193, 7, 0.25); color: #856404; }}
-            .markdown-content .admonition.caution {{ border-color: #fd7e14; background: rgba(253, 126, 20, 0.1); }}
-            .markdown-content .admonition.caution .admonition-title {{ background: rgba(253, 126, 20, 0.2); color: #b35a0e; }}
-            .markdown-content .admonition.danger {{ border-color: #dc3545; background: rgba(220, 53, 69, 0.08); }}
-            .markdown-content .admonition.danger .admonition-title {{ background: rgba(220, 53, 69, 0.2); color: #b02a37; }}
-            .markdown-content .admonition.important {{ border-color: #fd7e14; background: rgba(253, 126, 20, 0.1); }}
-            .markdown-content .admonition.important .admonition-title {{ background: rgba(253, 126, 20, 0.2); color: #b35a0e; }}
-            .markdown-content .admonition.tip {{ border-color: #198754; background: rgba(25, 135, 84, 0.08); }}
-            .markdown-content .admonition.tip .admonition-title {{ background: rgba(25, 135, 84, 0.2); color: #146c43; }}
-            .markdown-content .admonition.hint {{ border-color: #198754; background: rgba(25, 135, 84, 0.08); }}
-            .markdown-content .admonition.hint .admonition-title {{ background: rgba(25, 135, 84, 0.2); color: #146c43; }}
-        "# }
-
-        nav { class: "navbar navbar-expand-lg navbar-dark bg-dark",
-            div { class: "container",
-                Link { to: Route::Index {}, class: "navbar-brand", "Home" }
-                button {
-                    class: "navbar-toggler",
-                    r#type: "button",
-                    "aria-expanded": "{nav_expanded()}",
-                    "aria-label": "Toggle navigation",
-                    onclick: move |_| nav_expanded.toggle(),
-                    span { class: "navbar-toggler-icon" }
+        link { rel: "stylesheet", href: BOOTSTRAP }
+        link { rel: "stylesheet", href: "{ICONS}/css/all.min.css" }
+        style { {include_str!("../theme.css")} }
+        style { {include_str!("public_pages.css")} }
+        style { {include_str!("operator.css")} }
+        style { {include_str!("edit_forms.css")} }
+        div {
+            class: "arctos-app",
+            "data-palette": palette, "data-bs-theme": color_scheme,
+            onkeydown: move |event| {
+                if event.key() == Key::Escape && (account_open() || utility_open() || appearance_open()) {
+                    event.prevent_default();
+                    let trigger = if account_open() { "account-trigger" } else { "utility-trigger" };
+                    appearance_open.set(false);
+                    utility_open.set(false);
+                    account_open.set(false);
+                    focus_control(trigger);
                 }
-                div {
-                    class: if nav_expanded() { "collapse navbar-collapse show" } else { "collapse navbar-collapse" },
-                    id: "navbarNav",
-                    ul { class: "navbar-nav me-auto",
-                        li { class: "nav-item",
-                            Link { to: Route::TeamsList {}, class: "nav-link", "Teams" }
-                        }
-                        li { class: "nav-item",
-                            Link { to: Route::PlayersList {}, class: "nav-link", "Players" }
-                        }
-                        li { class: "nav-item",
-                            Link { to: Route::Stones {}, class: "nav-link", "Stones" }
-                        }
-                        li { class: "nav-item",
-                            Link { to: Route::LeaguesIndex {}, class: "nav-link", "Leagues" }
-                        }
-                        if let Some(Ok(_u)) = user.read().as_ref() {
-                            li { class: "nav-item",
-                                Link { to: Route::CreateEvent {}, class: "nav-link", "Create event" }
+            },
+            a { class: "skip-link", href: "#page-content", "Skip to content" }
+            header { class: "app-header",
+                div { class: "app-header-inner",
+                    Link { to: Route::Index {}, class: "app-brand", aria_label: "Arctos events",
+                        span { class: "brand-mark", aria_hidden: "true", i { class: "fa-solid fa-trophy" } }
+                        span { "Arctos" }
+                    }
+                    nav { class: "app-nav", aria_label: "Main navigation",
+                        for (to, label, icon, active) in [
+                            (Route::Index {}, "Events", "fa-calendar-days", path == "/"),
+                            (Route::LeaguesIndex {}, "Leagues", "fa-trophy", path.starts_with("/leagues")),
+                            (Route::TeamsList {}, "Teams", "fa-users", path.starts_with("/teams")),
+                            (Route::PlayersList {}, "Players", "fa-user-group", path.starts_with("/players")),
+                            (Route::Stones {}, "Stones", "fa-stopwatch", path == "/stones"),
+                        ] {
+                            Link {
+                                to,
+                                class: if active { "app-nav-link active" } else { "app-nav-link" },
+                                aria_current: if active { "page" } else { "false" },
+                                i { class: "fa-solid {icon}", aria_hidden: "true" }
+                                span { "{label}" }
                             }
                         }
-                        li { class: "nav-item",
-                            Link { to: Route::About {}, class: "nav-link", "About" }
-                        }
                     }
-                    ul { class: "navbar-nav",
-                        if let Some(Ok(u)) = user.read().as_ref() {
-                            li { class: "nav-item dropdown",
+                    div { class: "app-header-actions",
+                        if let Some(u) = current_user.as_ref() {
+                            div { class: "account-menu",
                                 button {
-                                    class: "nav-link dropdown-toggle btn btn-link",
-                                    style: "color: rgba(255,255,255,.85); text-decoration: none;",
-                                    onclick: move |_| user_dropdown_open.toggle(),
-                                    "{u.name}"
+                                    class: "app-icon-button account-trigger",
+                                    id: "account-trigger", r#type: "button",
+                                    aria_label: "{account_label}", aria_expanded: "{account_open()}",
+                                    aria_controls: "account-options",
+                                    onclick: move |_| {
+                                        utility_open.set(false);
+                                        appearance_open.set(false);
+                                        let was_open = account_open();
+                                        account_open.set(!was_open);
+                                    },
+                                    i { class: "fa-regular fa-user", aria_hidden: "true" }
                                 }
-                                if user_dropdown_open() {
-                                    ul { class: "dropdown-menu dropdown-menu-end show",
-                                        li {
-                                            if u.user_type == "player" {
-                                                Link {
-                                                    to: Route::PlayerProfilePage { id: u.id.clone() },
-                                                    class: "dropdown-item",
-                                                    "Profile"
-                                                }
-                                            } else {
-                                                Link {
-                                                    to: Route::TeamProfilePage { id: u.id.clone() },
-                                                    class: "dropdown-item",
-                                                    "Profile"
-                                                }
-                                            }
+                                if account_open() {
+                                    button {
+                                        class: "account-dismiss", r#type: "button", tabindex: "-1",
+                                        aria_label: "Dismiss account menu",
+                                        onclick: move |_| {
+                                            account_open.set(false);
+                                            focus_control("account-trigger");
                                         }
-                                        li { hr { class: "dropdown-divider" } }
-                                        li {
-                                            button {
-                                                class: "dropdown-item",
-                                                onclick: move |_| {
-                                                    let nav = navigator.clone();
-                                                    let mut auth_version = auth_version;
-                                                    spawn(async move {
-                                                        let _ = api::logout().await;
-                                                        auth_version.set(auth_version() + 1);
-                                                        nav.push("/");
-                                                    });
-                                                },
-                                                "Logout"
-                                            }
+                                    }
+                                    div {
+                                        class: "account-dropdown profile-dropdown", id: "account-options", tabindex: "-1",
+                                        onmounted: move |_| focus_control("account-profile-link"),
+                                        div { class: "account-identity",
+                                            strong { "{u.name}" }
+                                            span { class: "text-muted", "{u.user_type} account · @{u.id}" }
+                                        }
+                                        if u.user_type == "player" {
+                                            Link { to: Route::PlayerProfilePage { id: u.id.clone() }, id: "account-profile-link", class: "dropdown-item", "My profile" }
+                                        } else {
+                                            Link { to: Route::TeamProfilePage { id: u.id.clone() }, id: "account-profile-link", class: "dropdown-item", "Team profile" }
+                                        }
+                                        Link { to: Route::DeveloperApps {}, class: "dropdown-item", "Developer apps" }
+                                        button {
+                                            r#type: "button", class: "dropdown-item", disabled: logging_out(),
+                                            onclick: move |_| {
+                                                if logging_out() { return; }
+                                                logging_out.set(true);
+                                                auth_error.set(None);
+                                                let nav = navigator;
+                                                let mut auth_version = auth_version;
+                                                spawn(async move {
+                                                    match api::logout().await {
+                                                        Ok(_) => {
+                                                            auth_version += 1;
+                                                            account_open.set(false);
+                                                            nav.push(Route::Index {});
+                                                        }
+                                                        Err(e) => auth_error.set(Some(e)),
+                                                    }
+                                                    logging_out.set(false);
+                                                });
+                                            },
+                                            if logging_out() { "Logging out…" } else { "Log out" }
                                         }
                                     }
                                 }
                             }
                         } else {
-                            li { class: "nav-item",
-                                Link { to: Route::Login {}, class: "nav-link", "Login" }
+                            Link { to: Route::Login {}, class: "btn btn-outline-secondary app-login", "Log in" }
+                        }
+                        div { class: "account-menu utility-menu",
+                            button {
+                                class: "app-icon-button account-trigger utility-trigger",
+                                id: "utility-trigger", r#type: "button", aria_label: "More options",
+                                aria_expanded: "{utility_open() || appearance_open()}",
+                                aria_controls: if appearance_open() { "appearance-options" } else { "utility-options" },
+                                onclick: move |_| {
+                                    let was_open = utility_open() || appearance_open();
+                                    account_open.set(false);
+                                    appearance_open.set(false);
+                                    utility_open.set(!was_open);
+                                },
+                                i { class: "fa-solid fa-ellipsis", aria_hidden: "true" }
                             }
-                            li { class: "nav-item dropdown",
+                            if utility_open() || appearance_open() {
                                 button {
-                                    class: "nav-link dropdown-toggle btn btn-link",
-                                    style: "color: rgba(255,255,255,.85); text-decoration: none;",
-                                    onclick: move |_| register_dropdown_open.toggle(),
-                                    "Register"
-                                }
-                                if register_dropdown_open() {
-                                    ul { class: "dropdown-menu dropdown-menu-end show",
-                                        li {
-                                            Link { to: Route::RegisterPlayer {}, class: "dropdown-item", "Register as Player" }
-                                        }
-                                        li {
-                                            Link { to: Route::RegisterTeam {}, class: "dropdown-item", "Register as Team" }
-                                        }
+                                    class: "account-dismiss utility-dismiss", r#type: "button", tabindex: "-1",
+                                    aria_label: "Dismiss More options",
+                                    onclick: move |_| {
+                                        utility_open.set(false);
+                                        appearance_open.set(false);
+                                        focus_control("utility-trigger");
                                     }
                                 }
                             }
+                            if utility_open() {
+                                div {
+                                    class: "account-dropdown utility-dropdown", id: "utility-options", tabindex: "-1",
+                                    button {
+                                        id: "appearance-menu-item", r#type: "button", class: "dropdown-item",
+                                        aria_haspopup: "dialog", aria_controls: "appearance-options",
+                                        onclick: move |_| { utility_open.set(false); appearance_open.set(true); },
+                                        "Appearance"
+                                    }
+                                    Link { to: Route::Docs {}, class: "dropdown-item", "Help & documentation" }
+                                    Link { to: Route::About {}, class: "dropdown-item", "About Arctos" }
+                                }
+                            }
+                            AppearanceMenu { open: appearance_open, utility_open, appearance }
                         }
                     }
                 }
             }
-        }
-
-        main { class: "container-wide mt-4",
-            SuspenseBoundary {
-                fallback: |_| rsx! { div { class: "text-center py-5 text-muted", "Loading…" } },
-                Outlet::<Route> {}
+            main { class: if event_page { "app-main event-full-width" } else { "container-wide app-main" }, id: "page-content", tabindex: "-1",
+                if let Some(error) = auth_error() {
+                    div { class: "alert alert-danger", role: "alert", "Could not log out. {error}" }
+                }
+                SuspenseBoundary {
+                    fallback: |_| rsx! { div { class: "loading-state", role: "status", "Loading…" } },
+                    if let Some((league, url, tab, section_title)) = event_shell {
+                        if league {
+                            super::league_home::LeagueHomeContent {
+                                key: "league-{url}", league_url: url, initial_tab: Some(tab), section_title,
+                                content: Some(rsx! { div { class: "event-tool-content", Outlet::<Route> {} } }),
+                            }
+                        } else {
+                            super::tournament_home::TournamentHomeContent {
+                                key: "event-{url}", url, initial_tab: Some(tab), section_title,
+                                content: Some(rsx! { div { class: "event-tool-content", Outlet::<Route> {} } }),
+                            }
+                        }
+                    } else {
+                        Outlet::<Route> {}
+                    }
+                }
             }
-        }
-
-        footer { class: "container-wide mt-4",
-            div { id: "footer", class: "text-center py-4 text-muted",
-                p {
-                    "Arctos is "
-                    a { href: "https://github.com/reid23/arctos", "open source" }
-                    ". Help improve it!"
+            footer { class: "app-footer",
+                div { class: "container-wide",
+                    div { class: "footer-top",
+                        nav { class: "footer-links", aria_label: "Help and information",
+                            Link { to: Route::About {}, "About" }
+                            Link { to: Route::Docs {}, "Documentation" }
+                            Link { to: Route::Developers {}, "Developers" }
+                            Link { to: Route::Thanks {}, "Thanks" }
+                            Link { to: Route::Privacy {}, "Privacy" }
+                            Link { to: Route::Terms {}, "Terms" }
+                            Link { to: Route::License {}, "License" }
+                        }
+                    }
+                    div { class: "footer-bottom",
+                        p { a { href: "https://github.com/reid23/arctos", "Source code" } }
+                        p { "An independent project, not affiliated with CAJA or the US NJA." }
+                    }
                 }
-                p {
-                    Link { to: Route::About {}, "About" }
-                    " - "
-                    Link { to: Route::Thanks {}, "Thanks" }
-                    " - "
-                    Link { to: Route::Docs {}, "User Docs" }
-                    " - "
-                    Link { to: Route::Developers {}, "Developers" }
-                    " - "
-                    Link { to: Route::Privacy {}, "Privacy" }
-                    " - "
-                    Link { to: Route::License {}, "License" }
-                    " - "
-                    Link { to: Route::Terms {}, "Terms" }
-                }
-                p { style: "font-size: 0.8em;", "Arctos is an independent project and does not belong to nor represent CAJA or the US NJA in any way." }
             }
         }
     }

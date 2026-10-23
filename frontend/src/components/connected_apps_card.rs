@@ -14,11 +14,11 @@ pub fn ConnectedAppsCard() -> Element {
     let mut error = use_signal(|| None::<String>);
 
     rsx! {
-        div { class: "card mt-3",
-            div { class: "card-header",
+        div { class: "edit-section data-section mt-3",
+            div { class: "edit-section-heading",
                 h5 { class: "mb-0", "Connected apps" }
             }
-            div { class: "card-body",
+            div { class: "edit-section-body",
                 p { class: "text-muted small", "Apps you've signed in to with Arctos. Only you can see this list." }
                 if let Some(message) = error() {
                     div { class: "alert alert-danger py-2", "{message}" }
@@ -28,9 +28,9 @@ pub fn ConnectedAppsCard() -> Element {
                     Some(Err(message)) => rsx! { p { class: "text-danger mb-0", "{message}" } },
                     Some(Ok(apps)) if apps.is_empty() => rsx! { p { class: "mb-0", "No connected apps." } },
                     Some(Ok(apps)) => rsx! {
-                        ul { class: "list-group",
+                        ul { class: "list-group list-group-flush",
                             for app in apps.iter().cloned() {
-                                li { key: "{app.client_id}", class: "list-group-item d-flex justify-content-between align-items-start gap-2",
+                                li { key: "{app.client_id}", class: "list-group-item data-list-row d-flex justify-content-between align-items-start gap-2",
                                     div {
                                         strong {
                                             if let Some(homepage) = app.homepage_url.as_ref() {

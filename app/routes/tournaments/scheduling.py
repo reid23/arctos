@@ -42,6 +42,7 @@ from app.services.schedule_import_export_service import ScheduleImportExportServ
 from app.utils.dependencies import apply_match_dependencies
 from app.utils.helpers import (
     can_head_ref_match,
+    check_tournament_access,
     resolve_team_name_to_id,
     resolve_tag_to_team,
 )
@@ -975,6 +976,8 @@ def start_match_data_api(tournament_url):
     return jsonify(
         {
             "tournament": tournament_to_dict(tournament),
+            "can_view_schedule": check_tournament_access(tournament_url)[0]
+            and PermissionService.can_view_schedule(tournament, current_user),
             "match_info": {
                 "uuid": match.uuid,
                 "name": match.name,
@@ -1088,6 +1091,8 @@ def finalize_match_data_api(tournament_url):
     return jsonify(
         {
             "tournament": tournament_to_dict(tournament),
+            "can_view_schedule": check_tournament_access(tournament_url)[0]
+            and PermissionService.can_view_schedule(tournament, current_user),
             "match_info": {
                 "uuid": match.uuid,
                 "name": match.name,

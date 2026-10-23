@@ -1,174 +1,99 @@
 use crate::api;
+use crate::components::PageIntro;
 use crate::Route;
 use dioxus::prelude::*;
 
 #[component]
 pub fn PlayersList() -> Element {
-    let mut search = use_signal(|| String::new());
+    let mut search = use_signal(String::new);
     let mut page = use_signal(|| 1u32);
-    let mut submitted_search = use_signal(|| String::new());
-    let data = use_resource(move || {
-        let s = submitted_search().clone();
-        let p = page();
-        async move { api::players_list(&s, p).await.map_err(|e| e.to_string()) }
+    let mut submitted_search = use_signal(String::new);
+    let mut data = use_resource(move || {
+        let query = submitted_search();
+        let current_page = page();
+        async move {
+            api::players_list(&query, current_page)
+                .await
+                .map_err(|e| e.to_string())
+        }
     });
     let val = data.value();
     let backend = api::base_url();
     rsx! {
-        style { r#"
-        .player-card-link {{
-            cursor: pointer;
-            transition: transform 0.2s, box-shadow 0.2s;
-        }}
-        .player-card-link:hover {{
-            transform: translateY(-2px);
-            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-        }}
-        "# }
-        div { class: "row",
-            div { class: "col-12",
-                h1 { "Players" }
-                p { class: "lead", "Browse all registered players" }
-                div { class: "row mb-3",
-                    div { class: "col-md-6",
-                        form {
-                            class: "d-flex",
-                            onsubmit: move |ev| {
-                                ev.prevent_default();
-                                submitted_search.set(search().clone());
-                                page.set(1);
-                            },
-                            input {
-                                r#type: "text",
-                                class: "form-control me-2",
-                                placeholder: "Search players...",
-                                value: "{search()}",
-                                oninput: move |ev| search.set(ev.value().clone()),
-                            }
-                            button { class: "btn btn-outline-primary", r#type: "submit", "Search" }
-                        }
-                    }
-                    if let Some(Ok(d)) = val.read().as_ref() {
-                        if d.total > 0 {
-                            div { class: "col-md-6 text-end",
-                                p { class: "text-muted mb-0",
-                                    "Showing {((d.page - 1) * 50) + 1} - {std::cmp::min(d.page * 50, d.total)} of {d.total} players"
-                                }
-                            }
-                        }
-                    }
-                }
+        PageIntro { page_key: "players", title: "Players", focus_target: "page-content",
+            "Find players, learn about them, and see their tournament history."
+        }
+        form {
+            class: "arctos-directory-search", role: "search",
+            onsubmit: move |event| { event.prevent_default(); submitted_search.set(search().trim().to_string()); page.set(1); },
+            label { class: "visually-hidden", r#for: "player-search", "Search players" }
+            input { id: "player-search", r#type: "search", class: "form-control", placeholder: "Search players…", value: "{search()}", oninput: move |event| search.set(event.value()) }
+            button { class: "btn btn-primary", r#type: "submit", "Search" }
+            if !submitted_search().is_empty() {
+                button { class: "btn btn-outline-secondary", r#type: "button", onclick: move |_| { search.set(String::new()); submitted_search.set(String::new()); page.set(1); }, "Clear" }
             }
         }
         if let Some(Ok(d)) = val.read().as_ref() {
-            div { class: "row",
-                if d.players.is_empty() {
-                    div { class: "col-12", p { "No players found." } }
-                } else {
-                    for p in d.players.iter() {
-                        div { key: "{p.id}", class: "col-md-6 col-lg-4 mb-4",
-                            Link { to: Route::PlayerProfilePage { id: p.id.clone() }, class: "text-decoration-none text-reset",
-                                div { class: "card h-100 player-card-link",
-                                    div { class: "card-body",
-                                        div { class: "d-flex",
-                                            div { class: "flex-shrink-0 me-3",
-                                                if let Some(photo) = &p.profile_photo {
-                                                    img { src: "{backend}/static/{photo}", alt: "{p.name}", class: "rounded-circle", style: "width: 80px; height: 80px; object-fit: cover;" }
-                                                } else {
-                                                    div { class: "d-flex align-items-center justify-content-center bg-secondary rounded-circle", style: "width: 80px; height: 80px;",
-                                                        i { class: "fas fa-user fa-2x text-white" }
-                                                    }
-                                                }
-                                            }
-                                            div { class: "flex-grow-1",
-                                                h5 { class: "card-title mb-2", "{p.name}" }
-                                                p { class: "card-text mb-0",
-                                                    i { class: "fas fa-user" }
-                                                    " @{p.id}"
-                                                    if let Some(loc) = &p.location {
-                                                        br {}
-                                                        i { class: "fas fa-map-marker-alt" }
-                                                        " {loc}"
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
+            if d.players.is_empty() {
+                div { class: "arctos-empty-state", role: "status",
+                    i { class: "fas fa-user", aria_hidden: "true" }
+                    h2 { "No players found" }
+                    p { if submitted_search().is_empty() { "Player profiles will appear here when players join Arctos." } else { "Try a different name, or clear your search to browse all players." } }
+                }
+            } else {
+                p { class: "arctos-results-count", role: "status", "Showing {((d.page.saturating_sub(1)) * 50) + 1}–{std::cmp::min(d.page * 50, d.total)} of {d.total} players" }
+                div { class: "arctos-card-grid",
+                    for player in d.players.iter() {
+                        Link { key: "{player.id}", to: Route::PlayerProfilePage { id: player.id.clone() }, class: "card arctos-directory-card",
+                            div { class: "arctos-directory-identity",
+                                if let Some(photo) = &player.profile_photo {
+                                    img { src: "{backend}/static/{photo}", alt: "", loading: "lazy", class: "arctos-directory-avatar arctos-player-avatar" }
+                                } else {
+                                    div { class: "arctos-directory-avatar arctos-player-avatar arctos-avatar-placeholder", aria_hidden: "true", i { class: "fas fa-user" } }
                                 }
+                                div { class: "arctos-directory-name",
+                                    h2 { "{player.name}" }
+                                    p { "@{player.id}" }
+                                }
+                            }
+                            if let Some(location) = player.location.as_ref().filter(|location| !location.trim().is_empty()) {
+                                p { class: "arctos-directory-location", i { class: "fas fa-map-marker-alt", aria_hidden: "true" } "{location}" }
+                            }
+                            div { class: "arctos-directory-footer",
+                                span { class: "arctos-directory-event-count", title: "Confirmed past registrations",
+                                    strong { "{player.past_event_count}" }
+                                    span { "Past events" }
+                                }
+                                span { class: "arctos-directory-action", "View player" i { class: "fas fa-arrow-right", aria_hidden: "true" } }
                             }
                         }
                     }
                 }
             }
             if d.total_pages > 1 {
-                nav { aria_label: "Players pagination",
-                    ul { class: "pagination justify-content-center",
-                        if d.page > 1 {
-                            li { class: "page-item",
-                                a {
-                                    class: "page-link",
-                                    href: "#",
-                                    onclick: move |ev| {
-                                        ev.prevent_default();
-                                        page.set(page().saturating_sub(1));
-                                    },
-                                    "Previous"
-                                }
-                            }
-                        } else {
-                            li { class: "page-item disabled", span { class: "page-link", "Previous" } }
-                        }
-
-                        for pnum in 1..=d.total_pages {
-                            {
-                                let show = pnum == 1
-                                    || pnum == d.total_pages
-                                    || (pnum + 2 >= d.page && pnum <= d.page + 2);
-                                let is_ellipsis = pnum + 3 == d.page || pnum == d.page + 3;
-                                rsx! {
-                                    if pnum == d.page {
-                                        li { class: "page-item active", span { class: "page-link", "{pnum}" } }
-                                    } else if show {
-                                        li { class: "page-item",
-                                            a {
-                                                class: "page-link",
-                                                href: "#",
-                                                onclick: move |ev| {
-                                                    ev.prevent_default();
-                                                    page.set(pnum);
-                                                },
-                                                "{pnum}"
-                                            }
-                                        }
-                                    } else if is_ellipsis {
-                                        li { class: "page-item disabled", span { class: "page-link", "..." } }
-                                    }
-                                }
-                            }
-                        }
-
-                        if d.page < d.total_pages {
-                            li { class: "page-item",
-                                a {
-                                    class: "page-link",
-                                    href: "#",
-                                    onclick: move |ev| {
-                                        ev.prevent_default();
-                                        page.set(page() + 1);
-                                    },
-                                    "Next"
-                                }
-                            }
-                        } else {
-                            li { class: "page-item disabled", span { class: "page-link", "Next" } }
+                nav { class: "arctos-pagination", aria_label: "Players pagination",
+                    button { class: "btn btn-outline-secondary", r#type: "button", disabled: d.page <= 1,
+                        onclick: move |_| page.set(page().saturating_sub(1).max(1)), "Previous" }
+                    span { class: "arctos-page-position", aria_live: "polite", "Page {d.page} of {d.total_pages}" }
+                    button { class: "btn btn-outline-secondary", r#type: "button", disabled: d.page >= d.total_pages,
+                        onclick: move |_| page.set(page() + 1), "Next" }
+                    label { class: "arctos-page-jump",
+                        "Go to page"
+                        select { class: "form-select", value: "{d.page}",
+                            onchange: move |event| { if let Ok(number) = event.value().parse::<u32>() { page.set(number); } },
+                            for number in 1..=d.total_pages { option { value: "{number}", "{number}" } }
                         }
                     }
                 }
             }
-        } else if let Some(Err(e)) = val.read().as_ref() {
-            p { class: "text-danger", "{e}" }
+        } else if let Some(Err(error)) = val.read().as_ref() {
+            div { class: "arctos-empty-state", role: "alert",
+                h2 { "Players could not be loaded" }
+                p { "{error}" }
+                button { class: "btn btn-primary", r#type: "button", onclick: move |_| data.restart(), "Try again" }
+            }
         } else {
-            p { "Loading…" }
+            div { class: "arctos-empty-state", role: "status", "Loading players…" }
         }
     }
 }

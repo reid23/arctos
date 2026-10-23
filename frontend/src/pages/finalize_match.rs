@@ -1,12 +1,12 @@
 use crate::api;
 use crate::Route;
 use dioxus::prelude::*;
+#[cfg(target_arch = "wasm32")]
+use js_sys;
 use std::cell::RefCell;
 use std::rc::Rc;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast as _;
-#[cfg(target_arch = "wasm32")]
-use js_sys;
 
 #[component]
 pub fn FinalizeMatch(url: String, match_id: String) -> Element {
@@ -16,13 +16,16 @@ pub fn FinalizeMatch(url: String, match_id: String) -> Element {
         let u = url_for_data.clone();
         let id = match_id_for_data.clone();
         async move {
-            api::finalize_match_data(&u, &id).await.map_err(|e| e.to_string())
+            api::finalize_match_data(&u, &id)
+                .await
+                .map_err(|e| e.to_string())
         }
     });
     let val = data.value();
     let mut match_winner = use_signal(|| None::<String>);
     let mut final_notes = use_signal(String::new);
     let mut submit_error = use_signal(|| None::<String>);
+    let mut submitting = use_signal(|| false);
     let team1_canvas_id = "team1_signature_canvas";
     let team2_canvas_id = "team2_signature_canvas";
     let navigator = use_navigator();
@@ -45,7 +48,8 @@ pub fn FinalizeMatch(url: String, match_id: String) -> Element {
         Some(Ok(d)) => rsx! {
             div { class: "row",
                 div { class: "col-12",
-                    h1 { "Finalize Match" }
+                    h1 { "Finalize match" }
+                    p { class: "text-muted", "Review the score, select the winner, and collect both captains’ signatures." }
                     nav { aria_label: "breadcrumb",
                         ol { class: "breadcrumb",
                             li { class: "breadcrumb-item",
@@ -57,14 +61,20 @@ pub fn FinalizeMatch(url: String, match_id: String) -> Element {
                                 }
                             }
                             li { class: "breadcrumb-item",
-                                Link {
-                                    to: Route::Schedule {
-                                        url: schedule_url.clone(),
-                                        view: String::new(),
-                                        team: String::new(),
-                                        field: String::new(),
-                                    },
-                                    "Schedule"
+                                if d.can_view_schedule {
+                                    Link {
+                                        to: Route::Schedule {
+                                            url: schedule_url.clone(),
+                                            view: String::new(),
+                                            team: String::new(),
+                                            field: String::new(),
+                                        },
+                                        if d.tournament.schedule_published { "Schedule" } else { "Preview schedule" }
+                                    }
+                                } else {
+                                    span { class: "text-muted",
+                                        if d.tournament.schedule_published { "Schedule unavailable" } else { "Schedule not posted" }
+                                    }
                                 }
                             }
                             li { class: "breadcrumb-item active", "Finalize Match" }
@@ -74,7 +84,7 @@ pub fn FinalizeMatch(url: String, match_id: String) -> Element {
             }
 
             div { class: "row",
-                div { class: "col-md-8",
+                div { class: "col-lg-9 operator-finalize",
                     div { class: "card",
                         div { class: "card-header",
                             h5 { class: "mb-0", "Points Summary" }
@@ -84,10 +94,10 @@ pub fn FinalizeMatch(url: String, match_id: String) -> Element {
                                 table { class: "table table-sm",
                                     thead {
                                         tr {
-                                            th { "Set" }
-                                            th { "Point" }
+                                            th { class: "table-number", "Set" }
+                                            th { class: "table-number", "Point" }
                                             th { "Winner" }
-                                            th { "🪨" }
+                                            th { class: "table-number", "🪨" }
                                             th { "Rerun?" }
                                             th { "Notes" }
                                         }
@@ -99,8 +109,8 @@ pub fn FinalizeMatch(url: String, match_id: String) -> Element {
                                                 let notes = d.point_notes_map.get(&point.uuid).cloned().unwrap_or_default();
                                                 rsx! {
                                                     tr { key: "{point.uuid}",
-                                                        td { "{point.set_number.unwrap_or(1)}" }
-                                                        td { "{idx + 1}" }
+                                                        td { class: "table-number", "{point.set_number.unwrap_or(1)}" }
+                                                        td { class: "table-number", "{idx + 1}" }
                                                         td {
                                                             if point.winner.as_deref() == Some("TEAM1") {
                                                                 "{d.match_info.team1_name}"
@@ -110,7 +120,7 @@ pub fn FinalizeMatch(url: String, match_id: String) -> Element {
                                                                 "None"
                                                             }
                                                         }
-                                                        td { "{stones}" }
+                                                        td { class: "table-number", "{stones}" }
                                                         td {
                                                             if point.rerolled {
                                                                 span { class: "badge bg-warning", "Rerun" }
@@ -205,14 +215,15 @@ pub fn FinalizeMatch(url: String, match_id: String) -> Element {
                         }
                     }
 
-                    div { class: "card mt-4",
-                        div { class: "card-header",
+                    div { class: "edit-section mt-4",
+                        div { class: "edit-section-heading",
                             h5 { class: "mb-0", "Match Results" }
                         }
-                        div { class: "card-body",
+                        div { class: "edit-section-body",
                             form {
                                 onsubmit: move |ev| {
                                     ev.prevent_default();
+                                    if submitting() { return; }
                                     submit_error.set(None);
                                     let winner = match_winner().clone();
                                     if winner.is_none() {
@@ -235,6 +246,7 @@ pub fn FinalizeMatch(url: String, match_id: String) -> Element {
                                     let team1_sig = canvas_data_url(team1_canvas_id);
                                     let team2_sig = canvas_data_url(team2_canvas_id);
                                     let nav = navigator.clone();
+                                    submitting.set(true);
                                     spawn(async move {
                                         let req = crate::types::FinalizeMatchRequest {
                                             match_id,
@@ -243,9 +255,12 @@ pub fn FinalizeMatch(url: String, match_id: String) -> Element {
                                             team1_signature: team1_sig,
                                             team2_signature: team2_sig,
                                         };
-                                        if api::finalize_match(&u, &req).await.is_ok() {
-                                            let _ = nav.push(format!("/{}/schedule", u));
+                                        match api::finalize_match(&u, &req).await {
+                                            Ok(response) if response.ok => { let _ = nav.push(format!("/{}/schedule", u)); }
+                                            Ok(_) => submit_error.set(Some("The match was not finalized. Review the details and try again.".to_string())),
+                                            Err(error) => submit_error.set(Some(format!("The match could not be finalized. {error}"))),
                                         }
+                                        submitting.set(false);
                                     });
                                 },
                                 div { class: "mb-4",
@@ -292,11 +307,12 @@ pub fn FinalizeMatch(url: String, match_id: String) -> Element {
                                     div { class: "col-md-6",
                                         h6 { "{d.match_info.team1_name} Captain Signature" }
                                         div {
-                                            class: "border p-3",
-                                            style: "height: 150px;",
+                                            class: "operator-signature-pad border p-3",
+                                            style: "height: 170px;",
                                             canvas {
                                                 id: "{team1_canvas_id}",
-                                                style: "width: 100%; height: 100%;",
+                                                style: "width: 100%; height: 100%; touch-action: none;",
+                                                aria_label: "Captain signature: draw with your finger or pointer",
                                             }
                                         }
                                         div { class: "mt-2",
@@ -311,11 +327,12 @@ pub fn FinalizeMatch(url: String, match_id: String) -> Element {
                                     div { class: "col-md-6",
                                         h6 { "{d.match_info.team2_name} Captain Signature" }
                                         div {
-                                            class: "border p-3",
-                                            style: "height: 150px;",
+                                            class: "operator-signature-pad border p-3",
+                                            style: "height: 170px;",
                                             canvas {
                                                 id: "{team2_canvas_id}",
-                                                style: "width: 100%; height: 100%;",
+                                                style: "width: 100%; height: 100%; touch-action: none;",
+                                                aria_label: "Captain signature: draw with your finger or pointer",
                                             }
                                         }
                                         div { class: "mt-2",
@@ -346,13 +363,14 @@ pub fn FinalizeMatch(url: String, match_id: String) -> Element {
                                 }
 
                                 if let Some(ref err) = submit_error() {
-                                    div { class: "alert alert-warning mb-3", "{err}" }
+                                    div { class: "alert alert-danger mb-3", role: "alert", "{err}" }
                                 }
                                 div { class: "d-grid",
                                     button {
                                         r#type: "submit",
                                         class: "btn btn-primary",
-                                        "Finalize Match"
+                                        disabled: submitting(),
+                                        if submitting() { "Finalizing match…" } else { "Confirm and finalize match" }
                                     }
                                 }
                             }
@@ -416,8 +434,10 @@ fn setup_signature_canvas_by_id(canvas_id: &str) {
         let _ = canvas_move.set_attribute("data-signed", "true");
         let rect = canvas_move.get_bounding_client_rect();
         ctx_move.begin_path();
-        ctx_move
-            .move_to(e.client_x() as f64 - rect.left(), e.client_y() as f64 - rect.top());
+        ctx_move.move_to(
+            e.client_x() as f64 - rect.left(),
+            e.client_y() as f64 - rect.top(),
+        );
     });
     canvas
         .add_event_listener_with_callback("mousedown", on_mousedown.as_ref().unchecked_ref())

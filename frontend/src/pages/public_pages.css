@@ -1,0 +1,166 @@
+/* Public discovery and event identity for Arctos. */
+.arctos-app .arctos-page-banner { position: relative; max-width: 760px; margin: 0 auto 1.5rem; padding: .5rem 0 1rem; text-align: center; }
+.arctos-app .arctos-page-banner h1 { margin: 0 0 .65rem; padding: 0 44px; font-size: clamp(1.65rem, 3.2vw, 2.25rem); letter-spacing: -.035em; }
+.arctos-app .arctos-intro-dismiss { position: absolute; top: 0; right: 0; display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; padding: 0; border: 0; border-radius: .5rem; background: transparent; color: var(--ui-muted); font-size: .875rem; cursor: pointer; }
+.arctos-app .arctos-intro-dismiss:hover { background: var(--ui-surface-hover); color: var(--ui-text); }
+.arctos-app .arctos-page-banner p { color: var(--ui-muted); max-width: 650px; margin: 0 auto .25rem; line-height: 1.6; }
+.arctos-app .arctos-page-banner[hidden] { display: none; }
+.arctos-app .arctos-brand-mark { width: 3.25rem; height: 3.25rem; display: inline-flex; align-items: center; justify-content: center; border-radius: .9rem; color: var(--ui-gradient-contrast); background: linear-gradient(135deg, var(--ui-gradient-start), var(--ui-gradient-end)); font-size: 1.35rem; flex-shrink: 0; }
+.arctos-app .arctos-card-footer .btn, .arctos-app .arctos-choice-card .btn { display: inline-flex; align-items: center; justify-content: center; gap: .65rem; min-height: 44px; }
+.arctos-app .arctos-discovery-toolbar { display: flex; flex-wrap: wrap; gap: 1rem; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
+.arctos-app .arctos-discovery-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; min-width: 0; }
+.arctos-app .organize-menu { position: relative; flex: 0 0 auto; margin-left: auto; }
+.arctos-app .organize-menu.is-open { z-index: 1040; }
+.arctos-app .organize-trigger { position: relative; z-index: 3; display: inline-flex; align-items: center; justify-content: center; gap: .4rem; min-height: 44px; padding: .6rem .5rem; border: 1px solid transparent; border-radius: .6rem; background: transparent; color: var(--ui-muted); font-size: .875rem; font-weight: 500; white-space: nowrap; }
+.arctos-app .organize-trigger > i { font-size: .65rem; }
+.arctos-app .organize-trigger:hover, .arctos-app .organize-trigger[aria-expanded=true] { color: var(--ui-text); background: var(--ui-surface-hover); }
+.arctos-app .organize-dismiss { position: fixed; inset: 0; z-index: 1; border: 0; padding: 0; background: transparent; cursor: default; }
+.arctos-app .organize-dropdown { position: absolute; z-index: 2; top: calc(100% + 4px); right: 0; width: max-content; max-width: calc(100vw - 32px); padding: 4px; border: 1px solid var(--ui-border); border-radius: .6rem; background: var(--ui-surface); box-shadow: 0 4px 12px var(--ui-shadow); }
+.arctos-app .organize-dropdown .dropdown-item { display: flex; align-items: center; min-height: 44px; font-size: .875rem; white-space: nowrap; }
+.arctos-app .arctos-segmented { display: inline-flex; padding: 4px; background: var(--ui-surface-muted); border: 1px solid var(--ui-border); border-radius: .8rem; gap: 4px; }
+.arctos-app .arctos-segment { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; border: 0; background: transparent; color: var(--ui-muted); border-radius: .6rem; min-height: 44px; padding: .6rem 1rem; font-size: .9rem; font-weight: 600; white-space: nowrap; }
+.arctos-app .arctos-segment.is-active { background: var(--ui-surface); color: var(--ui-accent-text); box-shadow: 0 1px 4px var(--ui-shadow); }
+.arctos-app .arctos-count { border-radius: 1rem; background: var(--ui-surface-hover); padding: .08rem .45rem; font-size: .75rem; }
+.arctos-app .arctos-event-search { position: relative; flex: 0 1 350px; }
+.arctos-app .arctos-event-search > i { position: absolute; top: 50%; left: .9rem; transform: translateY(-50%); color: var(--ui-muted); pointer-events: none; }
+.arctos-app .arctos-event-search input { padding-left: 2.5rem; min-height: 44px; }
+.arctos-app .arctos-card-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1.5rem; }
+.arctos-app .arctos-event-card { min-width: 0; height: 100%; border-radius: .9rem; overflow: hidden; transition: border-color .18s, box-shadow .18s; }
+.arctos-app .arctos-event-card:hover { border-color: var(--ui-control-border); box-shadow: 0 6px 22px var(--ui-shadow); }
+.arctos-app .arctos-event-card .card-body { padding: 1.4rem; display: flex; flex-direction: column; align-items: flex-start; }
+.arctos-app .arctos-card-statuses { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: .85rem; }
+.arctos-app .arctos-card-title { font-size: 1.15rem; line-height: 1.4; letter-spacing: -.015em; overflow-wrap: anywhere; margin-bottom: .65rem; }
+.arctos-app .arctos-card-title a { color: var(--ui-text); text-decoration: none; }
+.arctos-app .arctos-card-title a:hover { color: var(--ui-link-hover); text-decoration: underline; }
+.arctos-app .arctos-league-link { display: inline-flex; align-items: center; gap: .45rem; border: 1px solid var(--ui-border); border-radius: .4rem; padding: .3rem .5rem; color: var(--ui-accent-text); font-size: .8rem; margin-bottom: .75rem; text-decoration: none; max-width: 100%; overflow-wrap: anywhere; }
+.arctos-app .arctos-league-link:hover { background: var(--ui-surface-hover); }
+.arctos-app .arctos-meta-list { list-style: none; padding: 0; margin: .4rem 0 0; display: grid; gap: .8rem; color: var(--ui-muted); font-size: .9rem; width: 100%; }
+.arctos-app .arctos-meta-list li { display: flex; gap: .65rem; align-items: flex-start; overflow-wrap: anywhere; }
+.arctos-app .arctos-meta-list i { width: 1rem; flex-shrink: 0; margin-top: .2rem; color: var(--ui-muted); text-align: center; }
+.arctos-app .arctos-registration-summary { width: 100%; border-top: 1px solid var(--ui-border); margin-top: 1.2rem; padding-top: 1rem; display: flex; flex-wrap: wrap; gap: .4rem; }
+.arctos-app .arctos-registration-summary .badge, .arctos-app .arctos-card-statuses .badge { line-height: 1.35; white-space: normal; text-align: left; }
+.arctos-app .arctos-badge-success { background: var(--ui-success-soft) !important; color: var(--ui-success-text) !important; }
+.arctos-app .arctos-badge-warning { background: var(--ui-warning-soft) !important; color: var(--ui-warning-text) !important; }
+.arctos-app .arctos-badge-danger { background: var(--ui-danger-soft) !important; color: var(--ui-danger-text) !important; }
+.arctos-app .arctos-badge-neutral { background: var(--ui-surface-hover) !important; color: var(--ui-muted) !important; }
+.arctos-app .arctos-registration-summary .arctos-registration-badge { display: inline-flex; align-items: center; gap: .4rem; max-width: 100%; padding: .35rem .6rem; border: 1px solid transparent; font-size: .8125rem; }
+.arctos-app .arctos-registration-badge > i { flex-shrink: 0; }
+.arctos-app .arctos-registration-badge.arctos-badge-warning { border-color: var(--ui-warning-border); }
+.arctos-app .arctos-registration-badge.arctos-badge-danger { border-color: var(--ui-danger-border); }
+.arctos-app .arctos-card-footer { margin-top: auto; padding: 0 1.4rem 1.4rem; }
+.arctos-app .arctos-empty-state { border: 1px dashed var(--ui-border); background: var(--ui-surface-muted); border-radius: .9rem; padding: 3rem 1.25rem; text-align: center; color: var(--ui-muted); }
+.arctos-app .arctos-empty-state > i { font-size: 2rem; color: var(--ui-muted); margin-bottom: 1rem; }
+.arctos-app .arctos-empty-state h2, .arctos-app .arctos-empty-state h3 { font-size: 1.2rem; color: var(--ui-text); }
+.arctos-app .arctos-empty-state p { max-width: 36rem; margin: .65rem auto 1.25rem; overflow-wrap: anywhere; }
+.arctos-app .arctos-empty-state .btn { min-height: 44px; }
+.arctos-app .arctos-page-intro { margin: .75rem 0 1.75rem; }
+.arctos-app .arctos-page-intro h1 { margin-bottom: .65rem; letter-spacing: -.03em; }
+.arctos-app .arctos-page-intro p { color: var(--ui-muted); line-height: 1.65; max-width: 660px; margin-bottom: 0; }
+.arctos-app .arctos-directory-search { display: flex; gap: .6rem; max-width: 600px; margin-bottom: 1rem; }
+.arctos-app .arctos-directory-search input { min-width: 0; min-height: 44px; }
+.arctos-app .arctos-directory-search .btn { flex-shrink: 0; min-height: 44px; }
+.arctos-app .arctos-results-count { color: var(--ui-muted); font-size: .875rem; margin: 0 0 1.25rem; }
+.arctos-app .arctos-directory-card { min-width: 0; padding: 1.4rem; text-decoration: none; color: var(--ui-text); border-radius: .9rem; transition: border-color .18s, box-shadow .18s; }
+.arctos-app .arctos-directory-card:hover { color: var(--ui-text); border-color: var(--ui-control-border); box-shadow: 0 6px 22px var(--ui-shadow); }
+.arctos-app .arctos-directory-identity { display: flex; align-items: center; gap: 1rem; }
+.arctos-app .arctos-directory-avatar { width: 64px; height: 64px; flex-shrink: 0; border-radius: .8rem; object-fit: cover; }
+.arctos-app .arctos-player-avatar { border-radius: 50%; }
+.arctos-app .arctos-avatar-placeholder { display: flex; align-items: center; justify-content: center; color: var(--ui-gradient-contrast); background: linear-gradient(135deg, var(--ui-gradient-start), var(--ui-gradient-end)); font-size: 1.6rem; }
+.arctos-app .arctos-directory-name { min-width: 0; }
+.arctos-app .arctos-directory-name h2 { font-size: 1.1rem; margin-bottom: .25rem; line-height: 1.4; overflow-wrap: anywhere; }
+.arctos-app .arctos-directory-name p { color: var(--ui-muted); font-size: .875rem; margin-bottom: 0; overflow-wrap: anywhere; }
+.arctos-app .arctos-directory-location { color: var(--ui-muted); font-size: .9rem; margin: 1rem 0 0; display: flex; align-items: flex-start; gap: .6rem; overflow-wrap: anywhere; }
+.arctos-app .arctos-directory-location i { margin-top: .2rem; }
+.arctos-app .arctos-directory-action { display: flex; justify-content: space-between; align-items: center; margin-top: auto; padding-top: 1.25rem; color: var(--ui-link); font-size: .85rem; font-weight: 600; }
+.arctos-app .arctos-pagination { margin: 1.75rem 0 0; display: flex; align-items: center; justify-content: center; gap: .75rem; flex-wrap: wrap; }
+.arctos-app .arctos-pagination .btn, .arctos-app .arctos-pagination .form-select { min-height: 44px; }
+.arctos-app .arctos-page-position { font-size: .875rem; color: var(--ui-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.arctos-app .arctos-page-jump { display: flex; align-items: center; gap: .6rem; font-size: .875rem; font-weight: 400; color: var(--ui-muted); margin: 0; }
+.arctos-app .arctos-page-jump select { width: auto; min-width: 75px; }
+.arctos-app .arctos-league-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.arctos-app .arctos-league-identity { display: flex; align-items: center; gap: 1rem; margin-bottom: .5rem; }
+.arctos-app .arctos-league-identity .arctos-card-title { margin-bottom: .3rem; }
+.arctos-app .arctos-league-caption { margin: 0; color: var(--ui-muted); font-size: .85rem; }
+.arctos-app .arctos-create-event { max-width: 900px; margin: 0 auto; }
+.arctos-app .arctos-centered-intro { text-align: center; padding: .75rem 0; }
+.arctos-app .arctos-centered-intro .arctos-brand-mark { margin-bottom: 1rem; }
+.arctos-app .arctos-centered-intro p { margin-left: auto; margin-right: auto; }
+.arctos-app .arctos-choice-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.5rem; }
+.arctos-app .arctos-choice-card { padding: 1.75rem; border-radius: .9rem; min-width: 0; }
+.arctos-app .arctos-choice-icon { width: 3.75rem; height: 3.75rem; border-radius: 1rem; background: var(--ui-accent-soft); color: var(--ui-accent-text); display: flex; align-items: center; justify-content: center; font-size: 1.65rem; margin-bottom: 1.3rem; }
+.arctos-app .arctos-choice-card h2 { font-size: 1.35rem; margin-bottom: .75rem; }
+.arctos-app .arctos-choice-card p { color: var(--ui-muted); line-height: 1.65; }
+.arctos-app .arctos-choice-card ul { color: var(--ui-muted); padding-left: 1.2rem; font-size: .9rem; line-height: 1.7; margin: 0 0 1.5rem; }
+.arctos-app .arctos-choice-card li + li { margin-top: .4rem; }
+.arctos-app .arctos-choice-card .btn { margin-top: auto; }
+.arctos-app .arctos-inline-help { display: flex; align-items: flex-start; gap: .75rem; background: var(--ui-accent-soft); color: var(--ui-accent-text); border-radius: .75rem; padding: 1rem 1.25rem; margin-top: 1.5rem; font-size: .9rem; }
+.arctos-app .arctos-inline-help i { margin-top: .2rem; }
+.arctos-app .arctos-inline-help p { margin: 0; }
+.arctos-app .arctos-event-hero { position: relative; display: flex; gap: 1.25rem; align-items: center; padding: 2.5rem; margin-bottom: 1.5rem; border-radius: 1rem; background: linear-gradient(115deg, var(--ui-gradient-start), var(--ui-gradient-end)); color: var(--ui-gradient-contrast); overflow: hidden; }
+.arctos-app .arctos-event-hero::after { content: ""; position: absolute; width: 260px; height: 260px; right: -70px; top: -140px; border: 40px solid var(--ui-on-gradient-soft); border-radius: 50%; pointer-events: none; }
+.arctos-app .arctos-event-hero-mark { width: 4rem; height: 4rem; border-radius: 1rem; background: var(--ui-on-gradient-soft); display: flex; align-items: center; justify-content: center; font-size: 1.6rem; flex-shrink: 0; }
+.arctos-app .arctos-event-hero-content { min-width: 0; }
+.arctos-app .arctos-event-hero h1 { font-size: clamp(1.6rem, 3vw, 2.2rem); color: var(--ui-gradient-contrast); letter-spacing: -.03em; line-height: 1.25; margin: 0; overflow-wrap: anywhere; }
+.arctos-app .arctos-event-hero p { margin: .8rem 0 0; color: var(--ui-gradient-contrast); font-size: .95rem; line-height: 1.7; overflow-wrap: anywhere; }
+.arctos-app .arctos-event-league-badge { display: inline-flex; align-items: center; gap: .5rem; border: 1px solid var(--ui-on-gradient-border); border-radius: .45rem; padding: .4rem .65rem; margin-bottom: 1rem; color: var(--ui-gradient-contrast); text-decoration: none; font-size: .8rem; min-height: 44px; overflow-wrap: anywhere; }
+.arctos-app .arctos-event-league-badge:hover { background: var(--ui-on-gradient-soft); color: var(--ui-gradient-contrast); }
+@media (max-width: 1100px) { .arctos-app .arctos-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 700px) {
+    .arctos-app .arctos-card-grid, .arctos-app .arctos-choice-grid { grid-template-columns: minmax(0, 1fr); }
+    .arctos-app .arctos-page-banner p { font-size: .95rem; }
+    .arctos-app .arctos-discovery-toolbar { align-items: stretch; gap: .85rem; }
+    .arctos-app .arctos-discovery-actions, .arctos-app .arctos-event-search { width: 100%; flex-basis: 100%; }
+    .arctos-app .arctos-discovery-actions { gap: .5rem; }
+    .arctos-app .arctos-discovery-actions .arctos-segmented { flex: 1 1 auto; }
+    .arctos-app .arctos-segment { flex: 1; gap: .35rem; padding-inline: .375rem; font-size: .8125rem; }
+    .arctos-app .organize-trigger { padding-inline: .4rem; font-size: .8125rem; }
+    .arctos-app .arctos-count { padding-inline: .3rem; }
+    .arctos-app .arctos-card-grid { gap: 1rem; }
+    .arctos-app .arctos-directory-card, .arctos-app .arctos-choice-card { padding: 1.25rem; }
+    .arctos-app .arctos-event-card .card-body { padding: 1.25rem; }
+    .arctos-app .arctos-card-footer { padding: 0 1.25rem 1.25rem; }
+    .arctos-app .arctos-event-hero { padding: 1.5rem 1.25rem; align-items: flex-start; gap: .85rem; }
+    .arctos-app .arctos-event-hero-mark { width: 2.5rem; height: 2.5rem; border-radius: .65rem; font-size: 1.05rem; }
+    .arctos-app .arctos-event-hero h1 { font-size: 1.5rem; }
+    .arctos-app .arctos-event-hero p { font-size: .9rem; }
+    .arctos-app .arctos-page-jump { width: 100%; justify-content: center; }
+}
+@media (prefers-reduced-motion: reduce) { .arctos-app .arctos-event-card, .arctos-app .arctos-directory-card { transition: none; } }
+
+/* Event/team rosters are one section with rows, including on narrow screens. */
+.arctos-app .roster-identity { display: flex; align-items: center; min-width: 0; }
+.arctos-app .roster-name { display: inline-flex; align-items: center; min-height: 44px; text-decoration: none; overflow-wrap: anywhere; }
+.arctos-app .roster-count { font-weight: 650; }
+.arctos-app .roster-table .roster-actions { white-space: normal; }
+.arctos-app .roster-table .roster-actions .btn-group { display: flex; flex-wrap: wrap; gap: 6px; }
+.arctos-app .roster-table .roster-actions .btn-group .btn { border-radius: 8px; margin: 0; }
+.arctos-app .profile-roster { margin: 0; padding: 0; list-style: none; }
+.arctos-app .profile-roster > li + li { border-top: 1px solid var(--ui-border); }
+.arctos-app .profile-roster-link { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 8px 0; color: var(--ui-text); text-decoration: none; }
+.arctos-app .profile-roster-link:hover { color: var(--ui-link); }
+.arctos-app .profile-roster-copy { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 12px; min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.arctos-app .profile-roster-copy small { color: var(--ui-muted); }
+@media (max-width: 575.98px) {
+  .arctos-app .data-section .roster-table, .arctos-app .data-section .roster-table tbody { display: block; width: 100%; }
+  .arctos-app .roster-table thead { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
+  .arctos-app .data-section .roster-table tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 12px; border-bottom: 1px solid var(--ui-border); padding: 8px 16px; }
+  .arctos-app .data-section .roster-table tr:last-child { border-bottom: 0; }
+  .arctos-app .data-section .roster-table > tbody > tr > td { display: block; min-width: 0; border: 0; padding: 2px 0; background: transparent; box-shadow: none; font-size: .8125rem; }
+  .arctos-app .data-section .roster-table > tbody > tr > td.table-number { text-align: left; }
+  .arctos-app .data-section .roster-table .roster-wide { grid-column: 1 / -1; }
+  .arctos-app .data-section .roster-table td[data-label]::before { content: attr(data-label) ": "; color: var(--ui-muted); font-weight: 500; }
+  .arctos-app .data-section .roster-table td:first-child { grid-column: 1 / -1; font-size: .9375rem; }
+  .arctos-app .data-section .roster-table .roster-actions { grid-column: 1 / -1; padding-top: 6px; }
+  .arctos-app .data-section .roster-table .roster-actions::before { display: none; }
+}
+
+/* Public registration counts share a compact treatment on profiles and directories. */
+.arctos-app .profile-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem 1rem; margin-bottom: 1rem; }
+.arctos-app .profile-heading h1 { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.arctos-app .profile-event-stat { display: inline-flex; flex: 0 0 auto; align-items: baseline; gap: .35rem; min-width: 0; margin: 0; font-size: .875rem; line-height: 1.5; }
+.arctos-app .profile-event-stat dt { color: var(--ui-muted); font-size: inherit; font-weight: 400; }
+.arctos-app .profile-event-stat dd { margin: 0; color: var(--ui-text); font-size: inherit; font-weight: 500; line-height: inherit; font-variant-numeric: tabular-nums; }
+.arctos-app .arctos-directory-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .75rem; margin-top: auto; padding-top: 1rem; }
+.arctos-app .arctos-directory-event-count { display: inline-flex; align-items: baseline; gap: .35rem; color: var(--ui-muted); font-size: .875rem; line-height: 1.5; white-space: nowrap; }
+.arctos-app .arctos-directory-event-count strong { color: var(--ui-text); font-size: inherit; font-weight: 500; line-height: inherit; font-variant-numeric: tabular-nums; }
+.arctos-app .arctos-directory-footer .arctos-directory-action { gap: .65rem; margin: 0; padding: 0; min-height: 44px; }

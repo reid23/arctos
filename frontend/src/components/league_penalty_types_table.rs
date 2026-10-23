@@ -17,6 +17,7 @@ pub fn LeaguePenaltyTypesTable(
 ) -> Element {
     let mut editing_pt_id = use_signal(|| None as Option<i32>);
     let mut add_new_penalty = use_signal(|| false);
+    let mut penalties_open = use_signal(|| false);
     let mut edit_name = use_signal(|| String::new());
     let mut edit_color = use_signal(|| "808080".to_string());
     let mut edit_desc = use_signal(|| String::new());
@@ -52,136 +53,154 @@ pub fn LeaguePenaltyTypesTable(
             let on_refresh = on_refresh.clone();
             let edit_tr = rsx! {
                 tr { key: "edit-{pt_id}",
-                    td {
-                        input {
-                            r#type: "text",
-                            class: "form-control form-control-sm",
-                            maxlength: "{NAME_MAX_LEN}",
-                            placeholder: "Name (max 50)",
-                            value: "{edit_name()}",
-                            oninput: move |ev| {
-                                edit_name.set(ev.value().clone());
-                                edit_error.set(None);
-                            }
-                        }
-                        span { class: "small text-muted", "{edit_name().len()}/{NAME_MAX_LEN}" }
-                    }
-                    td {
-                        div {
-                            class: "d-flex align-items-center gap-1",
-                            div {
-                                class: "rounded border",
-                                style: format!("width: 24px; height: 24px; background-color: #{}; cursor: pointer;", edit_color()),
-                                onclick: move |_| {
-                                    if show_color_picker_for() == Some(pt_id) {
-                                        show_color_picker_for.set(None);
-                                    } else {
-                                        show_color_picker_for.set(Some(pt_id));
-                                        custom_color_hex.set(edit_color());
+                    td { colspan: "4", class: "penalty-edit-cell",
+                        div { class: "penalty-edit-grid",
+                            div { class: "penalty-edit-name",
+                                label { r#for: "penalty-type-edit-name", class: "form-label", "Name" }
+                                input {
+                                    id: "penalty-type-edit-name",
+                                    aria_label: "Penalty type name",
+                                    r#type: "text",
+                                    class: "form-control form-control-sm",
+                                    maxlength: "{NAME_MAX_LEN}",
+                                    placeholder: "Name (max 50)",
+                                    value: "{edit_name()}",
+                                    oninput: move |ev| {
+                                        edit_name.set(ev.value().clone());
+                                        edit_error.set(None);
                                     }
                                 }
+                                span { class: "small text-muted", "{edit_name().len()}/{NAME_MAX_LEN}" }
                             }
-                            if show_color_picker_for() == Some(pt_id) {
-                                div { class: "position-absolute bg-white border rounded p-2 shadow", style: "z-index: 1000;",
-                                    div { class: "d-flex flex-wrap gap-1 mb-2", style: "width: 150px;",
-                                        for c in PREDEFINED_COLORS.iter() {
-                                            div {
-                                                class: "rounded-circle border",
-                                                style: format!("width: 20px; height: 20px; background-color: #{}; cursor: pointer;", *c),
-                                                onclick: move |_| {
-                                                    edit_color.set(c.to_string());
-                                                    custom_color_hex.set(c.to_string());
+                            div { class: "penalty-edit-color",
+                                label { r#for: "penalty-type-edit-color", class: "form-label", "Color" }
+                                div {
+                                    class: "penalty-color-control",
+                                    button {
+                                        id: "penalty-type-edit-color",
+                                        r#type: "button",
+                                        class: "penalty-color-swatch",
+                                        aria_label: "Choose penalty color",
+                                        aria_expanded: (show_color_picker_for() == Some(pt_id)).to_string(),
+                                        style: format!("background-color: #{};", edit_color()),
+                                        onclick: move |_| {
+                                            if show_color_picker_for() == Some(pt_id) {
+                                                show_color_picker_for.set(None);
+                                            } else {
+                                                show_color_picker_for.set(Some(pt_id));
+                                                custom_color_hex.set(edit_color());
+                                            }
+                                        }
+                                    }
+                                    if show_color_picker_for() == Some(pt_id) {
+                                        div { class: "penalty-color-options",
+                                            div { class: "penalty-color-presets",
+                                                for c in PREDEFINED_COLORS.iter() {
+                                                    button {
+                                                        r#type: "button",
+                                                        class: "penalty-color-swatch",
+                                                        aria_label: format!("Use color #{}", c),
+                                                        style: format!("background-color: #{};", *c),
+                                                        onclick: move |_| {
+                                                            edit_color.set(c.to_string());
+                                                            custom_color_hex.set(c.to_string());
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            div { class: "input-group input-group-sm",
+                                                span { class: "input-group-text", "#" }
+                                                input {
+                                                    r#type: "text",
+                                                    class: "form-control",
+                                                    aria_label: "Hex color",
+                                                    value: "{custom_color_hex()}",
+                                                    oninput: move |ev| custom_color_hex.set(ev.value().clone())
+                                                }
+                                                button {
+                                                    class: "btn btn-outline-primary btn-sm",
+                                                    r#type: "button",
+                                                    onclick: move |_| {
+                                                        let c = custom_color_hex().trim().trim_start_matches('#').to_string();
+                                                        if c.len() == 6 {
+                                                            edit_color.set(c);
+                                                            show_color_picker_for.set(None);
+                                                        }
+                                                    },
+                                                    "Apply"
                                                 }
                                             }
                                         }
                                     }
-                                    div { class: "input-group input-group-sm",
-                                        span { class: "input-group-text", "#" }
-                                        input {
-                                            r#type: "text",
-                                            class: "form-control",
-                                            value: "{custom_color_hex()}",
-                                            oninput: move |ev| custom_color_hex.set(ev.value().clone())
-                                        }
-                                        button {
-                                            class: "btn btn-outline-primary btn-sm",
-                                            r#type: "button",
-                                            onclick: move |_| {
-                                                let c = custom_color_hex().trim().trim_start_matches('#').to_string();
-                                                if c.len() == 6 {
-                                                    edit_color.set(c);
-                                                    show_color_picker_for.set(None);
-                                                }
-                                            },
-                                            "Apply"
-                                        }
-                                    }
                                 }
                             }
-                        }
-                    }
-                    td {
-                        textarea {
-                            class: "form-control form-control-sm",
-                            rows: "3",
-                            placeholder: "Description (optional)",
-                            value: "{edit_desc()}",
-                            oninput: move |ev| edit_desc.set(ev.value().clone())
-                        }
-                    }
-                    td {
-                        button {
-                            class: "btn btn-sm btn-primary me-1",
-                            r#type: "button",
-                            onclick: move |_| {
-                                let name_trim = edit_name().trim().to_string();
-                                if name_trim.is_empty() {
-                                    edit_error.set(Some("Name is required.".to_string()));
-                                    return;
+                            div { class: "penalty-edit-description",
+                                label { r#for: "penalty-type-edit-description", class: "form-label", "Description (optional)" }
+                                textarea {
+                                    id: "penalty-type-edit-description",
+                                    class: "form-control form-control-sm",
+                                    rows: "3",
+                                    placeholder: "Description (optional)",
+                                    value: "{edit_desc()}",
+                                    oninput: move |ev| edit_desc.set(ev.value().clone())
                                 }
-                                if name_trim.len() > NAME_MAX_LEN {
-                                    edit_error.set(Some(format!("Name must be at most {} characters.", NAME_MAX_LEN)));
-                                    return;
+                            }
+                            div { class: "penalty-edit-actions",
+                                button {
+                                    class: "btn btn-sm btn-primary me-1",
+                                    r#type: "button",
+                                    onclick: move |_| {
+                                        let name_trim = edit_name().trim().to_string();
+                                        if name_trim.is_empty() {
+                                            edit_error.set(Some("Name is required.".to_string()));
+                                            return;
+                                        }
+                                        if name_trim.len() > NAME_MAX_LEN {
+                                            edit_error.set(Some(format!("Name must be at most {} characters.", NAME_MAX_LEN)));
+                                            return;
+                                        }
+                                        let color_val = edit_color().trim_start_matches('#').to_string();
+                                        let desc_val = edit_desc().trim().to_string();
+                                        let desc_opt = if desc_val.is_empty() { None } else { Some(desc_val) };
+                                        editing_pt_id.set(None);
+                                        edit_error.set(None);
+                                        let u = url_save.clone();
+                                        spawn(async move {
+                                            let _ = api::update_league_penalty_type(&u, pt_id, Some(&name_trim), Some(&color_val), desc_opt.as_deref()).await;
+                                            on_refresh.call(());
+                                        });
+                                    },
+                                    "Save"
                                 }
-                                let color_val = edit_color().trim_start_matches('#').to_string();
-                                let desc_val = edit_desc().trim().to_string();
-                                let desc_opt = if desc_val.is_empty() { None } else { Some(desc_val) };
-                                editing_pt_id.set(None);
-                                edit_error.set(None);
-                                let u = url_save.clone();
-                                spawn(async move {
-                                    let _ = api::update_league_penalty_type(&u, pt_id, Some(&name_trim), Some(&color_val), desc_opt.as_deref()).await;
-                                    on_refresh.call(());
-                                });
-                            },
-                            "Save"
-                        }
-                        button {
-                            class: "btn btn-sm btn-secondary",
-                            r#type: "button",
-                            onclick: move |_| {
-                                editing_pt_id.set(None);
-                                edit_error.set(None);
-                            },
-                            "Cancel"
+                                button {
+                                    class: "btn btn-sm btn-secondary",
+                                    r#type: "button",
+                                    onclick: move |_| {
+                                        editing_pt_id.set(None);
+                                        edit_error.set(None);
+                                    },
+                                    "Cancel"
+                                }
+                            }
                         }
                     }
                 }
             };
             let view_tr = rsx! {
                 tr { key: "{pt_id}",
-                    td { "{name}" }
+                    td { class: "table-copy", "{name}" }
                     td {
                         div {
                             class: "rounded border d-inline-block",
                             style: format!("width: 20px; height: 20px; background-color: #{};", color)
                         }
                     }
-                    td { class: "small text-muted", "{preview}" }
+                    td { class: "table-copy small text-muted", "{preview}" }
                     td {
                         button {
                             class: "btn btn-sm btn-outline-primary me-1",
                             r#type: "button",
+                            disabled: add_new_penalty() || editing_pt_id().is_some(),
                             onclick: move |_| {
                                 editing_pt_id.set(Some(pt_id));
                                 edit_name.set(name.clone());
@@ -211,151 +230,192 @@ pub fn LeaguePenaltyTypesTable(
         })
         .collect();
 
-    rsx! {
+    let rows = rsx! {
         for el in row_elements.iter() {
             {el}
         }
         if add_new_penalty() {
             tr { key: "add-new-row-{league_url}",
-                td {
-                    input {
-                        r#type: "text",
-                        class: "form-control form-control-sm",
-                        maxlength: "{NAME_MAX_LEN}",
-                        placeholder: "Name (max 50)",
-                        value: "{edit_name()}",
-                        oninput: move |ev| {
-                            edit_name.set(ev.value().clone());
-                            edit_error.set(None);
-                        }
-                    }
-                    span { class: "small text-muted", "{edit_name().len()}/{NAME_MAX_LEN}" }
-                    if let Some(ref err) = edit_error() {
-                        span { class: "small text-danger d-block", "{err}" }
-                    }
-                }
-                td {
-                    div {
-                        class: "d-flex align-items-center gap-1",
-                        div {
-                            class: "rounded border",
-                            style: format!("width: 24px; height: 24px; background-color: #{}; cursor: pointer;", edit_color()),
-                            onclick: move |_| {
-                                if show_color_picker_for() == Some(-1) {
-                                    show_color_picker_for.set(None);
-                                } else {
-                                    show_color_picker_for.set(Some(-1));
-                                    custom_color_hex.set(edit_color());
+                td { colspan: "4", class: "penalty-edit-cell",
+                    div { class: "penalty-edit-grid",
+                        div { class: "penalty-edit-name",
+                            label { r#for: "penalty-type-new-name", class: "form-label", "Name" }
+                            input {
+                                id: "penalty-type-new-name",
+                                aria_label: "Penalty type name",
+                                onmounted: move |_| crate::appearance::focus_control("penalty-type-new-name"),
+                                r#type: "text",
+                                class: "form-control form-control-sm",
+                                maxlength: "{NAME_MAX_LEN}",
+                                placeholder: "Name (max 50)",
+                                value: "{edit_name()}",
+                                oninput: move |ev| {
+                                    edit_name.set(ev.value().clone());
+                                    edit_error.set(None);
                                 }
                             }
+                            span { class: "small text-muted", "{edit_name().len()}/{NAME_MAX_LEN}" }
+                            if let Some(ref err) = edit_error() {
+                                span { class: "small text-danger d-block", "{err}" }
+                            }
                         }
-                        if show_color_picker_for() == Some(-1) {
-                            div { class: "position-absolute bg-white border rounded p-2 shadow", style: "z-index: 1000;",
-                                div { class: "d-flex flex-wrap gap-1 mb-2", style: "width: 150px;",
-                                    for c in PREDEFINED_COLORS.iter() {
-                                        div {
-                                            class: "rounded-circle border",
-                                            style: format!("width: 20px; height: 20px; background-color: #{}; cursor: pointer;", *c),
-                                            onclick: move |_| {
-                                                edit_color.set(c.to_string());
-                                                custom_color_hex.set(c.to_string());
+                        div { class: "penalty-edit-color",
+                            label { r#for: "penalty-type-new-color", class: "form-label", "Color" }
+                            div {
+                                class: "penalty-color-control",
+                                button {
+                                    id: "penalty-type-new-color",
+                                    r#type: "button",
+                                    class: "penalty-color-swatch",
+                                    aria_label: "Choose penalty color",
+                                    aria_expanded: (show_color_picker_for() == Some(-1)).to_string(),
+                                    style: format!("background-color: #{};", edit_color()),
+                                    onclick: move |_| {
+                                        if show_color_picker_for() == Some(-1) {
+                                            show_color_picker_for.set(None);
+                                        } else {
+                                            show_color_picker_for.set(Some(-1));
+                                            custom_color_hex.set(edit_color());
+                                        }
+                                    }
+                                }
+                                if show_color_picker_for() == Some(-1) {
+                                    div { class: "penalty-color-options",
+                                        div { class: "penalty-color-presets",
+                                            for c in PREDEFINED_COLORS.iter() {
+                                                button {
+                                                    r#type: "button",
+                                                    class: "penalty-color-swatch",
+                                                    aria_label: format!("Use color #{}", c),
+                                                    style: format!("background-color: #{};", *c),
+                                                    onclick: move |_| {
+                                                        edit_color.set(c.to_string());
+                                                        custom_color_hex.set(c.to_string());
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        div { class: "input-group input-group-sm",
+                                            span { class: "input-group-text", "#" }
+                                            input {
+                                                r#type: "text",
+                                                class: "form-control",
+                                                aria_label: "Hex color",
+                                                value: "{custom_color_hex()}",
+                                                oninput: move |ev| custom_color_hex.set(ev.value().clone())
+                                            }
+                                            button {
+                                                class: "btn btn-outline-primary btn-sm",
+                                                r#type: "button",
+                                                onclick: move |_| {
+                                                    let c = custom_color_hex().trim().trim_start_matches('#').to_string();
+                                                    if c.len() == 6 {
+                                                        edit_color.set(c);
+                                                        show_color_picker_for.set(None);
+                                                    }
+                                                },
+                                                "Apply"
                                             }
                                         }
                                     }
                                 }
-                                div { class: "input-group input-group-sm",
-                                    span { class: "input-group-text", "#" }
-                                    input {
-                                        r#type: "text",
-                                        class: "form-control",
-                                        value: "{custom_color_hex()}",
-                                        oninput: move |ev| custom_color_hex.set(ev.value().clone())
-                                    }
-                                    button {
-                                        class: "btn btn-outline-primary btn-sm",
-                                        r#type: "button",
-                                        onclick: move |_| {
-                                            let c = custom_color_hex().trim().trim_start_matches('#').to_string();
-                                            if c.len() == 6 {
-                                                edit_color.set(c);
-                                                show_color_picker_for.set(None);
-                                            }
-                                        },
-                                        "Apply"
-                                    }
-                                }
                             }
                         }
-                    }
-                }
-                td {
-                    textarea {
-                        class: "form-control form-control-sm",
-                        rows: "3",
-                        placeholder: "Description (optional)",
-                        value: "{edit_desc()}",
-                        oninput: move |ev| edit_desc.set(ev.value().clone())
-                    }
-                }
-                td {
-                    button {
-                        class: "btn btn-sm btn-primary me-1",
-                        r#type: "button",
-                        onclick: move |_| {
-                            let u = league_url.clone();
-                            let name_trim = edit_name().trim().to_string();
-                            if name_trim.is_empty() {
-                                edit_error.set(Some("Name is required.".to_string()));
-                                return;
+                        div { class: "penalty-edit-description",
+                            label { r#for: "penalty-type-new-description", class: "form-label", "Description (optional)" }
+                            textarea {
+                                id: "penalty-type-new-description",
+                                class: "form-control form-control-sm",
+                                rows: "3",
+                                placeholder: "Description (optional)",
+                                value: "{edit_desc()}",
+                                oninput: move |ev| edit_desc.set(ev.value().clone())
                             }
-                            if name_trim.len() > NAME_MAX_LEN {
-                                edit_error.set(Some(format!("Name must be at most {} characters.", NAME_MAX_LEN)));
-                                return;
+                        }
+                        div { class: "penalty-edit-actions",
+                            button {
+                                class: "btn btn-sm btn-primary me-1",
+                                r#type: "button",
+                                onclick: move |_| {
+                                    let u = league_url.clone();
+                                    let name_trim = edit_name().trim().to_string();
+                                    if name_trim.is_empty() {
+                                        edit_error.set(Some("Name is required.".to_string()));
+                                        return;
+                                    }
+                                    if name_trim.len() > NAME_MAX_LEN {
+                                        edit_error.set(Some(format!("Name must be at most {} characters.", NAME_MAX_LEN)));
+                                        return;
+                                    }
+                                    let color_val = edit_color().trim_start_matches('#').to_string();
+                                    let desc_val = edit_desc().trim().to_string();
+                                    let color_opt = if color_val.len() == 6 { Some(color_val) } else { None };
+                                    let desc_opt = if desc_val.is_empty() { None } else { Some(desc_val) };
+                                    add_new_penalty.set(false);
+                                    edit_error.set(None);
+                                    spawn(async move {
+                                        let _ = api::create_league_penalty_type(&u, &name_trim, color_opt.as_deref(), desc_opt.as_deref()).await;
+                                        on_refresh.call(());
+                                    });
+                                },
+                                "Save"
                             }
-                            let color_val = edit_color().trim_start_matches('#').to_string();
-                            let desc_val = edit_desc().trim().to_string();
-                            let color_opt = if color_val.len() == 6 { Some(color_val) } else { None };
-                            let desc_opt = if desc_val.is_empty() { None } else { Some(desc_val) };
-                            add_new_penalty.set(false);
-                            edit_error.set(None);
-                            spawn(async move {
-                                let _ = api::create_league_penalty_type(&u, &name_trim, color_opt.as_deref(), desc_opt.as_deref()).await;
-                                on_refresh.call(());
-                            });
-                        },
-                        "Save"
-                    }
-                    button {
-                        class: "btn btn-sm btn-secondary",
-                        r#type: "button",
-                        onclick: move |_| {
-                            add_new_penalty.set(false);
-                            edit_name.set(String::new());
-                            edit_color.set("808080".to_string());
-                            edit_desc.set(String::new());
-                            edit_error.set(None);
-                            show_color_picker_for.set(None);
-                        },
-                        "Cancel"
+                            button {
+                                class: "btn btn-sm btn-secondary",
+                                r#type: "button",
+                                onclick: move |_| {
+                                    add_new_penalty.set(false);
+                                    edit_name.set(String::new());
+                                    edit_color.set("808080".to_string());
+                                    edit_desc.set(String::new());
+                                    edit_error.set(None);
+                                    show_color_picker_for.set(None);
+                                },
+                                "Cancel"
+                            }
+                        }
                     }
                 }
             }
         }
-        tr {
-            td { colspan: "4", class: "border-0 pt-1",
-                button {
-                    class: "btn btn-sm btn-outline-secondary",
-                    r#type: "button",
+    };
+
+    rsx! {
+        section { class: "edit-section penalty-types-section mb-3",
+            div { class: "edit-section-heading penalty-types-heading",
+                h2 { class: "h5 mb-0",
+                    button { id: "penalty-types-toggle", class: "penalty-types-toggle", r#type: "button",
+                        aria_expanded: "{penalties_open()}", aria_controls: "penalty-types-content",
+                        onclick: move |_| penalties_open.set(!penalties_open()),
+                        i { class: if penalties_open() { "fas fa-chevron-down" } else { "fas fa-chevron-right" }, aria_hidden: "true" }
+                        "Penalty types ({penalty_types.len()})"
+                    }
+                }
+                button { id: "penalty-types-add", class: "btn btn-sm btn-outline-secondary penalty-types-add", r#type: "button",
+                    aria_label: "Add penalty type",
+                    disabled: add_new_penalty() || editing_pt_id().is_some(),
                     onclick: move |_| {
-                        if !add_new_penalty() && editing_pt_id().is_none() {
-                            add_new_penalty.set(true);
-                            edit_name.set(String::new());
-                            edit_color.set("808080".to_string());
-                            edit_desc.set(String::new());
-                            edit_error.set(None);
-                        }
+                        if add_new_penalty() || editing_pt_id().is_some() { return; }
+                        edit_name.set(String::new());
+                        edit_color.set("808080".to_string());
+                        edit_desc.set(String::new());
+                        edit_error.set(None);
+                        show_color_picker_for.set(None);
+                        penalties_open.set(true);
+                        add_new_penalty.set(true);
                     },
-                    "+ Add penalty type"
+                    i { class: "fas fa-plus me-1", aria_hidden: "true" }
+                    "Add"
+                }
+            }
+            div { id: "penalty-types-content", class: "edit-section-body", hidden: !penalties_open(),
+                div { class: "table-responsive",
+                    table { class: "table table-sm",
+                        thead { tr { th { class: "table-nowrap", "Name" } th { class: "table-nowrap", "Color" } th { class: "table-nowrap", "Description" } th { class: "table-nowrap", style: "width: 1%;", "Actions" } } }
+                        tbody {
+                            {rows}
+                        }
+                    }
                 }
             }
         }

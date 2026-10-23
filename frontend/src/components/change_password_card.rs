@@ -1,4 +1,4 @@
-//! Change password form card for use on own player/team profile pages.
+//! Change password form for the account owner's profile editor.
 
 use crate::api;
 use dioxus::prelude::*;
@@ -13,22 +13,28 @@ pub fn ChangePasswordCard() -> Element {
     let mut loading = use_signal(|| false);
 
     rsx! {
-        div { class: "card mt-3",
-            div { class: "card-header",
+        div { class: "edit-section mt-3",
+            div { class: "edit-section-heading",
                 h5 { class: "mb-0", "Change password" }
             }
-            div { class: "card-body",
+            div { class: "edit-section-body",
                 if let Some(ref e) = error() {
-                    div { class: "alert alert-danger py-2", "{e}" }
+                    div { class: "alert alert-danger py-2", role: "alert", "{e}" }
                 }
                 form {
                     onsubmit: move |ev| {
                         ev.prevent_default();
-                        let cur = current_password().trim().to_string();
-                        let new_pw = new_password().trim().to_string();
-                        let conf = confirm_password().trim().to_string();
+                        if loading() { return; }
+                        success.set(false);
+                        let cur = current_password();
+                        let new_pw = new_password();
+                        let conf = confirm_password();
                         if cur.is_empty() {
                             error.set(Some("Current password is required.".into()));
+                            return;
+                        }
+                        if new_pw.is_empty() {
+                            error.set(Some("New password is required.".into()));
                             return;
                         }
                         if new_pw != conf {
@@ -57,33 +63,39 @@ pub fn ChangePasswordCard() -> Element {
                         });
                     },
                     div { class: "mb-2",
-                        label { class: "form-label", "Current password" }
+                        label { class: "form-label", r#for: "current-password", "Current password" }
                         input {
                             class: "form-control",
                             r#type: "password",
-                            placeholder: "Current password",
+                            id: "current-password",
+                            autocomplete: "current-password",
+                            required: true,
                             value: "{current_password()}",
                             oninput: move |ev| current_password.set(ev.value().clone()),
                             disabled: loading(),
                         }
                     }
                     div { class: "mb-2",
-                        label { class: "form-label", "New password" }
+                        label { class: "form-label", r#for: "new-password", "New password" }
                         input {
                             class: "form-control",
                             r#type: "password",
-                            placeholder: "New password",
+                            id: "new-password",
+                            autocomplete: "new-password",
+                            required: true,
                             value: "{new_password()}",
                             oninput: move |ev| new_password.set(ev.value().clone()),
                             disabled: loading(),
                         }
                     }
                     div { class: "mb-3",
-                        label { class: "form-label", "Confirm new password" }
+                        label { class: "form-label", r#for: "confirm-password", "Confirm new password" }
                         input {
                             class: "form-control",
                             r#type: "password",
-                            placeholder: "Confirm new password",
+                            id: "confirm-password",
+                            autocomplete: "new-password",
+                            required: true,
                             value: "{confirm_password()}",
                             oninput: move |ev| confirm_password.set(ev.value().clone()),
                             disabled: loading(),
@@ -97,7 +109,7 @@ pub fn ChangePasswordCard() -> Element {
                     }
                 }
                 if success() {
-                    p { class: "text-success mb-0 mt-3", "Password changed successfully." }
+                    p { class: "text-success mb-0 mt-3", role: "status", "Password changed successfully." }
                 }
             }
         }

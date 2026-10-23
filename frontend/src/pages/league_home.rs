@@ -1,7 +1,7 @@
 use crate::api;
 use crate::components::{
-    EditRegistrationContext, EditRegistrationModal, EventAbout, EventHeader, EventTeamsList,
-    LeagueRegistrationButtons,
+    EditRegistrationContext, EditRegistrationModal, EventAbout, EventBannerPhoto, EventHeader, EventTab, EventTabs,
+    EventTeamsList, LeagueRegistrationButtons, OrganizerTools,
 };
 use crate::types::{ToEntry, User};
 use crate::Route;
@@ -15,29 +15,52 @@ fn get_query_param(name: &str) -> Option<String> {
 }
 
 fn is_current_user_to(me: Option<&Result<User, String>>, to_entries: &[ToEntry]) -> bool {
-    me.and_then(|r| r.as_ref().ok())
-        .map_or(false, |u| {
-            to_entries
-                .iter()
-                .any(|e| e.user_id == u.id && e.user_type == u.user_type)
-        })
+    me.and_then(|r| r.as_ref().ok()).map_or(false, |u| {
+        to_entries
+            .iter()
+            .any(|e| e.user_id == u.id && e.user_type == u.user_type)
+    })
 }
 
 fn format_date(iso: &str) -> String {
-    iso.split('T').next().unwrap_or(iso).to_string()
+    let date = iso.split('T').next().unwrap_or(iso);
+    chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+        .map(|date| date.format("%b %-d, %Y").to_string())
+        .unwrap_or_else(|_| date.to_string())
 }
 
 fn format_date_display(start: &str, end: Option<&String>) -> String {
     let start_fmt = format_date(start);
     match end {
         None => start_fmt,
-        Some(e) if e.as_str() == start => start_fmt,
-        Some(e) => format!("{} - {}", start_fmt, format_date(e)),
+        Some(e) if format_date(e) == start_fmt => start_fmt,
+        Some(e) => format!("{} – {}", start_fmt, format_date(e)),
     }
 }
 
 #[component]
 pub fn LeagueHome(league_url: String) -> Element {
+    rsx! { LeagueHomeContent { key: "{league_url}", league_url, initial_tab: None::<String> } }
+}
+
+#[component]
+pub fn LeagueHomeWithTab(league_url: String, tab: String) -> Element {
+    rsx! { LeagueHomeContent { key: "{league_url}", league_url, initial_tab: Some(tab) } }
+}
+
+#[component]
+pub fn LeagueHomeContent(
+    league_url: String,
+    initial_tab: Option<String>,
+    #[props(default)] content: Option<Element>,
+    #[props(default)] section_title: Option<String>,
+) -> Element {
+    let route = use_route::<Route>();
+    let has_overview = content.is_none();
+    let show_overview = use_memo(use_reactive(&has_overview, |value| value));
+    let mut banner_photo = use_signal(|| None::<String>);
+    let mut banner_initialized = use_signal(|| false);
+    use_context_provider(|| EventBannerPhoto(banner_photo));
     let url_for_data = league_url.clone();
     let mut refresh = use_signal(|| 0u32);
     let mut show_edit_modal = use_signal(|| false);
@@ -56,7 +79,9 @@ pub fn LeagueHome(league_url: String) -> Element {
     let league_url_for_warning = league_url.clone();
     let waiver_warning = use_resource(move || {
         let lu = league_url_for_warning.clone();
+        let player_signed_in = matches!(me_res.read().as_ref(), Some(Ok(user)) if user.user_type == "player");
         async move {
+            if !player_signed_in { return false; }
             match api::get_my_player_registration_league(&lu).await {
                 Ok(res) => res.waiver_required && !res.waiver_signature_valid,
                 Err(_) => false,
@@ -68,56 +93,76 @@ pub fn LeagueHome(league_url: String) -> Element {
     use_effect(move || {
         let v = val.read();
         if let Some(Ok(d)) = v.as_ref() {
+            if !banner_initialized() {
+                banner_photo.set(d.league.banner_photo.clone());
+                banner_initialized.set(true);
+            }
             about_markdown.set(d.league.about.clone());
         } else {
             about_markdown.set(None);
         }
     });
-    let about_html = use_resource(use_reactive(&about_markdown, move |md| {
-        let md = md().clone();
+    let about_html = use_resource(move || {
+        let md = about_markdown();
+        let has_overview = show_overview();
         async move {
+            if !has_overview { return Ok(String::new()); }
             match md.as_deref() {
                 Some(m) if !m.is_empty() => api::render_markdown(m).await,
                 _ => Ok(String::new()),
             }
         }
-    }));
+    });
 
     use_effect(move || {
         if get_query_param("registered").as_deref() == Some("1") {
             show_registration_success.set(true);
             if let Some(window) = web_sys::window() {
                 if let Ok(loc) = window.location().pathname() {
-                    let _ = window.history().and_then(|h| h.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&loc)));
+                    let _ = window.history().and_then(|h| {
+                        h.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&loc))
+                    });
                 }
             }
         }
     });
 
+    let active_tab = initial_tab.as_deref().filter(|tab| {
+        matches!(*tab, "events" | "teams") || (content.is_some() && (section_title.is_some() || *tab == "results"))
+    }).unwrap_or("info").to_string();
+    let backend = api::base_url();
+
     rsx! {
         if let Some(Ok(d)) = val.read().as_ref() {
             {{
-                let team_fee = d.league.team_reg_fee.unwrap_or(0.0);
-                let player_fee = d.league.player_reg_fee.unwrap_or(0.0);
-                let team_fee_str = format!("${:.2}", team_fee);
-                let player_fee_str = format!("${:.2}", player_fee);
+                let viewer_is_to = is_current_user_to(me_res.read().as_ref(), &d.to_entries);
+                let unattached_count = d.unattached_players.len();
+                let wide = content.is_some() && matches!(active_tab.as_str(), "results" | "manage");
+                let mut tabs = vec![
+                    EventTab { id: "info".into(), label: "Info".into(), icon: "fas fa-info-circle".into(), href: Some(format!("/leagues/{league_url}")) },
+                    EventTab { id: "events".into(), label: format!("Events ({})", d.events.len()), icon: "far fa-calendar-alt".into(), href: Some(format!("/leagues/{league_url}?tab=events")) },
+                    EventTab { id: "teams".into(), label: format!("Teams ({})", d.teams_with_counts.len()), icon: "fas fa-users".into(), href: Some(format!("/leagues/{league_url}?tab=teams")) },
+                    EventTab { id: "results".into(), label: "Results".into(), icon: "fas fa-trophy".into(), href: Some(format!("/leagues/{league_url}/results")) },
+                ];
+                if let Some(title) = section_title.as_ref() {
+                    tabs.push(EventTab { id: active_tab.clone(), label: title.clone(), icon: "fas fa-sliders-h".into(), href: Some(route.to_string()) });
+                }
                 rsx! {
-            EventHeader {
-                title: d.league.name.clone(),
-                subtitle: String::new(),
-                badge_league_url: None,
-                badge_season: None,
-                badge_name: None,
-            }
-
-            div { class: "row mb-3",
-                div { class: "col-12 d-flex flex-wrap gap-2",
-                    if show_registration_success() {
-                        div { class: "alert alert-success mb-0 w-100",
-                            "Registration submitted!"
-                        }
-                    }
-                    Link { to: Route::LeagueResults { league_url: league_url.clone() }, class: "btn btn-outline-primary", "Results" }
+            div { class: if wide { "event-detail-page is-wide" } else { "event-detail-page" },
+                EventHeader {
+                    banner: banner_photo(),
+                    title: d.league.name.clone(),
+                    kind: "League".to_string(),
+                    date: None,
+                    location: None,
+                    team_count: d.teams_with_counts.len(),
+                    max_teams: d.league.n_max_teams,
+                    event_count: Some(d.events.len()),
+                    registration_open: d.league.team_registration_open || d.league.player_registration_open,
+                    badge_league_url: None,
+                    badge_name: None,
+                    if content.is_none() || active_tab == "results" {
+                    div { class: "event-participant-actions", role: "group", aria_label: "League registration",
                     if (d.league.team_registration_open || d.league.player_registration_open) || d.is_current_team_registered || d.is_current_player_registered {
                         LeagueRegistrationButtons {
                             league_url: league_url.clone(),
@@ -129,108 +174,151 @@ pub fn LeagueHome(league_url: String) -> Element {
                             is_player_registered: d.is_current_player_registered,
                             use_edit_modal: true,
                             on_edit_registration: move |_| show_edit_modal.set(true),
-                            register_label: String::from("Register"),
-                            show_edit_warning: waiver_warning
-                                .value()
-                                .read()
-                                .as_ref()
-                                .copied()
-                                .unwrap_or(false),
+                            show_edit_warning: waiver_warning.value().read().as_ref().copied().unwrap_or(false),
+                        }
+                    } else {
+                        button { r#type: "button", class: "btn btn-secondary", disabled: true, "Registration closed" }
+                    }
+                    }
+                    }
+                    if viewer_is_to {
+                        OrganizerTools {
+                            Link { to: Route::LeagueSettings { league_url: league_url.clone() }, class: "dropdown-item", i { class: "fas fa-sliders-h", aria_hidden: "true" } "Settings" }
+                            Link { to: Route::LeagueNewTournament { league_url: league_url.clone() }, class: "dropdown-item", i { class: "fas fa-plus", aria_hidden: "true" } "Add Event" }
+                            Link { to: Route::LeagueManage { league_url: league_url.clone() }, class: "dropdown-item", i { class: "fas fa-users", aria_hidden: "true" } "Registration Management" }
+                            button { r#type: "button", class: "dropdown-item text-danger", onclick: move |_| { delete_modal_open.set(true); delete_confirm_url.set(String::new()); delete_error.set(None); }, i { class: "fas fa-trash", aria_hidden: "true" } "Delete League" }
                         }
                     }
                 }
-            }
-
-
-
-            div { class: "row",
-                div { class: "col-md-8",
+                if show_registration_success() {
+                    div { class: "alert alert-success mb-0", role: "status", "Registration submitted!" }
+                }
+                EventTabs {
+                    prefix: "league".to_string(), label: "League sections".to_string(), active: active_tab.clone(),
+                    tabs,
+                }
+                div { class: "container-wide event-detail-content",
+                if let Some(page_content) = content.as_ref() {
+                    {page_content.clone()}
+                } else {
+                section { id: "league-section-info", class: "event-section", aria_labelledby: "league-tab-info", hidden: active_tab != "info",
                     EventAbout {
-                        card_title: "League Information".to_string(),
-                        show_fees: d.league.team_registration_open || d.league.player_registration_open,
-                        team_fee,
-                        player_fee,
-                        team_fee_str: team_fee_str.clone(),
-                        player_fee_str: player_fee_str.clone(),
+                        card_title: "About this league".to_string(),
+                        about_html: about_html.value().read().as_ref().and_then(|r| r.as_ref().ok()).cloned(),
+                        about_raw: d.league.about.clone(),
+                        empty_message: "League details have not been added yet.".to_string(),
+                        team_registration_open: d.league.team_registration_open,
+                        player_registration_open: d.league.player_registration_open,
+                        team_fee: d.league.team_reg_fee,
+                        player_fee: d.league.player_reg_fee,
                         max_teams: d.league.n_max_teams,
                         max_roster: d.league.max_team_size_roster,
                         max_field: d.league.max_team_size_field,
-                        about_html: about_html.value().read().as_ref().and_then(|r| r.as_ref().ok()).cloned(),
-                        about_raw: d.league.about.clone(),
-                        empty_message: "League details coming soon!".to_string(),
+                        waiver_required: d.league.waiver_required,
+                        terms_link: d.league.terms_link.clone(),
+                        league_url: Some(league_url.clone()),
                     }
                 }
-                if !d.events.is_empty() {
-                    div { class: "col-md-4",
-                        div { class: "card",
-                            div { class: "card-header", h5 { class: "mb-0", "Events" } }
-                            div { class: "card-body",
-                                div { class: "list-group list-group-flush",
-                                    for event in d.events.iter() {
-                                        li { key: "{event.url}", class: "list-group-item d-flex justify-content-between align-items-center",
-                                            Link { to: Route::TournamentHome { url: event.url.clone() }, class: "text-decoration-none",
-                                                strong { "{event.name}" }
-                                            }
-                                            span { class: "text-muted",
-                                                "{event.location.as_deref().unwrap_or(\"TBA\")} • {format_date_display(&event.start_date, event.end_date.as_ref())}"
-                                            }
-                                        }
-                                    }
-                                }
+                section { id: "league-section-events", class: "event-section", aria_labelledby: "league-tab-events", hidden: active_tab != "events",
+                    div { class: "card",
+                        div { class: "card-header event-side-heading",
+                            h2 { "League events ({d.events.len()})" }
+                            if viewer_is_to {
+                                Link { to: Route::LeagueNewTournament { league_url: league_url.clone() }, class: "btn btn-outline-primary", i { class: "fas fa-plus", aria_hidden: "true" } "Add Event" }
                             }
                         }
-                        if is_current_user_to(me_res.read().as_ref(), &d.to_entries) {
-                            div { class: "card mt-3",
-                                div { class: "card-header", h5 { class: "mb-0", "Admin" } }
-                                div { class: "card-body",
-                                    div { class: "d-grid gap-2",
-                                        Link { to: Route::LeagueSettings { league_url: league_url.clone() }, class: "btn btn-outline-secondary", "Settings" }
-                                        Link { to: Route::LeagueNewTournament { league_url: league_url.clone() }, class: "btn btn-outline-secondary", "Add Event" }
-                                        Link { to: Route::LeagueManage { league_url: league_url.clone() }, class: "btn btn-outline-warning", "Registration Management" }
-                                        button {
-                                            class: "btn btn-outline-danger",
-                                            onclick: move |_| {
-                                                delete_modal_open.set(true);
-                                                delete_confirm_url.set(String::new());
-                                                delete_error.set(None);
-                                            },
-                                            "Delete League"
+                        if d.events.is_empty() {
+                            div { class: "card-body", p { class: "text-muted mb-0", "No events have been added to this league yet." } }
+                        } else {
+                            ul { class: "event-series-list",
+                                for event in d.events.iter() {
+                                    li { key: "{event.url}",
+                                        Link { to: Route::TournamentHome { url: event.url.clone() },
+                                            strong { "{event.name}" }
+                                            div { class: "event-series-meta",
+                                                span { i { class: "far fa-calendar-alt", aria_hidden: "true" } "{format_date_display(&event.start_date, event.end_date.as_ref())}" }
+                                                if let Some(location) = event.location.as_ref().filter(|s| !s.trim().is_empty()) {
+                                                    span { i { class: "fas fa-map-marker-alt", aria_hidden: "true" } "{location}" }
+                                                }
+                                            }
+                                            i { class: "fas fa-chevron-right", aria_hidden: "true" }
                                         }
                                     }
                                 }
                             }
                         }
                     }
-                } else if is_current_user_to(me_res.read().as_ref(), &d.to_entries) {
-                    div { class: "col-md-4",
-                        div { class: "card",
-                            div { class: "card-header", h5 { class: "mb-0", "Admin" } }
-                            div { class: "card-body",
-                                div { class: "d-grid gap-2",
-                                    Link { to: Route::LeagueSettings { league_url: league_url.clone() }, class: "btn btn-outline-secondary", "Settings" }
-                                    Link { to: Route::LeagueNewTournament { league_url: league_url.clone() }, class: "btn btn-outline-secondary", "Add Event" }
-                                    Link { to: Route::LeagueManage { league_url: league_url.clone() }, class: "btn btn-outline-warning", "Registration Management" }
-                                    button {
-                                        class: "btn btn-outline-danger",
-                                        onclick: move |_| {
-                                            delete_modal_open.set(true);
-                                            delete_confirm_url.set(String::new());
-                                            delete_error.set(None);
-                                        },
-                                        "Delete League"
-                                    }
-                                }
-                            }
-                        }
-                    }
                 }
-
+                section { id: "league-section-teams", class: "event-section", aria_labelledby: "league-tab-teams", hidden: active_tab != "teams",
+                    if d.teams_with_counts.is_empty() {
+                        div { class: "card", div { class: "card-body", h2 { "Registered teams" } p { class: "text-muted mb-0", "No teams have registered yet." } } }
+                    }
             EventTeamsList {
                 teams: d.teams_with_counts.clone(),
-                card_title: "Registered Teams".to_string(),
+                card_title: "Registered teams".to_string(),
                 show_registered_at: true,
                 max_team_size_roster: d.league.max_team_size_roster,
             }
+
+            if !d.unattached_players.is_empty() {
+                div { class: "row mt-4",
+                    div { class: "col-12",
+                        div { class: "card data-section event-roster",
+                            div { class: "card-header", h5 { class: "mb-0", "Unattached Players ({unattached_count})" } }
+                            div { class: "card-body",
+                                div { class: "table-responsive",
+                                    table { class: "table roster-table",
+                                        thead {
+                                            tr {
+                                                th { scope: "col", "Player Name" }
+                                                th { scope: "col", "Jersey" }
+                                                th { scope: "col", class: "table-nowrap", "Registration Date" }
+                                            }
+                                        }
+                                        tbody {
+                                            for p in d.unattached_players.iter() {
+                                                tr { key: "{p.player_id}",
+                                                    td { class: "table-copy",
+                                                        div { class: "roster-identity",
+                                                            if let Some(photo) = &p.profile_photo {
+                                                                img { src: "{backend}/static/{photo}", alt: "", class: "rounded-circle me-2", style: "width: 32px; height: 32px; object-fit: cover; flex-shrink: 0;" }
+                                                            }
+                                                            div {
+                                                                Link { to: Route::PlayerProfilePage { id: p.player_id.clone() }, class: "roster-name",
+                                                                    strong { "{p.player_name}" }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    td { class: "roster-wide", "data-label": "Jersey",
+                                                        if p.jersey_name.is_some() || p.jersey_number.is_some() {
+                                                            span { class: "table-jersey",
+                                                                if let Some(name) = &p.jersey_name { span { class: "table-copy", "{name}" } }
+                                                                if let Some(num) = &p.jersey_number { span { class: "table-nowrap", "#{num}" } }
+                                                            }
+                                                        } else {
+                                                            span { class: "text-muted", "No jersey info" }
+                                                        }
+                                                    }
+                                                    td { class: "table-nowrap roster-wide", "data-label": "Registered", {crate::time_format::format_registration_timestamp(p.registered_at.as_deref().unwrap_or("—"))} }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+
+
+
+                }
+                }
+
+                }
             if show_edit_modal() {
                 if let Some(Ok(me)) = me_res.read().as_ref() {
                     EditRegistrationModal {
@@ -314,13 +402,14 @@ pub fn LeagueHome(league_url: String) -> Element {
                     }
                 }
             }
+
             }
-            }
-        }}
+                }
+            }}
         } else if let Some(Err(e)) = val.read().as_ref() {
-            div { class: "alert alert-danger", "{e}" }
+            div { class: "alert alert-danger", role: "alert", "{e}" }
         } else {
-            p { class: "text-muted", "Loading…" }
+            p { class: "text-muted", role: "status", "Loading…" }
         }
     }
 }

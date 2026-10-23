@@ -1,0 +1,161 @@
+/* Operational surfaces share the shell palette while keeping live timing and
+   canvas geometry independent of presentation. */
+.arctos-app .operator-setup .card, .arctos-app .operator-finalize .card { margin-bottom: 1rem; }
+.arctos-app .operator-setup .row.mb-4 { row-gap: 1rem; }
+.arctos-app .operator-signature-pad { background: #fff; border-radius: .85rem; }
+.arctos-app .operator-finalize .row.mb-4 { row-gap: 1.25rem; }
+.arctos-app .operator-signature-pad canvas { display: block; }
+/* The counter and primary controls stay together on narrow phones. */
+.arctos-app .stones-page { max-width: 680px; padding: 0; }
+.arctos-app .stones-heading { text-align: center; margin: 1rem 0 1.5rem; }
+.arctos-app .stones-heading h1 { margin-bottom: .5rem; }
+.arctos-app .stones-heading p { color: var(--ui-muted); margin: 0; }
+.arctos-app .stones-player-card > .card-body { padding: 1.5rem; }
+.arctos-app .stones-counter-panel { text-align: center; }
+.arctos-app .stones-counter-panel h2 { margin-bottom: .5rem; }
+.arctos-app .stones-sync-status { display: flex; justify-content: center; align-items: center; gap: .4rem; color: var(--ui-muted); font-size: .875rem; margin-bottom: 1rem; }
+.arctos-app .stones-sync-status.is-ready { color: var(--ui-success-text); }
+.arctos-app .stones-count { font-size: clamp(4.5rem, 17vw, 7rem); font-weight: 750; line-height: 1.15; letter-spacing: -.06em; color: var(--ui-accent-text); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.arctos-app .stones-count-time { display: flex; flex-direction: column; gap: .1rem; margin: .6rem 0 1.5rem; color: var(--ui-muted); font-size: 1.5rem; font-variant-numeric: tabular-nums; }
+.arctos-app .stones-count-time-label { font-size: .75rem; }
+.arctos-app .stones-progress { display: block; width: 100%; height: .7rem; border: 0; border-radius: 1rem; overflow: hidden; color: var(--ui-accent); background: var(--ui-surface-hover); appearance: none; }
+.arctos-app .stones-progress::-webkit-progress-bar { background: var(--ui-surface-hover); border-radius: 1rem; }
+.arctos-app .stones-progress::-webkit-progress-value { background: var(--ui-accent); border-radius: 1rem; }
+.arctos-app .stones-progress::-moz-progress-bar { background: var(--ui-accent); border-radius: 1rem; }
+.arctos-app .stones-progress-labels { display: flex; justify-content: space-between; margin: .45rem 0 1.35rem; color: var(--ui-muted); font-size: .8125rem; }
+.arctos-app .stones-playback { display: flex; justify-content: center; align-items: center; gap: .5rem; }
+.arctos-app .stones-playback .btn { display: inline-flex; justify-content: center; align-items: center; gap: .5rem; min-width: 0; min-height: 48px; margin: 0; padding: .6rem 1rem; }
+.arctos-app .stones-playback .stones-mute { width: 48px; padding: .6rem; flex-shrink: 0; }
+.arctos-app .stones-mute[aria-pressed="true"] { background: var(--ui-surface-hover); color: var(--ui-text); }
+.arctos-app .stones-count-help { color: var(--ui-muted); font-size: .8125rem; margin: 1rem 0 1.5rem; }
+.arctos-app .stones-sound-picker { padding: 1.25rem 0; margin-bottom: 1rem; border-top: 1px solid var(--ui-border); border-bottom: 1px solid var(--ui-border); }
+.arctos-app .stones-sound-controls { display: flex; gap: .5rem; align-items: stretch; }
+.arctos-app .stones-sound-controls .form-select { flex: 1; min-width: 0; }
+.arctos-app .stones-sound-controls .btn { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; min-height: 44px; flex-shrink: 0; }
+.arctos-app .stones-details { border-top: 1px solid var(--ui-border); padding: .8rem 0; }
+.arctos-app .stones-details summary { cursor: pointer; font-weight: 600; min-height: 44px; padding: .55rem 0; }
+.arctos-app .stones-details li { margin-bottom: .65rem; }
+.arctos-app .stones-beat-dot { width: 44px; height: 44px; border-radius: 50%; background: var(--ui-surface-hover); border: 2px solid var(--ui-border); flex: 0 0 auto; }
+.arctos-app .stones-beat-dot-on { background: var(--ui-accent); border-color: var(--ui-accent); box-shadow: 0 0 0 5px var(--ui-accent-soft); }
+@media (max-width: 575.98px) {
+    .arctos-app .stones-player-card > .card-body { padding: 1rem; }
+    .arctos-app .stones-playback .btn { padding-inline: .65rem; gap: .4rem; }
+    .arctos-app .stones-sound-controls { flex-wrap: wrap; }
+    .arctos-app .stones-sound-controls .form-select { flex-basis: 55%; }
+}
+@media (max-width: 359.98px) {
+    .arctos-app .stones-sound-controls .form-select { flex: 0 0 100%; width: 100%; }
+    .arctos-app .stones-sound-controls .btn { margin-left: auto; }
+}
+.arctos-app .run-match-page { max-width: 1120px; padding: 0; }
+.arctos-app .run-match-page h2 { margin-bottom: 1rem; }
+.arctos-app .run-match-page #score-stones-card { margin-top: 1.25rem; border-color: var(--ui-accent); }
+.arctos-app .run-match-page #score-by-set strong { font-size: 2rem; font-variant-numeric: tabular-nums; }
+.arctos-app .run-match-page #score-by-set small { font-size: .9rem; }
+.arctos-app .run-match-page #time-elapsed { color: var(--bs-success); font-variant-numeric: tabular-nums; }
+.arctos-app .run-match-page .winner-option { min-height: 44px; border-radius: .65rem; background: var(--bs-tertiary-bg); color: var(--bs-body-color); border-color: var(--bs-border-color); }
+.arctos-app .run-match-page .winner-option:hover { background: var(--bs-secondary-bg); }
+.arctos-app .run-match-page .winner-option.active { background: var(--bs-primary); border-color: var(--bs-primary); color: var(--ui-accent-contrast); }
+.arctos-app .run-match-page .delete-point-btn { width: 44px; height: 44px; border-radius: .6rem; background: var(--ui-danger-soft); color: var(--bs-danger); }
+.arctos-app .run-match-page .set-number-controls { width: 44px; }
+.arctos-app .run-match-page .set-number-controls button.set-step-btn { width: 44px; height: 36px; color: var(--bs-secondary-color); }
+.arctos-app .run-match-page #quick-timer { min-height: 56px; background: var(--bs-tertiary-bg); color: var(--bs-body-color); border-color: var(--bs-border-color); border-radius: .8rem; }
+.arctos-app .run-match-page #quick-timer:hover, .arctos-app .run-match-page #quick-timer.qt-dragging { background: var(--bs-secondary-bg); }
+.arctos-app .run-match-page #points-table { min-width: 620px; }
+.arctos-app .run-match-page .point-mobile-label { display: none; }
+.arctos-app .match-page .match-overview .card-body > .row { row-gap: 1.1rem; }
+.arctos-app .match-page .match-live { border-color: var(--ui-success-border); }
+.arctos-app .match-page .match-live .card-header { background: var(--ui-success-soft); }
+.arctos-app .match-page .match-video .card-header { flex-wrap: wrap; gap: .75rem; }
+.arctos-app .match-page #youtube-player-container { overflow: hidden; border-radius: .8rem; background: var(--ui-media-bg); }
+.arctos-app .match-page #youtube-player-container iframe { width: 100%; height: 100%; }
+.arctos-app .match-page #points-dropdown { max-width: 100%; }
+@media (max-width: 767.98px) {
+    .arctos-app .run-match-page { padding-bottom: calc(116px + env(safe-area-inset-bottom)); }
+    .arctos-app .run-match-page #score-stones-card .card-body { padding: 1rem; }
+    .arctos-app .run-match-page #score-by-set strong { font-size: 1.5rem; }
+    .arctos-app .run-match-page #score-by-set small { font-size: .85rem; }
+    .arctos-app .run-match-page #quick-timer { position: relative; top: auto; right: auto; z-index: 1; min-width: 64px; height: 56px; }
+    .arctos-app .run-match-page #quick-timer.qt-dragging { z-index: 2001; }
+    .arctos-app .mobile-button-wrapper.operator-match-controls { padding: .75rem .75rem calc(.75rem + env(safe-area-inset-bottom)); gap: .65rem; background: var(--bs-body-bg); border-top: 1px solid var(--bs-border-color); box-shadow: 0 -8px 28px var(--ui-shadow-strong); }
+    .arctos-app .mobile-button-wrapper.operator-match-controls .btn { border-radius: .85rem; min-height: 64px; font-size: 1rem; }
+    .arctos-app .run-match-page .set-number-controls button.set-step-btn { height: 44px; }
+    .arctos-app .operator-setup .input-group { flex-wrap: wrap; }
+    .arctos-app .operator-finalize .card-body { padding: 1rem; }
+    .arctos-app .match-page > .row > .col-md-4 { margin-top: 1rem; }
+}
+
+/* Keep every point action within the phone viewport. The same table and
+   controls remain in the DOM, preserving live state, focus, and handlers. */
+@media (max-width: 575.98px) {
+    .arctos-app .run-match-page .point-history { border: 0; background: transparent; overflow: visible; }
+    .arctos-app .run-match-page #points-table, .arctos-app .run-match-page #points-table tbody { display: block; width: 100%; min-width: 0; }
+    .arctos-app .run-match-page #points-table thead { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
+    .arctos-app .run-match-page #points-table .point-entry {
+        display: grid;
+        grid-template-columns: minmax(0,1fr) 112px minmax(0,1fr);
+        grid-template-areas: "point set stones" "winner winner winner" "rerun notes delete";
+        align-items: center;
+        gap: 12px 8px;
+        padding: 12px;
+        margin-bottom: 12px;
+        border: 1px solid var(--bs-border-color);
+        border-radius: .8rem;
+        background: var(--bs-body-bg);
+    }
+    .arctos-app .run-match-page #points-table .point-entry > td { display: block; min-width: 0; border: 0; padding: 0; background: transparent; box-shadow: none; }
+    .arctos-app .run-match-page .point-mobile-label { display: block; margin-bottom: 5px; color: var(--bs-secondary-color); font-size: .75rem; font-weight: 600; }
+    .arctos-app .run-match-page #points-table .point-index { grid-area: point; text-align: left !important; font-weight: 600; }
+    .arctos-app .run-match-page #points-table .point-set { grid-area: set; text-align: center; }
+    .arctos-app .run-match-page #points-table .point-stones { grid-area: stones; text-align: right; font-variant-numeric: tabular-nums; }
+    .arctos-app .run-match-page #points-table .point-winner { grid-area: winner; }
+    .arctos-app .run-match-page #points-table .point-rerun { grid-area: rerun; }
+    .arctos-app .run-match-page #points-table .point-notes { grid-area: notes; }
+    .arctos-app .run-match-page #points-table .point-delete { grid-area: delete; justify-self: end; }
+    .arctos-app .run-match-page .set-number-controls { flex-direction: row; justify-content: center; width: 112px; }
+    .arctos-app .run-match-page .set-number-controls .set-number-display { min-width: 24px; }
+    .arctos-app .run-match-page .set-number-controls button.set-step-btn { flex: 0 0 44px; border: 1px solid var(--bs-border-color); border-radius: .5rem; background: var(--bs-tertiary-bg); }
+    .arctos-app .run-match-page .winner-cell, .arctos-app .run-match-page .winner-options-group { width: 100%; }
+    .arctos-app .run-match-page .winner-options-group { flex-wrap: nowrap; gap: 8px; }
+    .arctos-app .run-match-page .winner-option { flex: 1 1 0; justify-content: center; padding: 10px 6px; }
+    .arctos-app .run-match-page .winner-option .winner-name { min-width: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+    .arctos-app .run-match-page .point-rerun-toggle { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-width: 44px; min-height: 44px; margin: 0; padding: 0; cursor: pointer; }
+    .arctos-app .run-match-page .point-rerun-toggle .form-check-input { float: none; margin: 0; }
+    .arctos-app .run-match-page .point-rerun-toggle .point-mobile-label { margin: 0; }
+    .arctos-app .run-match-page .point-note-actions { flex-direction: row !important; justify-content: center; }
+    .arctos-app .run-match-page .point-note-actions .btn { flex: 0 0 44px; width: 44px; padding: 0; }
+    .arctos-app .run-match-page #points-table .point-row-no-border { border-bottom: 0; border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+    .arctos-app .run-match-page #points-table .point-note-details { display: block; margin-top: -12px; margin-bottom: 12px; border: 1px solid var(--bs-border-color); border-top: 0; border-radius: 0 0 .8rem .8rem; }
+    .arctos-app .run-match-page #points-table .point-note-details > td { display: block; padding: 0 12px 12px; border: 0; background: transparent; box-shadow: none; overflow-wrap: anywhere; }
+    .arctos-app .run-match-page #points-table .point-entry:last-child, .arctos-app .run-match-page #points-table .point-note-details:last-child { margin-bottom: 0; }
+}
+
+/* Registration managers keep one person's details and controls together on phones. */
+.arctos-app .management-table th, .arctos-app .management-table td { overflow-wrap: normal; word-break: normal; }
+.arctos-app .management-payment { margin-top: 10px; }
+.arctos-app .management-payment-controls { max-width: 420px; }
+.arctos-app .management-payment-confirmed { gap: 8px; cursor: pointer; white-space: normal; }
+.arctos-app .management-payment-confirmed .form-check-input { flex-shrink: 0; }
+@media (min-width: 992px) {
+    .arctos-app .management-table { min-width: 960px; }
+    .arctos-app .management-actions { min-width: 330px; }
+}
+@media (max-width: 991.98px) {
+    .arctos-app .management-table-wrap { overflow: visible; }
+    .arctos-app .management-table, .arctos-app .management-table tbody { display: block; width: 100%; }
+    .arctos-app .management-table thead { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
+    .arctos-app .management-table tr { display: flex; flex-direction: column; width: 100%; padding: 12px 0; border-bottom: 1px solid var(--bs-border-color); }
+    .arctos-app .management-table tr:last-child { border-bottom: 0; }
+    .arctos-app .management-table td { display: block; min-width: 0; width: 100%; border: 0; padding: 7px 14px; background: var(--ui-surface); box-shadow: none; overflow-wrap: anywhere; }
+    .arctos-app .management-table td.table-number { text-align: left; }
+    .arctos-app .management-table td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 3px; color: var(--bs-secondary-color); font-size: .75rem; font-weight: 600; }
+    .arctos-app .management-table td:first-child { font-size: 1rem; }
+    .arctos-app .management-table .management-actions { border-top: 1px solid var(--bs-border-color); margin-top: 8px; padding-top: 12px; }
+    .arctos-app .management-actions > .btn { width: 100%; }
+    .arctos-app .management-payment-controls { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 8px 0; width: 100%; }
+    .arctos-app .management-payment-controls > * { margin: 0 !important; }
+    .arctos-app .management-payment-controls > .form-control { width: 100%; min-width: 0; border-radius: 0 8px 8px 0 !important; }
+    .arctos-app .management-payment-controls > .input-group-text:first-child { border-radius: 8px 0 0 8px; }
+    .arctos-app .management-payment-controls > .management-payment-confirmed, .arctos-app .management-payment-controls > .btn, .arctos-app .management-payment-controls > .w-100 { grid-column: 1 / -1; width: 100%; min-height: 44px; border-radius: 8px !important; }
+    .arctos-app .management-payment-confirmed { justify-content: flex-start; gap: 12px; }
+}

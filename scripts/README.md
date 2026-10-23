@@ -19,6 +19,19 @@ it. The "Examples" section below shows the most common invocations.
 
 ## Examples
 
+**Try the mobile interface with isolated sample data:**
+
+```bash
+just demo                    # creates instance/demo.db on the first run
+just frontend                # run in a second terminal
+uv run python scripts/check_mobile_ui.py --screenshots /tmp/arctos-ui
+```
+
+The demo uses dedicated local accounts and never opens `tournament.db`.
+The browser check requires the demo marker endpoint and blocks data changes.
+See [`TESTING.md`](../TESTING.md#mobile-browser-verification) for Chromium
+setup, supported viewport sizes, and integration testing limits.
+
 **Backup before a migration:**
 
 ```bash

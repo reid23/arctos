@@ -124,12 +124,12 @@ fn AppCard(client: OAuthClient, on_change: EventHandler<()>, on_secret: EventHan
     };
 
     rsx! {
-        div { class: "card mb-3",
-            div { class: "card-header d-flex justify-content-between align-items-center",
+        div { class: if editing() { "edit-section mb-3" } else { "card mb-3" },
+            div { class: if editing() { "edit-section-heading d-flex justify-content-between align-items-center" } else { "card-header d-flex justify-content-between align-items-center" },
                 h5 { class: "mb-0", "{client.name}" }
                 span { class: "badge bg-secondary", if client.confidential { "Confidential" } else { "Public" } }
             }
-            div { class: "card-body",
+            div { class: if editing() { "edit-section-body" } else { "card-body" },
                 if let Some(message) = error() {
                     div { class: "alert alert-danger py-2", "{message}" }
                 }
@@ -200,9 +200,9 @@ fn NewAppCard(on_created: EventHandler<Option<(String, String)>>) -> Element {
     let mut error = use_signal(|| None::<String>);
 
     rsx! {
-        div { class: "card mb-3",
-            div { class: "card-header", h5 { class: "mb-0", "Register a new app" } }
-            div { class: "card-body",
+        div { class: "edit-section mb-3",
+            div { class: "edit-section-heading", h5 { class: "mb-0", "Register a new app" } }
+            div { class: "edit-section-body",
                 if let Some(message) = error() {
                     div { class: "alert alert-danger py-2", "{message}" }
                 }

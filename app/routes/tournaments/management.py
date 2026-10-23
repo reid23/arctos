@@ -38,11 +38,34 @@ from app.services.dual_write import set_head_ref_allowlist_from_csv
 from app.models.validators import URL_SLUG_ALLOWED_HINT, is_valid_url_slug
 from app.utils.decorators import require_tournament_organizer
 from app.utils.datetime_helpers import now_utc_naive
+from app.utils.profile_banner_helpers import (
+    BannerUploadError,
+    read_banner_upload,
+    remove_banner,
+    replace_banner,
+)
 
 
 from app.services.permission_service import PermissionService
 
 from . import bp, delete_matches_with_children
+
+
+@bp.route("/tournaments/<tournament_url>/banner-photo", methods=["POST", "DELETE"])
+@login_required
+def tournament_banner_photo(tournament_url):
+    """Replace or remove a banner using the tournament's typed TO permissions."""
+    tournament = Tournament.query.get_or_404(tournament_url)
+    if not PermissionService.is_tournament_organizer_of(tournament, current_user):
+        return jsonify({"error": "Only tournament organizers can change this banner."}), 403
+    try:
+        if request.method == "DELETE":
+            remove_banner(tournament, "tournament", tournament.url)
+            return jsonify({"success": True})
+        path = replace_banner(tournament, "tournament", tournament.url, read_banner_upload())
+        return jsonify({"success": True, "path": path})
+    except BannerUploadError as error:
+        return jsonify({"error": str(error)}), error.status
 
 
 @bp.route("/create-tournament", methods=["POST"])

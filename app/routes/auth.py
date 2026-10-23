@@ -3,6 +3,8 @@ Authentication routes: logout, check-username, Google OAuth (login + callback on
 Login and register are handled by the SPA and _api.
 """
 
+from urllib.parse import urlsplit
+
 from flask import (
     Blueprint,
     request,
@@ -64,13 +66,34 @@ def _redirect_to_frontend(path: str = ""):
 def _google_callback_uri() -> str:
     """Return the Google OAuth callback URI registered in Google Cloud Console.
 
-    The callback host/scheme is derived from the current request so the same
-    server can answer on multiple public domains, provided each callback URI
-    is authorized in Google Cloud Console.
+    An explicit URI supports development proxies that replace the Host header.
+    Without one, derive the callback from the request to support multiple public
+    domains. Each callback URI must be authorized in Google Cloud Console.
 
     Returns:
         Absolute callback URL string.
     """
+    configured = current_app.config.get("GOOGLE_REDIRECT_URI", "")
+    if configured:
+        error = "GOOGLE_REDIRECT_URI must be an absolute HTTP(S) callback URL without credentials, query, or fragment"
+        if not isinstance(configured, str) or any(c.isspace() or ord(c) < 32 for c in configured) or "\\" in configured:
+            raise ValueError(error)
+        try:
+            parsed = urlsplit(configured)
+            valid = (
+                parsed.scheme in ("http", "https")
+                and parsed.hostname
+                and parsed.port != 0
+                and parsed.username is None
+                and parsed.password is None
+                and "?" not in configured
+                and "#" not in configured
+            )
+        except ValueError as exc:
+            raise ValueError(error) from exc
+        if not valid:
+            raise ValueError(error)
+        return configured
     return f"{request.url_root.rstrip('/')}{url_for('auth.google_callback')}"
 
 

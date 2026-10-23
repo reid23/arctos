@@ -3,14 +3,78 @@ use dioxus::prelude::*;
 use reqwest::Client;
 use serde_json::Value;
 
+/// Same-origin requests work behind nginx and the Dioxus development proxy,
+/// including when a phone opens the dev server over the local network.
+/// An explicit build-time override remains available for separate API hosts.
 pub fn base_url() -> String {
-    if cfg!(debug_assertions) {
+    if let Some(base) = option_env!("ARCTOS_API_BASE").filter(|base| !base.is_empty()) {
+        return base.trim_end_matches('/').to_string();
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::window()
+            .and_then(|window| window.location().origin().ok())
+            .unwrap_or_default()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
         "http://127.0.0.1:5006".to_string()
+    }
+}
+
+/// Resolve stored upload paths and existing public file URLs against the API.
+pub fn static_file_url(path: &str) -> String {
+    static_file_url_for_base(&base_url(), path)
+}
+
+fn static_file_url_for_base(base: &str, path: &str) -> String {
+    let path = path.trim();
+    if path.starts_with("https://") || path.starts_with("http://") {
+        return path.to_string();
+    }
+    let relative = path.trim_start_matches('/');
+    let base = base.trim_end_matches('/');
+    if relative.starts_with("static/") {
+        format!("{base}/{relative}")
+    } else if relative.starts_with("uploads/") || !path.starts_with('/') {
+        format!("{base}/static/{relative}")
     } else {
-        let window = web_sys::window().unwrap();
-        let location = window.location();
-        let origin = location.origin().unwrap();
-        origin
+        // Older records can point at a public route such as /event/waiver.
+        format!("{base}/{relative}")
+    }
+}
+
+#[cfg(test)]
+mod static_file_url_tests {
+    use super::static_file_url_for_base;
+
+    #[test]
+    fn uploaded_waivers_resolve_under_static_without_duplicate_prefixes() {
+        let expected = "http://localhost:8080/static/uploads/waivers/cup/waiver.pdf";
+        for path in [
+            "uploads/waivers/cup/waiver.pdf",
+            "/uploads/waivers/cup/waiver.pdf",
+            "static/uploads/waivers/cup/waiver.pdf",
+            "/static/uploads/waivers/cup/waiver.pdf",
+        ] {
+            assert_eq!(static_file_url_for_base("http://localhost:8080/", path), expected);
+        }
+    }
+
+    #[test]
+    fn existing_public_urls_and_backend_subpaths_are_preserved() {
+        assert_eq!(
+            static_file_url_for_base("https://events.example/arctos/", "/cup/waiver"),
+            "https://events.example/arctos/cup/waiver"
+        );
+        assert_eq!(
+            static_file_url_for_base("https://events.example", "https://files.example/waiver.pdf"),
+            "https://files.example/waiver.pdf"
+        );
+        assert_eq!(
+            static_file_url_for_base("https://events.example", "//other.example/waiver.pdf"),
+            "https://events.example/other.example/waiver.pdf"
+        );
     }
 }
 
@@ -40,7 +104,7 @@ fn truncate_error_body(text: &str, max_len: usize) -> String {
     } else {
         format!(
             "{}... ({} bytes total). Check server logs for full error.",
-            &t[..max_len],
+            &t[..t.floor_char_boundary(max_len)],
             t.len()
         )
     }
@@ -450,8 +514,12 @@ pub async fn register_player_as_to(
         "waiver_legal_name_signature": waiver_legal_name_signature,
     });
     let r = with_credentials(
-        c.post(format!("{}/_api/{}/register-player-as-to", base(), tournament_url))
-            .json(&body),
+        c.post(format!(
+            "{}/_api/{}/register-player-as-to",
+            base(),
+            tournament_url
+        ))
+        .json(&body),
     )
     .send()
     .await
@@ -477,8 +545,12 @@ pub async fn register_team_as_to(
         }
     }
     let r = with_credentials(
-        c.post(format!("{}/_api/{}/register-team-as-to", base(), tournament_url))
-            .json(&body),
+        c.post(format!(
+            "{}/_api/{}/register-team-as-to",
+            base(),
+            tournament_url
+        ))
+        .json(&body),
     )
     .send()
     .await
@@ -1293,7 +1365,6 @@ pub async fn set_bracket_published(
     response_json(r).await
 }
 
-
 /// Persist bracket canvas state (match placements + annotations) for a tournament (TO only).
 pub async fn save_bracket_placements(
     tournament_url: &str,
@@ -1347,7 +1418,10 @@ pub async fn add_bracket_text(
     .await
     .map_err(|e| e.to_string())?;
     if !r.status().is_success() {
-        return Err(r.text().await.unwrap_or_else(|_| "Failed to add text".into()));
+        return Err(r
+            .text()
+            .await
+            .unwrap_or_else(|_| "Failed to add text".into()));
     }
     response_json(r).await
 }
@@ -1386,7 +1460,10 @@ pub async fn add_bracket_labeled_team_with(
     .await
     .map_err(|e| e.to_string())?;
     if !r.status().is_success() {
-        return Err(r.text().await.unwrap_or_else(|_| "Failed to add team label".into()));
+        return Err(r
+            .text()
+            .await
+            .unwrap_or_else(|_| "Failed to add team label".into()));
     }
     response_json(r).await
 }
@@ -1417,7 +1494,10 @@ pub async fn add_bracket_image_element(
     .await
     .map_err(|e| e.to_string())?;
     if !r.status().is_success() {
-        return Err(r.text().await.unwrap_or_else(|_| "Failed to add image".into()));
+        return Err(r
+            .text()
+            .await
+            .unwrap_or_else(|_| "Failed to add image".into()));
     }
     response_json(r).await
 }
@@ -1440,7 +1520,10 @@ pub async fn convert_labeled_team_port(
     .await
     .map_err(|e| e.to_string())?;
     if !r.status().is_success() {
-        return Err(r.text().await.unwrap_or_else(|_| "Failed to convert port".into()));
+        return Err(r
+            .text()
+            .await
+            .unwrap_or_else(|_| "Failed to convert port".into()));
     }
     response_json(r).await
 }
@@ -1579,7 +1662,6 @@ pub async fn match_detail(
     response_json(r).await
 }
 
-
 pub async fn players_list(search: &str, page: u32) -> Result<PlayersListResponse, String> {
     let c = client();
     let mut req = c
@@ -1663,7 +1745,6 @@ pub async fn stones_list() -> Result<StonesResponse, String> {
     response_json(r).await
 }
 
-
 pub async fn server_time() -> Result<ServerTimeResponse, String> {
     let c = client();
     let r = with_credentials(c.get(format!("{}/_api/server-time", base())))
@@ -1673,7 +1754,6 @@ pub async fn server_time() -> Result<ServerTimeResponse, String> {
     response_json(r).await
 }
 
-
 pub async fn scoreboard_state(
     tournament_url: &str,
     field_name: &str,
@@ -1681,13 +1761,11 @@ pub async fn scoreboard_state(
 ) -> Result<ScoreboardStateResponse, String> {
     let c = client();
     let tz_offset_minutes = tz_offset_minutes.to_string();
-    let r = with_credentials(
-        c.get(format!("{}/_api/scoreboard-state", base())).query(&[
-            ("tournament", tournament_url),
-            ("field", field_name),
-            ("tz_offset_minutes", tz_offset_minutes.as_str()),
-        ]),
-    )
+    let r = with_credentials(c.get(format!("{}/_api/scoreboard-state", base())).query(&[
+        ("tournament", tournament_url),
+        ("field", field_name),
+        ("tz_offset_minutes", tz_offset_minutes.as_str()),
+    ]))
     .send()
     .await
     .map_err(|e| e.to_string())?;
@@ -2085,7 +2163,6 @@ pub async fn update_stones(
     Ok(data)
 }
 
-
 /// Upload a single bracket image as raw bytes and return its relative static path.
 #[cfg(target_arch = "wasm32")]
 pub async fn upload_bracket_image_bytes(
@@ -2125,7 +2202,6 @@ pub async fn upload_bracket_image_bytes(
             .to_string())
     }
 }
-
 
 pub async fn update_field(
     tournament_url: &str,
@@ -2340,6 +2416,56 @@ pub async fn force_start_match(
     }
 }
 
+/// Save profile text and any locally prepared image changes in one transaction.
+pub async fn save_profile_edit(
+    kind: &str,
+    id: &str,
+    profile: &impl serde::Serialize,
+    photo: Option<bytes::Bytes>,
+    banner: Option<bytes::Bytes>,
+    remove_photo: bool,
+    remove_banner: bool,
+) -> Result<(), String> {
+    if !matches!(kind, "players" | "teams") {
+        return Err("Unknown profile type".to_string());
+    }
+    let mut form = reqwest::multipart::Form::new().text(
+        "profile",
+        serde_json::to_string(profile).map_err(|error| error.to_string())?,
+    );
+    for (field, image, remove) in [
+        ("profile_photo", photo, remove_photo),
+        ("banner_photo", banner, remove_banner),
+    ] {
+        if image.is_some() && remove {
+            return Err("Choose either a replacement image or removal, not both.".to_string());
+        }
+        if let Some(image) = image {
+            form = form.part(
+                field,
+                reqwest::multipart::Part::bytes(image.to_vec()).file_name("image"),
+            );
+        }
+        if remove {
+            form = form.text(format!("remove_{field}"), "true");
+        }
+    }
+    let response = with_credentials(
+        client()
+            .put(format!("{}/_api/{kind}/{}", base(), urlencoding::encode(id)))
+            .multipart(form),
+    )
+    .send()
+    .await
+    .map_err(|error| error.to_string())?;
+    let data: StatusResponse = response_json(response).await?;
+    if data.success {
+        Ok(())
+    } else {
+        Err(data.error.unwrap_or_else(|| "Your profile could not be saved.".to_string()))
+    }
+}
+
 pub async fn update_player_profile(
     player_id: &str,
     req: &UpdatePlayerProfileRequest,
@@ -2490,6 +2616,47 @@ pub async fn delete_team_profile_photo(team_id: &str) -> Result<(), String> {
             .unwrap_or("Failed to remove photo")
             .to_string())
     }
+}
+
+async fn upload_profile_banner(kind: &str, id: &str, bytes: bytes::Bytes) -> Result<String, String> {
+    let response = with_credentials(client().post(format!(
+        "{}/_api/{}/{}/banner-photo", base(), kind, urlencoding::encode(id)
+    )).body(bytes)).send().await.map_err(|error| error.to_string())?;
+    let data: Value = response_json(response).await?;
+    if data.get("success").and_then(Value::as_bool) == Some(true) {
+        data.get("path").and_then(Value::as_str).map(str::to_string)
+            .ok_or_else(|| "No banner path returned".to_string())
+    } else {
+        Err(data.get("error").and_then(Value::as_str).unwrap_or("Banner upload failed").to_string())
+    }
+}
+
+async fn delete_profile_banner(kind: &str, id: &str) -> Result<(), String> {
+    let response = with_credentials(client().delete(format!(
+        "{}/_api/{}/{}/banner-photo", base(), kind, urlencoding::encode(id)
+    ))).send().await.map_err(|error| error.to_string())?;
+    let data: Value = response_json(response).await?;
+    if data.get("success").and_then(Value::as_bool) == Some(true) {
+        Ok(())
+    } else {
+        Err(data.get("error").and_then(Value::as_str).unwrap_or("Could not remove banner").to_string())
+    }
+}
+
+pub async fn upload_player_banner_photo(id: &str, bytes: bytes::Bytes) -> Result<String, String> {
+    upload_profile_banner("players", id, bytes).await
+}
+
+pub async fn delete_player_banner_photo(id: &str) -> Result<(), String> {
+    delete_profile_banner("players", id).await
+}
+
+pub async fn upload_team_banner_photo(id: &str, bytes: bytes::Bytes) -> Result<String, String> {
+    upload_profile_banner("teams", id, bytes).await
+}
+
+pub async fn delete_team_banner_photo(id: &str) -> Result<(), String> {
+    delete_profile_banner("teams", id).await
 }
 
 pub async fn get_my_player_registration(
@@ -2809,10 +2976,14 @@ pub async fn list_event_footage(
     tournament_url: &str,
 ) -> Result<crate::types::FootageListResponse, String> {
     let c = client();
-    let r = with_credentials(c.get(format!("{}/_api/tournaments/{}/footage", base(), tournament_url)))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let r = with_credentials(c.get(format!(
+        "{}/_api/tournaments/{}/footage",
+        base(),
+        tournament_url
+    )))
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
     response_json(r).await
 }
 
@@ -3356,8 +3527,12 @@ pub async fn sidecomp_update_registration(comp_id: i32, weapon: &str) -> Result<
     let c = client();
     let body = serde_json::json!({"weapon": weapon});
     let r = with_credentials(
-        c.patch(format!("{}/_api/sidecomps/{}/registration", base(), comp_id))
-            .json(&body),
+        c.patch(format!(
+            "{}/_api/sidecomps/{}/registration",
+            base(),
+            comp_id
+        ))
+        .json(&body),
     )
     .send()
     .await
@@ -3367,14 +3542,10 @@ pub async fn sidecomp_update_registration(comp_id: i32, weapon: &str) -> Result<
 
 pub async fn sidecomp_deregister(comp_id: i32) -> Result<Value, String> {
     let c = client();
-    let r = with_credentials(c.post(format!(
-        "{}/_api/sidecomps/{}/deregister",
-        base(),
-        comp_id
-    )))
-    .send()
-    .await
-    .map_err(|e| e.to_string())?;
+    let r = with_credentials(c.post(format!("{}/_api/sidecomps/{}/deregister", base(), comp_id)))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
     response_json(r).await
 }
 
@@ -3386,8 +3557,12 @@ pub async fn sidecomp_to_register_player_as_to(
     let c = client();
     let body = serde_json::json!({"player_id": player_id, "weapon": weapon});
     let r = with_credentials(
-        c.post(format!("{}/_api/sidecomps/{}/register-player-as-to", base(), comp_id))
-            .json(&body),
+        c.post(format!(
+            "{}/_api/sidecomps/{}/register-player-as-to",
+            base(),
+            comp_id
+        ))
+        .json(&body),
     )
     .send()
     .await
@@ -3403,8 +3578,12 @@ pub async fn sidecomp_to_update_player_as_to(
     let c = client();
     let body = serde_json::json!({"player_id": player_id, "weapon": weapon});
     let r = with_credentials(
-        c.post(format!("{}/_api/sidecomps/{}/update-player-as-to", base(), comp_id))
-            .json(&body),
+        c.post(format!(
+            "{}/_api/sidecomps/{}/update-player-as-to",
+            base(),
+            comp_id
+        ))
+        .json(&body),
     )
     .send()
     .await
@@ -3480,7 +3659,10 @@ pub async fn sidecomp_log_result(
     response_json(r).await
 }
 
-pub async fn sidecomp_flag_result(result_uuid: &str, flagged: bool) -> Result<SideCompResultEntry, String> {
+pub async fn sidecomp_flag_result(
+    result_uuid: &str,
+    flagged: bool,
+) -> Result<SideCompResultEntry, String> {
     let c = client();
     let body = serde_json::json!({ "flagged": flagged });
     let r = with_credentials(
@@ -3495,10 +3677,11 @@ pub async fn sidecomp_flag_result(result_uuid: &str, flagged: bool) -> Result<Si
 
 pub async fn sidecomp_delete_result(result_uuid: &str) -> Result<Value, String> {
     let c = client();
-    let r = with_credentials(c.delete(format!("{}/_api/sidecomps/results/{}", base(), result_uuid)))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let r =
+        with_credentials(c.delete(format!("{}/_api/sidecomps/results/{}", base(), result_uuid)))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
     response_json(r).await
 }
 
@@ -3542,14 +3725,10 @@ pub async fn sidecomp_finalize(comp_id: i32) -> Result<Value, String> {
 
 pub async fn sidecomp_standings(comp_id: i32) -> Result<SideCompStandings, String> {
     let c = client();
-    let r = with_credentials(c.get(format!(
-        "{}/_api/sidecomps/{}/standings",
-        base(),
-        comp_id
-    )))
-    .send()
-    .await
-    .map_err(|e| e.to_string())?;
+    let r = with_credentials(c.get(format!("{}/_api/sidecomps/{}/standings", base(), comp_id)))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
     response_json(r).await
 }
 
@@ -3599,7 +3778,9 @@ pub async fn oauth_decide(query: &str, approve: bool) -> Result<String, String> 
     .send()
     .await
     .map_err(|e| e.to_string())?;
-    response_json::<RedirectResponse>(r).await.map(|response| response.redirect)
+    response_json::<RedirectResponse>(r)
+        .await
+        .map(|response| response.redirect)
 }
 
 pub async fn oauth_clients() -> Result<Vec<OAuthClient>, String> {
@@ -3607,7 +3788,9 @@ pub async fn oauth_clients() -> Result<Vec<OAuthClient>, String> {
         .send()
         .await
         .map_err(|e| e.to_string())?;
-    response_json::<OAuthClientsResponse>(r).await.map(|response| response.clients)
+    response_json::<OAuthClientsResponse>(r)
+        .await
+        .map(|response| response.clients)
 }
 
 pub async fn create_oauth_client(
@@ -3622,10 +3805,14 @@ pub async fn create_oauth_client(
         "redirect_uris": redirect_uris,
         "confidential": confidential,
     });
-    let r = with_credentials(client().post(format!("{}/_api/oauth/clients", base())).json(&body))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let r = with_credentials(
+        client()
+            .post(format!("{}/_api/oauth/clients", base()))
+            .json(&body),
+    )
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
     response_json(r).await
 }
 
@@ -3648,22 +3835,31 @@ pub async fn update_oauth_client(
     .send()
     .await
     .map_err(|e| e.to_string())?;
-    response_json::<OAuthClientResponse>(r).await.map(|response| response.client)
+    response_json::<OAuthClientResponse>(r)
+        .await
+        .map(|response| response.client)
 }
 
 pub async fn rotate_oauth_client_secret(client_id: &str) -> Result<String, String> {
-    let r = with_credentials(client().post(format!("{}/_api/oauth/clients/{}/secret", base(), client_id)))
-        .send()
+    let r = with_credentials(client().post(format!(
+        "{}/_api/oauth/clients/{}/secret",
+        base(),
+        client_id
+    )))
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    response_json::<ClientSecretResponse>(r)
         .await
-        .map_err(|e| e.to_string())?;
-    response_json::<ClientSecretResponse>(r).await.map(|response| response.client_secret)
+        .map(|response| response.client_secret)
 }
 
 pub async fn delete_oauth_client(client_id: &str) -> Result<(), String> {
-    let r = with_credentials(client().delete(format!("{}/_api/oauth/clients/{}", base(), client_id)))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let r =
+        with_credentials(client().delete(format!("{}/_api/oauth/clients/{}", base(), client_id)))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
     response_json::<Value>(r).await.map(|_| ())
 }
 
@@ -3672,13 +3868,35 @@ pub async fn connected_apps() -> Result<Vec<ConnectedApp>, String> {
         .send()
         .await
         .map_err(|e| e.to_string())?;
-    response_json::<ConnectedAppsResponse>(r).await.map(|response| response.apps)
+    response_json::<ConnectedAppsResponse>(r)
+        .await
+        .map(|response| response.apps)
 }
 
 pub async fn disconnect_app(client_id: &str) -> Result<(), String> {
-    let r = with_credentials(client().delete(format!("{}/_api/oauth/connected-apps/{}", base(), client_id)))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let r = with_credentials(client().delete(format!(
+        "{}/_api/oauth/connected-apps/{}",
+        base(),
+        client_id
+    )))
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
     response_json::<Value>(r).await.map(|_| ())
+}
+
+pub async fn upload_tournament_banner_photo(id: &str, bytes: bytes::Bytes) -> Result<String, String> {
+    upload_profile_banner("tournaments", id, bytes).await
+}
+
+pub async fn delete_tournament_banner_photo(id: &str) -> Result<(), String> {
+    delete_profile_banner("tournaments", id).await
+}
+
+pub async fn upload_league_banner_photo(id: &str, bytes: bytes::Bytes) -> Result<String, String> {
+    upload_profile_banner("leagues", id, bytes).await
+}
+
+pub async fn delete_league_banner_photo(id: &str) -> Result<(), String> {
+    delete_profile_banner("leagues", id).await
 }
