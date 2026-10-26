@@ -1,0 +1,319 @@
+{
+  "schema_version": 1,
+  "measured_at_utc": "2026-10-26T22:16:19.596600+00:00",
+  "repository_reference": "44b3777",
+  "issue": "https://github.com/reid23/arctos/issues/262",
+  "production_revision": null,
+  "production_revision_note": "No deployed commit identifier was exposed. HTML Last-Modified and hashed assets identify this observation; production HTML differs from the repository reference.",
+  "method": {
+    "browser": "Chrome 154.0.8037.57 headless on Linux",
+    "sample_count": 6,
+    "desktop": {
+      "viewport": "1280x900",
+      "network": "unthrottled host connection",
+      "cpu_slowdown": 1
+    },
+    "mobile_simulation": {
+      "viewport": "390x900",
+      "download_bytes_per_second": 200000,
+      "upload_bytes_per_second": 93750,
+      "added_latency_ms": 150,
+      "cpu_slowdown": 4
+    },
+    "cold": "First navigation in a fresh anonymous browser context. Same Chrome process is shared between profiles; not a fresh-machine benchmark.",
+    "warm": "Second navigation to the same URL in the same browser context, retaining browser caches.",
+    "observation": "Read at least 2.5 seconds after load and initial app text. CDP Fetch permits GET/HEAD only. No interaction or production write.",
+    "limitations": [
+      "One sample per profile/cache condition; lab diagnostics, not field percentiles or a Core Web Vitals pass/fail assessment.",
+      "CDP throttling and request interception are simulation/instrumentation, not a physical mobile device or calibrated Lighthouse run.",
+      "The event cold snapshot still had three unfinished image requests; request totals are not complete page weight.",
+      "LCP and CLS are observed within a bounded window; INP is not measured.",
+      "The load event completes before WASM boot and visible route content and is not an app-ready metric.",
+      "Layout shift values are a simple sum within the observation window, not an official web-vitals CLS session-window calculation. DOM text timestamps precede paint and are reported separately from FCP."
+    ]
+  },
+  "http_documents": [
+    {
+      "url": "https://events.californiajugger.org/",
+      "status": 200,
+      "encoded_body_bytes": 388,
+      "decoded_body_bytes": 739,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "content-encoding": "gzip",
+        "cache-control": null,
+        "etag": "W/\"6ade6b3b-2e3\"",
+        "last-modified": "Sun, 25 Oct 2026 20:48:59 GMT",
+        "vary": null
+      }
+    },
+    {
+      "url": "https://events.californiajugger.org/DryHeat2026",
+      "status": 200,
+      "encoded_body_bytes": 388,
+      "decoded_body_bytes": 739,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "content-encoding": "gzip",
+        "cache-control": null,
+        "etag": "W/\"6ade6b3b-2e3\"",
+        "last-modified": "Sun, 25 Oct 2026 20:48:59 GMT",
+        "vary": null
+      }
+    },
+    {
+      "url": "https://events.californiajugger.org/robots.txt",
+      "status": 200,
+      "encoded_body_bytes": 388,
+      "decoded_body_bytes": 739,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "content-encoding": "gzip",
+        "cache-control": null,
+        "etag": "W/\"6ade6b3b-2e3\"",
+        "last-modified": "Sun, 25 Oct 2026 20:48:59 GMT",
+        "vary": null
+      }
+    },
+    {
+      "url": "https://events.californiajugger.org/sitemap.xml",
+      "status": 200,
+      "encoded_body_bytes": 388,
+      "decoded_body_bytes": 739,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "content-encoding": "gzip",
+        "cache-control": null,
+        "etag": "W/\"6ade6b3b-2e3\"",
+        "last-modified": "Sun, 25 Oct 2026 20:48:59 GMT",
+        "vary": null
+      }
+    },
+    {
+      "url": "https://events.californiajugger.org/__arctos_issue262_missing_page__",
+      "status": 200,
+      "encoded_body_bytes": 388,
+      "decoded_body_bytes": 739,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "content-encoding": "gzip",
+        "cache-control": null,
+        "etag": "W/\"6ade6b3b-2e3\"",
+        "last-modified": "Sun, 25 Oct 2026 20:48:59 GMT",
+        "vary": null
+      }
+    }
+  ],
+  "html": {
+    "empty_main": true,
+    "server_title": "Arctos",
+    "server_description": false,
+    "server_canonical": false,
+    "server_lang": false,
+    "server_noscript_fallback": false,
+    "event_server_title": "Arctos",
+    "event_rendered_title": "DryHeat2026 | Arctos",
+    "event_rendered_description": null,
+    "event_rendered_canonical": null,
+    "script_preload": true,
+    "wasm_preload": false,
+    "bootstrap_mentions_instantiate_streaming": true,
+    "streaming_execution_note": "Bootstrap source contains the streaming path and WASM has application/wasm MIME. Actual execution branch was not separately profiled."
+  },
+  "lab_measurements": [
+    {
+      "profile": "root-desktop",
+      "cache": "cold",
+      "url": "https://events.californiajugger.org/",
+      "started_utc": "2026-10-26T22:16:19.666218+00:00",
+      "fcp_ms": 3720,
+      "observed_lcp_ms": 4196,
+      "ttfb_ms": 560.7,
+      "load_event_end_ms": 1320.8,
+      "completed_request_count": 8,
+      "unfinished_request_count_at_snapshot": 0,
+      "long_tasks": 1,
+      "write_attempt_count": 0,
+      "first_app_text_dom_ms": 3699.4,
+      "first_heading_dom_ms": 4132.5,
+      "observed_layout_shift_sum": 0.4097888583183289
+    },
+    {
+      "profile": "root-desktop",
+      "cache": "warm",
+      "url": "https://events.californiajugger.org/",
+      "started_utc": "2026-10-26T22:16:25.997188+00:00",
+      "fcp_ms": 156,
+      "observed_lcp_ms": 652,
+      "ttfb_ms": 6.8,
+      "load_event_end_ms": 38.8,
+      "completed_request_count": 8,
+      "unfinished_request_count_at_snapshot": 0,
+      "long_tasks": 0,
+      "write_attempt_count": 0,
+      "first_app_text_dom_ms": 148.9,
+      "first_heading_dom_ms": 632.8,
+      "observed_layout_shift_sum": 0.112739013671875
+    },
+    {
+      "profile": "event-desktop",
+      "cache": "cold",
+      "url": "https://events.californiajugger.org/DryHeat2026",
+      "started_utc": "2026-10-26T22:16:28.952691+00:00",
+      "fcp_ms": 5108,
+      "observed_lcp_ms": 5604,
+      "ttfb_ms": 593.8,
+      "load_event_end_ms": 1453.1,
+      "completed_request_count": 22,
+      "unfinished_request_count_at_snapshot": 3,
+      "long_tasks": 1,
+      "write_attempt_count": 0,
+      "first_app_text_dom_ms": 5086.9,
+      "first_heading_dom_ms": 5500.9,
+      "observed_layout_shift_sum": 0.47806895136303373
+    },
+    {
+      "profile": "event-desktop",
+      "cache": "warm",
+      "url": "https://events.californiajugger.org/DryHeat2026",
+      "started_utc": "2026-10-26T22:16:36.674723+00:00",
+      "fcp_ms": 192,
+      "observed_lcp_ms": 580,
+      "ttfb_ms": 5.7,
+      "load_event_end_ms": 37.1,
+      "completed_request_count": 25,
+      "unfinished_request_count_at_snapshot": 0,
+      "long_tasks": 0,
+      "write_attempt_count": 0,
+      "first_app_text_dom_ms": 180,
+      "first_heading_dom_ms": 431.3,
+      "observed_layout_shift_sum": 0.1811111111111111
+    },
+    {
+      "profile": "root-mobile",
+      "cache": "cold",
+      "url": "https://events.californiajugger.org/",
+      "started_utc": "2026-10-26T22:16:39.568851+00:00",
+      "fcp_ms": 29904,
+      "observed_lcp_ms": 30460,
+      "ttfb_ms": 582.4,
+      "load_event_end_ms": 1554.3,
+      "completed_request_count": 9,
+      "unfinished_request_count_at_snapshot": 0,
+      "long_tasks": 1,
+      "write_attempt_count": 0,
+      "first_app_text_dom_ms": 29885.1,
+      "first_heading_dom_ms": 30424.6,
+      "observed_layout_shift_sum": 0
+    },
+    {
+      "profile": "root-mobile",
+      "cache": "warm",
+      "url": "https://events.californiajugger.org/",
+      "started_utc": "2026-10-26T22:17:11.998852+00:00",
+      "fcp_ms": 240,
+      "observed_lcp_ms": 728,
+      "ttfb_ms": 2.7,
+      "load_event_end_ms": 33.2,
+      "completed_request_count": 9,
+      "unfinished_request_count_at_snapshot": 0,
+      "long_tasks": 2,
+      "write_attempt_count": 0,
+      "first_app_text_dom_ms": 227.2,
+      "first_heading_dom_ms": 717.2,
+      "observed_layout_shift_sum": 0.2288888888888889
+    }
+  ],
+  "root_cold_waterfall": [
+    {
+      "name": "https://events.californiajugger.org/assets/arctos-frontend-dxh744636120556e39.js",
+      "startTime": 571.6999999992549,
+      "responseEnd": 1309.5,
+      "transferSize": 95786,
+      "encodedBodySize": 95486,
+      "decodedBodySize": 95486
+    },
+    {
+      "name": "https://events.californiajugger.org/assets/arctos-frontend_bg-dxh7d49bbea7fda19e.wasm",
+      "startTime": 1320.3999999985099,
+      "responseEnd": 3599.89999999851,
+      "transferSize": 5580399,
+      "encodedBodySize": 5580099,
+      "decodedBodySize": 5580099
+    },
+    {
+      "name": "https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css",
+      "startTime": 3687.099999997765,
+      "responseEnd": 3808.199999999255,
+      "transferSize": 33506,
+      "encodedBodySize": 33206,
+      "decodedBodySize": 232803
+    },
+    {
+      "name": "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css",
+      "startTime": 3687.39999999851,
+      "responseEnd": 3804.300000000745,
+      "transferSize": 15548,
+      "encodedBodySize": 15248,
+      "decodedBodySize": 89220
+    },
+    {
+      "name": "https://events.californiajugger.org/_api/me",
+      "startTime": 3695.89999999851,
+      "responseEnd": 3886.599999997765,
+      "transferSize": 330,
+      "encodedBodySize": 30,
+      "decodedBodySize": 30
+    },
+    {
+      "name": "https://events.californiajugger.org/_api/tournaments",
+      "startTime": 3697.89999999851,
+      "responseEnd": 4116.699999999255,
+      "transferSize": 15911,
+      "encodedBodySize": 15611,
+      "decodedBodySize": 15611
+    }
+  ],
+  "production_assets": [
+    {
+      "url": "https://events.californiajugger.org/assets/arctos-frontend-dxh744636120556e39.js",
+      "protocol": "http/1.1",
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8",
+        "content-encoding": null,
+        "cache-control": null,
+        "etag": "\"6ade6b3c-174fe\"",
+        "last-modified": "Sun, 25 Oct 2026 20:49:00 GMT",
+        "vary": null
+      }
+    },
+    {
+      "url": "https://events.californiajugger.org/assets/arctos-frontend_bg-dxh7d49bbea7fda19e.wasm",
+      "protocol": "http/1.1",
+      "headers": {
+        "content-type": "application/wasm",
+        "content-encoding": null,
+        "cache-control": "max-age=31536000, public, immutable",
+        "etag": "\"6ade6b3c-552543\"",
+        "last-modified": "Sun, 25 Oct 2026 20:49:00 GMT",
+        "vary": null
+      }
+    }
+  ],
+  "offline_compression_estimate": {
+    "wasm_url": "https://events.californiajugger.org/assets/arctos-frontend_bg-dxh7d49bbea7fda19e.wasm",
+    "raw_bytes": 5580099,
+    "gzip6_bytes": 1922884,
+    "note": "Compression computed locally, not an observed deployed compressed response",
+    "reduction_percent": 65.5
+  },
+  "guidance": [
+    "https://web.dev/articles/vitals",
+    "https://web.dev/articles/optimize-lcp",
+    "https://developers.google.com/search/docs/crawling-indexing/javascript/javascript-seo-basics",
+    "https://developers.google.com/crawling/docs/troubleshooting/http-status-codes",
+    "https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Caching",
+    "https://developer.mozilla.org/en-US/docs/WebAssembly/Reference/JavaScript_interface/instantiateStreaming_static"
+  ],
+  "identical_document_bodies": true
+}

@@ -9,3 +9,5 @@ maintain the Arctos backend.
 
    DEPLOY
    env-vars
+   load-time-and-indexing-plan
+   load-time-and-indexing-research
