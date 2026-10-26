@@ -126,6 +126,7 @@ screenshot options; use `--help` for its supported filters.
 | `check_appearance_ui.py` | Theme/mode preferences, persistence, menus, and contrast |
 | `check_event_ui.py` | Event navigation, rosters, registration destinations, and schedule access |
 | `check_registration_ui.py` | Contextual registration actions for guest/player/team accounts |
+| `check_registration_forms_ui.py` | Form requirements, private settings, retained drafts, pending registration, and theme contrast |
 | `check_results_ui.py` | Populated and empty results, statistics, keyboard sorting, ribbon inclusion, and match expansion |
 | `check_profile_ui.py` | Profile sections, draft persistence, Markdown, and staged image edits |
 | `check_event_tools_ui.py` | Organizer tools, settings, shared headers, and retained input |
@@ -136,6 +137,7 @@ For example:
 ```bash
 uv run python scripts/check_mobile_ui.py --workflow registration-and-schedule
 uv run python scripts/check_profile_ui.py --screenshots /tmp/arctos-profiles
+uv run python scripts/check_registration_forms_ui.py --screenshots /tmp/arctos-registration-forms
 ```
 
 Browser response fixtures exercise UI behavior; backend tests separately verify

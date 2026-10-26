@@ -17,7 +17,10 @@ from uuid import uuid4
 from flask import current_app, request
 from werkzeug.exceptions import BadRequest, RequestEntityTooLarge
 
+from app.error_values import Err, Ok
 from app.services.dual_write import set_head_ref_allowlist_from_csv
+from app.services.registration_form_service import RegistrationFormService
+from app.utils.result_helpers import public_error_message
 from models import RegistrableConfig, db
 
 DEFAULT_REQUEST_LIMIT = 100 * 1024 * 1024
@@ -146,6 +149,41 @@ def _waiver_changes(config, require, upload, combined):
     return {"waiver_filepath": None, "waiver_sha256": None} if require is False else {}
 
 
+def _registration_form_changes(data, config, *, kind):
+    """Validate the complete form requirement before any settings are changed."""
+    keys = {
+        "registration_form_required",
+        "registration_form_url",
+        "registration_form_sheet_url",
+        "registration_form_code_column",
+    }
+    if not keys.intersection(data):
+        return {}
+    if config is None:
+        raise SettingsSaveError("Save the registration form requirement in league settings.")
+    if "registration_form_required" not in data:
+        raise SettingsSaveError("Choose whether the registration form is required.")
+    if kind == "league":
+        enabled = _boolean(data, "registration_form_required")
+    else:
+        value = data["registration_form_required"]
+        if value not in ("true", "false", "on", "off"):
+            raise SettingsSaveError("Choose whether the registration form is required.")
+        enabled = value in ("true", "on")
+    result = RegistrationFormService.validate_settings(
+        enabled=enabled,
+        form_url=data.get("registration_form_url", ""),
+        sheet_url=data.get("registration_form_sheet_url", ""),
+        code_column=data.get("registration_form_code_column", ""),
+        current_config=config,
+    )
+    match result:
+        case Ok(changes):
+            return changes
+        case Err(error):
+            raise SettingsSaveError(public_error_message(error), error.status_code)
+
+
 def persist_settings(entity, values, config, config_values, upload, kind, scope_id, *, head_refs=None):
     """Stage without overwriting, commit once, and remove only failed new files."""
     created = None
@@ -234,6 +272,7 @@ def save_tournament_settings(tournament):
         config_values.update(_waiver_changes(config, "require_waiver_signature" in data, upload, combined))
     elif upload is not None:
         raise SettingsSaveError("Registration is not configured for this event.")
+    config_values.update(_registration_form_changes(data, config, kind="tournament"))
     persist_settings(
         tournament, values, config, config_values, upload, "tournament", tournament.url, head_refs=head_refs
     )
@@ -267,4 +306,5 @@ def save_league_settings(league):
                 config_values[key] = _cap(data[key], key)
     require = _boolean(data, "require_waiver_signature") if "require_waiver_signature" in data else None
     config_values.update(_waiver_changes(config, require, upload, combined))
+    config_values.update(_registration_form_changes(data, config, kind="league"))
     persist_settings(league, values, config, config_values, upload, "league", league.url)

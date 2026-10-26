@@ -2,8 +2,8 @@
 //! Shared between league home, tournament home (league events), etc.
 
 use crate::api;
-use crate::components::{Modal, ModalKind};
-use crate::types::{UpdatePlayerRegistrationRequest, UpdateTeamRegistrationRequest};
+use crate::components::{Modal, ModalKind, RegistrationFormNotice};
+use crate::types::{RegistrationFormConfig, UpdatePlayerRegistrationRequest, UpdateTeamRegistrationRequest};
 use dioxus::prelude::*;
 
 const REGISTRATION_ACTIONS_CSS: &str = include_str!("registration_actions.css");
@@ -211,6 +211,7 @@ fn EditPlayerRegistrationContent(
     let mut team = use_signal(|| "".to_string());
     let mut current_team_name = use_signal(|| "".to_string());
     let mut status = use_signal(|| "".to_string());
+    let mut registration_form = use_signal(RegistrationFormConfig::default);
     let mut teams = use_signal(|| vec![]);
     let mut waiver_required = use_signal(|| false);
     let mut waiver_signature_valid = use_signal(|| false);
@@ -230,18 +231,19 @@ fn EditPlayerRegistrationContent(
                     api::get_my_player_registration_league(league_url).await,
                     api::league_detail(league_url)
                         .await
-                        .map(|d| d.teams_with_counts),
+                        .map(|d| (d.teams_with_counts, d.league.registration_form)),
                 ),
                 EditRegistrationContext::Tournament { tournament_url } => (
                     api::get_my_player_registration(tournament_url).await,
                     api::tournament_detail(tournament_url)
                         .await
-                        .map(|d| d.teams_with_counts),
+                        .map(|d| (d.teams_with_counts, d.tournament.registration_form)),
                 ),
             };
 
             match (reg_res, teams_res) {
-                (Ok(res), Ok(teams_list)) => {
+                (Ok(res), Ok((teams_list, form_config))) => {
+                    registration_form.set(form_config);
                     jersey_name.set(res.registration.jersey_name.unwrap_or_default());
                     jersey_number.set(res.registration.jersey_number.unwrap_or_default());
                     status.set(res.registration.status.clone());
@@ -348,6 +350,13 @@ fn EditPlayerRegistrationContent(
                 id: "edit-player-registration-form",
                 onsubmit: onsubmit,
                 aria_busy: mutation() != RegistrationMutation::Idle,
+                if status() == "PENDING_TEAM_APPROVAL" {
+                    RegistrationFormNotice { config: registration_form(), personal_url: match &context {
+                        EditRegistrationContext::Tournament { tournament_url } => format!("{}/_api/tournaments/{}/registration-form", api::base_url(), urlencoding::encode(tournament_url)),
+                        EditRegistrationContext::League { league_url } => format!("{}/_api/leagues/{}/registration-form", api::base_url(), urlencoding::encode(league_url)),
+                    } }
+
+                }
                 fieldset { disabled: mutation() != RegistrationMutation::Idle,
                 div { class: "mb-3",
                     label { class: "form-label", r#for: "edit-jersey-name", "Jersey Name" }

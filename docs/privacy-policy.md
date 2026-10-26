@@ -1,6 +1,6 @@
 # Arctos Privacy Policy
 
-Updated: Oct 24, 2026
+Updated: Oct 26, 2026
 
 This policy describes generally speaking what we do with data we
 generically collect from you. For more information on specifically
@@ -46,6 +46,20 @@ plaintext password.
 
 We use your display name and username to personalize your experience
 with Arctos and to identify you across devices and sessions.
+
+### Organizer registration forms
+
+Organizers can require a Google Form response for player registration. Google
+hosts the form, and the organizer controls its questions and response data.
+Arctos creates a personalized link containing a registration code, which Google
+includes in the submitted response. The code associates the response with the
+player's Arctos account without including their username or email address.
+Arctos reads the configured response tab's headings and registration-code column.
+Response checks reuse cached codes for up to ten seconds; these values are not
+saved in the Arctos database or application logs. Arctos stores the form and
+spreadsheet settings and a private signing key for each registration
+configuration. Only authorized organizers can view the response spreadsheet
+settings; signing keys are never included in API responses.
 
 ### Injury information and other sensitive data
 

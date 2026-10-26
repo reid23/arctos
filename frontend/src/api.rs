@@ -993,21 +993,6 @@ pub async fn league_manage(
     response_json(r).await
 }
 
-pub async fn league_invitations(
-    league_url: &str,
-) -> Result<crate::types::TournamentInvitationsResponse, String> {
-    let c = client();
-    let r = with_credentials(c.get(format!(
-        "{}/_api/leagues/{}/invitations",
-        base(),
-        league_url
-    )))
-    .send()
-    .await
-    .map_err(|e| e.to_string())?;
-    response_json(r).await
-}
-
 pub async fn league_mark_team_paid(
     league_url: &str,
     registration_id: u32,
@@ -1074,64 +1059,6 @@ pub async fn league_deregister_any_player(
         league_url
     );
     post_form_status(&url, &params).await
-}
-
-pub async fn league_accept_invitation(league_url: &str, invitation_id: u32) -> Result<(), String> {
-    let c = client();
-    let url = format!(
-        "{}/_api/leagues/{}/invitation/{}/accept",
-        base(),
-        league_url,
-        invitation_id
-    );
-    let r = with_credentials(c.post(&url))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    if r.status().as_u16() == 403 {
-        let err: serde_json::Value = response_json(r).await.unwrap_or_default();
-        return Err(err
-            .get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Forbidden")
-            .to_string());
-    }
-    if r.status().as_u16() == 404 {
-        return Err("Not found".to_string());
-    }
-    if !r.status().is_success() {
-        return Err(format!("Request failed: {}", r.status()));
-    }
-    Ok(())
-}
-
-pub async fn league_decline_invitation(league_url: &str, invitation_id: u32) -> Result<(), String> {
-    let c = client();
-    let url = format!(
-        "{}/_api/leagues/{}/invitation/{}/decline",
-        base(),
-        league_url,
-        invitation_id
-    );
-    let r = with_credentials(c.post(&url))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    if r.status().as_u16() == 403 {
-        let err: serde_json::Value = response_json(r).await.unwrap_or_default();
-        return Err(err
-            .get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Forbidden")
-            .to_string());
-    }
-    if r.status().as_u16() == 404 {
-        return Err("Not found".to_string());
-    }
-    if !r.status().is_success() {
-        return Err(format!("Request failed: {}", r.status()));
-    }
-    Ok(())
 }
 
 pub async fn league_update_settings(
@@ -1265,81 +1192,6 @@ pub async fn tournament_manage(
         .await
         .map_err(|e| e.to_string())?;
     response_json(r).await
-}
-
-pub async fn tournament_invitations(
-    tournament_url: &str,
-) -> Result<TournamentInvitationsResponse, String> {
-    let c = client();
-    let r = with_credentials(c.get(format!(
-        "{}/_api/tournaments/{}/invitations",
-        base(),
-        tournament_url
-    )))
-    .send()
-    .await
-    .map_err(|e| e.to_string())?;
-    response_json(r).await
-}
-
-/// Accept a pending player invitation (team only). Uses POST to _api route.
-pub async fn accept_invitation(tournament_url: &str, invitation_id: u32) -> Result<(), String> {
-    let c = client();
-    let url = format!(
-        "{}/_api/{}/invitation/{}/accept",
-        base(),
-        tournament_url,
-        invitation_id
-    );
-    let r = with_credentials(c.post(&url))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    if r.status().as_u16() == 403 {
-        let err: serde_json::Value = response_json(r).await.unwrap_or_default();
-        return Err(err
-            .get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Forbidden")
-            .to_string());
-    }
-    if r.status().as_u16() == 404 {
-        return Err("Not found".to_string());
-    }
-    if !r.status().is_success() {
-        return Err(format!("Request failed: {}", r.status()));
-    }
-    Ok(())
-}
-
-/// Decline a pending player invitation (team only). Uses POST to _api route.
-pub async fn decline_invitation(tournament_url: &str, invitation_id: u32) -> Result<(), String> {
-    let c = client();
-    let url = format!(
-        "{}/_api/{}/invitation/{}/decline",
-        base(),
-        tournament_url,
-        invitation_id
-    );
-    let r = with_credentials(c.post(&url))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    if r.status().as_u16() == 403 {
-        let err: serde_json::Value = response_json(r).await.unwrap_or_default();
-        return Err(err
-            .get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Forbidden")
-            .to_string());
-    }
-    if r.status().as_u16() == 404 {
-        return Err("Not found".to_string());
-    }
-    if !r.status().is_success() {
-        return Err(format!("Request failed: {}", r.status()));
-    }
-    Ok(())
 }
 
 pub async fn tournament_bracket(tournament_url: &str) -> Result<BracketLayoutResponse, String> {
@@ -3797,4 +3649,19 @@ pub async fn upload_league_banner_photo(id: &str, bytes: bytes::Bytes) -> Result
 
 pub async fn delete_league_banner_photo(id: &str) -> Result<(), String> {
     delete_event_banner("leagues", id).await
+}
+
+
+/// Team-management requests always include the selected team in the path.
+pub async fn team_management_get<T: serde::de::DeserializeOwned>(path: &str) -> Result<T, String> {
+    let response = with_credentials(client().get(format!("{}/_api/teams/{}", base(), path)))
+        .send().await.map_err(|error| error.to_string())?;
+    response_json(response).await
+}
+
+pub async fn team_management_write(path: &str, method: &str, body: &serde_json::Value) -> Result<StatusResponse, String> {
+    let method = reqwest::Method::from_bytes(method.as_bytes()).map_err(|error| error.to_string())?;
+    let response = with_credentials(client().request(method, format!("{}/_api/teams/{}", base(), path)).json(body))
+        .send().await.map_err(|error| error.to_string())?;
+    response_json(response).await
 }

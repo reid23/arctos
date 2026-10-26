@@ -12,6 +12,7 @@ Two pure-function builders used by registration routes:
 from __future__ import annotations
 
 from app.domain.enums import RegistrationStatus
+from app.services.registration_form_service import RegistrationFormService
 from app.serializers.tournament_serializer import tournament_to_dict
 from app.utils.datetime_helpers import dt_iso
 from models import League, Player, Team, Tournament
@@ -135,6 +136,8 @@ def serialize_manage(scope, search_query: str, search_type: str, cfg) -> dict:
     else:
         tournament = Tournament.query.filter_by(url=scope.event_url).first()
         tournament_dict = tournament_to_dict(tournament)
+
+    tournament_dict.update(RegistrationFormService.public_config(cfg))
 
     player_rows = []
     for pr in players_with_registrations:

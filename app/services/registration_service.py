@@ -23,6 +23,7 @@ from app.exceptions import (
 from app.utils.name_validation import team_pseudonym_char_error
 from app.utils.datetime_helpers import now_utc_naive
 from app.services._common import Scope
+from app.services.registration_form_service import RegistrationFormService
 
 if TYPE_CHECKING:  # pragma: no cover
     from models import PlayerRegistration, TeamRegistration, Tournament
@@ -139,6 +140,13 @@ class RegistrationService:
         if not RegistrationService._tournament_player_reg_open(tournament):
             return Err(ValidationError("Registration changes are locked. You can no longer deregister players."))
         return Ok(None)
+
+    @staticmethod
+    @allow_Q
+    def require_player_form(scope: Scope, player_id: str) -> Result[None, ArctosError]:
+        """Check the shared registration requirement before confirming a player."""
+        ctx = RegistrationService._load_scope_context(scope).Q()
+        return RegistrationFormService.require_response(ctx.cfg, player_id)
 
     @staticmethod
     @allow_Q
@@ -282,14 +290,28 @@ class RegistrationService:
         else:
             existing_reg = PlayerRegistration.query.filter_by(event=scope.event_url, player=player_id).first()
 
-        # Enforce exactly one PlayerRegistration row per (scope, player).
-        # If a player was previously rejected/cancelled, allow resubmission by updating that row.
+        # Validate every prerequisite before changing an existing registration.
+        if existing_reg and existing_reg.status not in (
+            RegistrationStatus.REJECTED,
+            RegistrationStatus.CANCELLED,
+        ):
+            return Err(ValidationError(f"You already have a registration for this {scope_label}"))
+
+        waiver_signature_data = None
+        waiver_filepath = getattr(cfg, "waiver_filepath", None) if cfg else None
+        if waiver_filepath:
+            signature = (waiver_legal_name_signature or "").strip()
+            if not signature:
+                return Err(ValidationError("Waiver signature is required"))
+            current_waiver_sha = getattr(cfg, "waiver_sha256", None)
+            if not current_waiver_sha:
+                return Err(ValidationError("Waiver is missing its checksum"))
+            waiver_signature_data = (signature, current_waiver_sha, now_utc_naive())
+
+        RegistrationFormService.require_response(cfg, player_id).Q()
+
+        # Re-registration reuses the player's existing row in this scope.
         if existing_reg:
-            if existing_reg.status not in (
-                RegistrationStatus.REJECTED,
-                RegistrationStatus.CANCELLED,
-            ):
-                return Err(ValidationError(f"You already have a registration for this {scope_label}"))
             player_registration = existing_reg
             player_registration.team = team_id
             player_registration.jersey_number = jersey_number or ""
@@ -322,20 +344,11 @@ class RegistrationService:
             player_registration.amount_paid = 0.0
             player_registration.paid_at = now_utc_naive()
 
-        # If a waiver is configured, players must sign it.
-        waiver_filepath = getattr(cfg, "waiver_filepath", None) if cfg else None
-        if waiver_filepath:
-            signature = (waiver_legal_name_signature or "").strip()
-            if not signature:
-                return Err(ValidationError("Waiver signature is required"))
-            current_waiver_sha = getattr(cfg, "waiver_sha256", None)
-            if not current_waiver_sha:
-                return Err(ValidationError("Waiver is missing its checksum"))
-
-            now = now_utc_naive()
+        if waiver_signature_data is not None:
+            signature, checksum, submitted_at = waiver_signature_data
             player_registration.waiver_legal_name_signature = signature
-            player_registration.waiver_legal_name_signature_sha256 = current_waiver_sha
-            player_registration.waiver_signature_submitted_at = now
+            player_registration.waiver_legal_name_signature_sha256 = checksum
+            player_registration.waiver_signature_submitted_at = submitted_at
 
         db.session.add(player_registration)
 
@@ -407,12 +420,15 @@ class RegistrationService:
             waiver_signature_data = (signature, current_waiver_sha, now)
 
         existing_reg = PlayerRegistration.query.filter_by(event=tournament_url, player=player_id).first()
+        if existing_reg and existing_reg.status not in (
+            RegistrationStatus.CANCELLED,
+            RegistrationStatus.REJECTED,
+        ):
+            return Err(ValidationError("This player is already registered"))
+
+        RegistrationFormService.require_response(cfg, player_id).Q()
+
         if existing_reg:
-            if existing_reg.status not in (
-                RegistrationStatus.CANCELLED,
-                RegistrationStatus.REJECTED,
-            ):
-                return Err(ValidationError("This player is already registered"))
             registration = existing_reg
             registration.team = team_id
             registration.jersey_number = jersey_number_value

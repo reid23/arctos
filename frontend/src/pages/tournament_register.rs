@@ -1,5 +1,5 @@
 use crate::api;
-use crate::components::TeamRegistrationHelpModal;
+use crate::components::{RegistrationFormNotice, TeamRegistrationHelpModal};
 use crate::Route;
 use dioxus::prelude::*;
 use wasm_bindgen::JsCast;
@@ -81,6 +81,7 @@ pub fn TournamentRegister(url: String) -> Element {
                                     if let Some(err) = register_error() {
                                         div { id: "registration-error", tabindex: "-1", class: "alert alert-danger mb-3", role: "alert", "{err}" }
                                     }
+                                    RegistrationFormNotice { config: d.tournament.registration_form.clone(), personal_url: format!("{}/_api/tournaments/{}/registration-form", api::base_url(), urlencoding::encode(&url)) }
                                     form {
                                         id: "player-register-form",
                                         onsubmit: move |ev| {

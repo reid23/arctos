@@ -1,5 +1,5 @@
 use crate::api;
-use crate::components::TeamRegistrationHelpModal;
+use crate::components::{RegistrationFormNotice, TeamRegistrationHelpModal};
 use dioxus::prelude::*;
 use wasm_bindgen::JsCast;
 
@@ -168,6 +168,7 @@ pub fn LeagueRegister(league_url: String) -> Element {
                                         }
                                     }
                                 } else if me.user_type == "player" {
+                                    RegistrationFormNotice { config: d.league.registration_form.clone(), personal_url: format!("{}/_api/leagues/{}/registration-form", api::base_url(), urlencoding::encode(&league_url)) }
                                     if let Some(fee) = d.league.player_reg_fee.filter(|fee| *fee > 0.0) {
                                         div { class: "alert alert-info",
                                             strong { {format!("Registration fee: ${:.2}", fee)} }

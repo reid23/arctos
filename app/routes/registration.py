@@ -11,7 +11,7 @@ The multi-model workflow itself lives in
 layer in front of it.
 """
 
-from flask import Blueprint, g, request, jsonify
+from flask import Blueprint, g, request, jsonify, redirect
 from flask_login import login_required, current_user  # type: ignore[import-untyped]
 from models import (
     Tournament,
@@ -20,19 +20,71 @@ from models import (
     db,
 )
 from app.domain.enums import RegistrationStatus
+from app.error_values import Err
 from app.services._common import current_user_type, Scope
 from app.services.permission_service import PermissionService
+from app.services.registration_form_service import RegistrationFormService
 from app.services.registration_service import RegistrationService
 from app.serializers.league_serializer import require_league
 from app.serializers.registration_serializer import player_reg_waiver_api
 from app.utils.decorators import require_json_body, require_tournament_organizer
-from app.utils.helpers import get_registrable_config
+from app.utils.helpers import check_tournament_access, get_registrable_config
 from app.utils.name_validation import team_pseudonym_char_error
-from app.utils.user_helpers import is_player, is_team
+from app.utils.user_helpers import is_player
+from app.utils.team_access import requested_team_id
 from app.utils.result_helpers import json_from_result
 from app.utils.datetime_helpers import now_utc_naive
 
 bp = Blueprint("registration", __name__, url_prefix="/_api")
+
+
+def _personal_registration_form(config):
+    """Redirect the signed-in player to their form without reading Google data."""
+    result = RegistrationFormService.personal_url(config, current_user.id)
+    if isinstance(result, Err):
+        return json_from_result(result)
+    response = redirect(result.unwrap(), code=302)
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
+@bp.route("/tournaments/<tournament_url>/registration-form", methods=["GET"])
+@login_required
+def tournament_registration_form(tournament_url: str):
+    """Open the current player's personalized registration form.
+
+    Published tournaments are accessible to signed-in players; drafts require
+    organizer access. League events use their league's registration settings.
+    The response is an uncached 302 redirect, or a JSON error with HTTP 400
+    when no form is configured, 401 when signed out, 403 when forbidden,
+    404 when the tournament is missing, or 503 when configuration is invalid.
+    """
+    if not is_player(current_user):
+        return jsonify({"success": False, "error": "Only players can open a registration form"}), 403
+    has_access, tournament = check_tournament_access(tournament_url)
+    if tournament is None:
+        return jsonify({"error": "Not found"}), 404
+    if not has_access:
+        return jsonify({"error": "Forbidden"}), 403
+    return _personal_registration_form(get_registrable_config(tournament))
+
+
+@bp.route("/leagues/<league_url>/registration-form", methods=["GET"])
+@login_required
+def league_registration_form(league_url: str):
+    """Open the current player's personalized league registration form.
+
+    Published leagues are accessible to signed-in players; drafts require
+    league organizer access. The response follows the tournament form's
+    redirect, error, and cache policy.
+    """
+    if not is_player(current_user):
+        return jsonify({"success": False, "error": "Only players can open a registration form"}), 403
+    league, error = require_league(league_url)
+    if error is not None:
+        return jsonify({"error": "Not found" if error == 404 else "Forbidden"}), error
+    return _personal_registration_form(league.registrable_config)
 
 
 @bp.route("/<tournament_url>/register-team", methods=["POST"])
@@ -42,7 +94,7 @@ def register_team_for_tournament(tournament_url: str):
 
     ``POST /_api/<tournament_url>/register-team``
 
-    Only :class:`~app.models.user.Team` accounts may call this endpoint.
+    The team account or one of its managers may call this endpoint.
     Delegates to :class:`~app.services.registration_service.RegistrationService`.
 
     Args:
@@ -57,15 +109,11 @@ def register_team_for_tournament(tournament_url: str):
         JSON ``{"success": true, "message": "..."}`` on success, or
         ``{"success": false, "error": "..."}`` with HTTP 400/403 on failure.
     """
-    if not is_team(current_user):
-        return (
-            jsonify({"success": False, "error": "Only teams can register for tournaments"}),
-            403,
-        )
+    team_id = requested_team_id()
 
     res = RegistrationService.register_team(
         Scope.event(tournament_url),
-        current_user.id,
+        team_id,
         request.form.get("pseudonym", ""),
         shortname=request.form.get("shortname", "") or None,
     )
@@ -125,7 +173,6 @@ def register_player_for_tournament(tournament_url: str):
                 else "Player registration successful! You are now registered for the tournament."
             )
         },
-        err_status_code=400,
     )
 
 
@@ -136,7 +183,7 @@ def deregister_team_from_tournament(tournament_url: str):
 
     ``POST /_api/<tournament_url>/deregister-team``
 
-    Only :class:`~app.models.user.Team` accounts may call this endpoint.
+    The team account or one of its managers may call this endpoint.
 
     Args:
         tournament_url: Tournament URL slug from the path.
@@ -144,18 +191,9 @@ def deregister_team_from_tournament(tournament_url: str):
     Returns:
         JSON success or error body.
     """
-    if not is_team(current_user):
-        return (
-            jsonify(
-                {
-                    "success": False,
-                    "error": "Only teams can deregister from tournaments",
-                }
-            ),
-            403,
-        )
+    team_id = requested_team_id()
 
-    res = RegistrationService.deregister_team(Scope.event(tournament_url), current_user.id)
+    res = RegistrationService.deregister_team(Scope.event(tournament_url), team_id)
     return json_from_result(
         res,
         ok_to_payload=lambda _: {"message": "Team successfully deregistered from tournament"},
@@ -407,7 +445,7 @@ def accept_invitation(tournament_url: str, invitation_id: int):
 
     ``POST /_api/<tournament_url>/invitation/<invitation_id>/accept``
 
-    Only :class:`~app.models.user.Team` accounts may call this endpoint.
+    The team account or one of its managers may call this endpoint.
     Transitions the player's registration from ``PENDING_TEAM_APPROVAL`` to
     ``CONFIRMED``.
 
@@ -419,24 +457,11 @@ def accept_invitation(tournament_url: str, invitation_id: int):
     Returns:
         JSON success or 403/404 error body.
     """
-    if not is_team(current_user):
-        return (
-            jsonify({"success": False, "error": "Only teams can accept invitations"}),
-            403,
-        )
+    from app.services.team_management_service import change_roster
 
-    player_registration = PlayerRegistration.query.filter_by(
-        id=invitation_id,
-        event=tournament_url,
-        team=current_user.id,
-        status=RegistrationStatus.PENDING_TEAM_APPROVAL,
-    ).first_or_404()
-
-    player_registration.status = RegistrationStatus.CONFIRMED
-    db.session.commit()
-    return (
-        jsonify({"success": True, "message": "Player approved! They are now on your team."}),
-        200,
+    team_id = requested_team_id()
+    return json_from_result(
+        change_roster(Scope.event(tournament_url), team_id, invitation_id, "approve", actor=current_user)
     )
 
 
@@ -447,7 +472,7 @@ def decline_invitation(tournament_url: str, invitation_id: int):
 
     ``POST /_api/<tournament_url>/invitation/<invitation_id>/decline``
 
-    Only :class:`~app.models.user.Team` accounts may call this endpoint.
+    The team account or one of its managers may call this endpoint.
     The player stays registered for the event as an unattached player: the
     registration moves from ``PENDING_TEAM_APPROVAL`` to ``CONFIRMED`` with
     no team.
@@ -460,23 +485,12 @@ def decline_invitation(tournament_url: str, invitation_id: int):
     Returns:
         JSON success or 403/404 error body.
     """
-    if not is_team(current_user):
-        return (
-            jsonify({"success": False, "error": "Only teams can decline invitations"}),
-            403,
-        )
+    from app.services.team_management_service import change_roster
 
-    player_registration = PlayerRegistration.query.filter_by(
-        id=invitation_id,
-        event=tournament_url,
-        team=current_user.id,
-        status=RegistrationStatus.PENDING_TEAM_APPROVAL,
-    ).first_or_404()
-
-    player_registration.status = RegistrationStatus.CONFIRMED
-    player_registration.team = None
-    db.session.commit()
-    return jsonify({"success": True, "message": "Player request declined"}), 200
+    team_id = requested_team_id()
+    return json_from_result(
+        change_roster(Scope.event(tournament_url), team_id, invitation_id, "decline", actor=current_user)
+    )
 
 
 @bp.route("/<tournament_url>/register-player-as-to", methods=["POST"])
@@ -608,14 +622,14 @@ def league_register_team(league_url):
     from app.services.registration_service import RegistrationService
     from app.utils.result_helpers import json_from_result
 
-    if not is_team(current_user):
-        return jsonify({"success": False, "error": "Only teams can register"}), 403
+    team_id = requested_team_id()
+
     league, err = require_league(league_url)
     if err:
         return jsonify({"error": "Not found" if err == 404 else "Forbidden"}), err
     res = RegistrationService.register_team(
         Scope.league(league.url),
-        current_user.id,
+        team_id,
         request.form.get("pseudonym", ""),
         shortname=request.form.get("shortname", "") or None,
     )
@@ -655,7 +669,6 @@ def league_register_player(league_url):
     return json_from_result(
         res,
         ok_to_payload=lambda _: {"message": msg},
-        err_status_code=400,
     )
 
 
@@ -666,12 +679,12 @@ def league_deregister_team(league_url):
     from app.services.registration_service import RegistrationService
     from app.utils.result_helpers import json_from_result
 
-    if not is_team(current_user):
-        return jsonify({"success": False, "error": "Only teams can deregister"}), 403
+    team_id = requested_team_id()
+
     league, err = require_league(league_url)
     if err:
         return jsonify({"error": "Not found" if err == 404 else "Forbidden"}), err
-    res = RegistrationService.deregister_team(Scope.league(league.url), current_user.id)
+    res = RegistrationService.deregister_team(Scope.league(league.url), team_id)
     return json_from_result(
         res,
         ok_to_payload=lambda _: {"message": "Team deregistered"},
@@ -788,6 +801,14 @@ def update_my_player_registration_league(league_url):
     if not data:
         return jsonify({"error": "Invalid JSON"}), 400
 
+    confirms_registration = (
+        "team" in data and not data["team"] and reg.team is not None and reg.status != RegistrationStatus.CONFIRMED
+    )
+    if confirms_registration:
+        requirement = RegistrationService.require_player_form(Scope.league(league_url), reg.player)
+        if isinstance(requirement, Err):
+            return json_from_result(requirement)
+
     if "jersey_name" in data:
         reg.jersey_name = data["jersey_name"]
     if "jersey_number" in data:
@@ -823,8 +844,7 @@ def get_my_team_registration_league(league_url):
     """Get current team's registration for this league."""
     from app.services.registration_resolver import team_registration_for_tournament
 
-    if not is_team(current_user):
-        return jsonify({"error": "Only teams have team registrations"}), 400
+    team_id = requested_team_id()
 
     league, err = require_league(league_url)
     if err:
@@ -836,7 +856,7 @@ def get_my_team_registration_league(league_url):
             self.url = None
 
     ctx = LeagueContext(league)
-    reg = team_registration_for_tournament(ctx, current_user.id)
+    reg = team_registration_for_tournament(ctx, team_id)
 
     if not reg:
         return jsonify({"error": "Not registered"}), 404
@@ -859,8 +879,7 @@ def update_my_team_registration_league(league_url):
     """Update current team's registration for this league."""
     from app.services.registration_resolver import team_registration_for_tournament
 
-    if not is_team(current_user):
-        return jsonify({"error": "Only teams can edit their registration"}), 400
+    team_id = requested_team_id()
 
     league, err = require_league(league_url)
     if err:
@@ -875,7 +894,7 @@ def update_my_team_registration_league(league_url):
             self.url = None
 
     ctx = LeagueContext(league)
-    reg = team_registration_for_tournament(ctx, current_user.id)
+    reg = team_registration_for_tournament(ctx, team_id)
 
     if not reg:
         return jsonify({"error": "Not registered"}), 404
@@ -1071,24 +1090,11 @@ def league_deregister_any_player(league_url):
 @login_required
 def league_accept_invitation(league_url, invitation_id):
     """Accept a pending player registration (league roster)."""
-    if not is_team(current_user):
-        return (
-            jsonify({"success": False, "error": "Only teams can accept invitations"}),
-            403,
-        )
+    from app.services.team_management_service import change_roster
 
-    player_registration = PlayerRegistration.query.filter_by(
-        id=invitation_id,
-        league_id=league_url,
-        team=current_user.id,
-        status=RegistrationStatus.PENDING_TEAM_APPROVAL,
-    ).first_or_404()
-
-    player_registration.status = RegistrationStatus.CONFIRMED
-    db.session.commit()
-    return (
-        jsonify({"success": True, "message": "Player approved! They are now on your team."}),
-        200,
+    team_id = requested_team_id()
+    return json_from_result(
+        change_roster(Scope.league(league_url), team_id, invitation_id, "approve", actor=current_user)
     )
 
 
@@ -1100,23 +1106,12 @@ def league_decline_invitation(league_url, invitation_id):
     The player stays registered for the league as an unattached player
     (``CONFIRMED`` with no team).
     """
-    if not is_team(current_user):
-        return (
-            jsonify({"success": False, "error": "Only teams can decline invitations"}),
-            403,
-        )
+    from app.services.team_management_service import change_roster
 
-    player_registration = PlayerRegistration.query.filter_by(
-        id=invitation_id,
-        league_id=league_url,
-        team=current_user.id,
-        status=RegistrationStatus.PENDING_TEAM_APPROVAL,
-    ).first_or_404()
-
-    player_registration.status = RegistrationStatus.CONFIRMED
-    player_registration.team = None
-    db.session.commit()
-    return jsonify({"success": True, "message": "Player request declined"}), 200
+    team_id = requested_team_id()
+    return json_from_result(
+        change_roster(Scope.league(league_url), team_id, invitation_id, "decline", actor=current_user)
+    )
 
 
 @bp.route("/tournaments/<tournament_url>/registrations/player/me", methods=["GET"])
@@ -1193,6 +1188,14 @@ def update_my_player_registration(tournament_url):
     if not data:
         return jsonify({"error": "Invalid JSON"}), 400
 
+    confirms_registration = (
+        "team" in data and not data["team"] and reg.team is not None and reg.status != RegistrationStatus.CONFIRMED
+    )
+    if confirms_registration:
+        requirement = RegistrationService.require_player_form(Scope.event(tournament_url), reg.player)
+        if isinstance(requirement, Err):
+            return json_from_result(requirement)
+
     if "jersey_name" in data:
         reg.jersey_name = data["jersey_name"]
     if "jersey_number" in data:
@@ -1229,11 +1232,10 @@ def get_my_team_registration(tournament_url):
     """Get current team's registration for this tournament."""
     from app.services.registration_resolver import team_registration_for_tournament
 
-    if not is_team(current_user):
-        return jsonify({"error": "Only teams have team registrations"}), 400
+    team_id = requested_team_id()
 
     tournament = Tournament.query.filter_by(url=tournament_url).first_or_404()
-    reg = team_registration_for_tournament(tournament, current_user.id)
+    reg = team_registration_for_tournament(tournament, team_id)
 
     if not reg:
         return jsonify({"error": "Not registered"}), 404
@@ -1256,8 +1258,7 @@ def update_my_team_registration(tournament_url):
     """Update current team's registration."""
     from app.services.registration_resolver import team_registration_for_tournament
 
-    if not is_team(current_user):
-        return jsonify({"error": "Only teams can edit their registration"}), 400
+    team_id = requested_team_id()
 
     tournament = Tournament.query.filter_by(url=tournament_url).first_or_404()
     cfg = get_registrable_config(tournament)
@@ -1265,7 +1266,7 @@ def update_my_team_registration(tournament_url):
     if not reg_open:
         return jsonify({"error": "Registration changes are locked"}), 403
 
-    reg = team_registration_for_tournament(tournament, current_user.id)
+    reg = team_registration_for_tournament(tournament, team_id)
 
     if not reg:
         return jsonify({"error": "Not registered"}), 404

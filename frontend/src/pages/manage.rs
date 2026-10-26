@@ -1,4 +1,5 @@
 use crate::api;
+use crate::components::RegistrationFormNotice;
 use crate::components::{RequestEpoch, ToolPageHeader};
 use crate::components::{PaymentStatusBadge, RegistrationStatusBadge, WaiverStatusBadge};
 use crate::types::{
@@ -649,6 +650,7 @@ pub fn Manage(url: String) -> Element {
                                                 }
                                             }
                                             div { class: "edit-section-body",
+                                                RegistrationFormNotice { config: d.tournament.registration_form.clone() }
                                                 form {
                                                     onsubmit: move |ev| {
                                                         ev.prevent_default();

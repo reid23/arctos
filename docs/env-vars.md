@@ -80,6 +80,77 @@ renders the SPA's `/scoreboard-render` page in headless Chromium. See
   (install it with `uv run playwright install chromium`).
 
 
+## Registration forms
+
+`GOOGLE_FORMS_SERVICE_ACCOUNT_FILE`
+: Absolute path to a Google service-account JSON key. The file must be
+  readable by the Arctos server and kept outside the repository and web root.
+  When unset or unreadable, organizers cannot enable a response requirement.
+  Events with an enabled requirement return a temporary error when responses
+  cannot be checked.
+
+To configure the server:
+
+1. Enable the Google Sheets API in your Google Cloud project and create a
+   service account. Domain-wide delegation is not required.
+2. Place its JSON key on the server, restrict file access to the account
+   running Arctos, set the variable above, and restart the server.
+
+To connect an organizer's form:
+
+1. Add a required short-answer question named **Arctos registration code**.
+   Explain that Arctos fills it automatically and players should leave it unchanged.
+2. In Google Forms, choose **More → Pre-fill form**, enter `ARCTOS_CODE` in
+   that question, and copy the full generated link. Arctos uses this placeholder
+   to identify the question; shortened links are not supported.
+3. Publish the form for its intended audience. Share the response spreadsheet
+   with the service-account email shown in Arctos registration settings, using
+   the **Viewer** role.
+4. In event or league settings, enter the prefilled form link, response
+   spreadsheet link, and exact heading of the registration-code column.
+   A spreadsheet link containing `gid` selects that tab; otherwise the first
+   tab is used.
+
+Each signed-in player opens a personalized link from Arctos. The link fills
+the registration-code question; players submit the form and return to Arctos
+to register. Arctos checks the player's code in the response sheet before
+creating or confirming a registration. Organizers adding players and team
+managers confirming pending requests use the same check.
+
+Saving settings checks Sheet access and the column heading. Use a player
+account to open its personalized link, submit the form, and verify registration
+to check the complete setup. See Google's [prefilled-link and publishing
+instructions](https://support.google.com/docs/answer/2839588?hl=en).
+
+The integration requests Google's `spreadsheets.readonly` scope. Arctos reads
+the selected tab's header and registration-code column. It stores the connection
+settings and a private signing key for each registration configuration, not
+form responses. Cached response codes are reused for up to
+ten seconds; tab and column mappings are reused for up to one minute. Each
+memory cache keeps at most 32 sheet configurations per worker. Every response
+read rechecks the selected column's heading.
+
+Codes are stable for each player and registration configuration. Changing the
+form or its code question creates new codes; correcting the Sheet, tab, or
+heading preserves them. Disabling the requirement clears its configuration.
+Already-confirmed registrations remain confirmed.
+
+A matching code associates a response row with the player's personalized
+link. Google allows prefilled answers to be edited, and another person can use
+a shared personalized link. Response-sheet editors can also alter its rows.
+
+The Google service account has access to every spreadsheet shared with it.
+Only share sheets intended for Arctos, and restrict response-sheet sharing
+to authorized people. A separate spreadsheet containing only the registration-code
+column can further limit the data available to the service account.
+
+Google applies per-minute API quotas, including a per-account read limit.
+The integration uses bounded requests and reports a temporary error when
+Google is unavailable or a quota is exceeded. See Google's
+[service-account sharing instructions](https://docs.cloud.google.com/integration-connectors/docs/connectors/gsc_google_sheets/configure),
+[Sheets authorization scopes](https://developers.google.com/workspace/sheets/api/scopes),
+and [usage limits](https://developers.google.com/workspace/sheets/api/limits).
+
 ## Google Oauth2 info
 
 go to google cloud console for these

@@ -1,4 +1,6 @@
 use crate::api;
+use crate::components::RegistrationFormSettings;
+use crate::types::RegistrationFormConfig;
 use crate::components::{BannerAccountKind, BannerUpload, EventBannerPhoto, SettingsSaveActions, SettingsSaveJump, ToolPageHeader};
 use crate::Route;
 use dioxus::prelude::*;
@@ -565,6 +567,8 @@ pub fn TournamentSettings(url: String) -> Element {
     let mut draft_values = use_signal(HashMap::<String, String>::new);
     let mut draft_checks = use_signal(HashMap::<String, bool>::new);
     let mut draft_initialized = use_signal(|| false);
+    let mut registration_form = use_signal(RegistrationFormConfig::default);
+    let mut registration_form_editable = use_signal(|| false);
     let local_banner_photo = use_signal(|| None::<String>);
     let mut banner_photo = try_use_context::<EventBannerPhoto>().map_or(local_banner_photo, |shared| shared.0);
     let banner_busy = use_signal(|| false);
@@ -619,6 +623,8 @@ pub fn TournamentSettings(url: String) -> Element {
                     ("team_registration_open".into(), d.tournament.team_registration_open),
                     ("player_registration_open".into(), d.tournament.player_registration_open),
                 ]));
+                registration_form.set(d.tournament.registration_form.clone());
+                registration_form_editable.set(d.tournament.league.is_none());
                 draft_initialized.set(true);
             }
             if !banner_initialized() {
@@ -694,6 +700,15 @@ pub fn TournamentSettings(url: String) -> Element {
                                             "require_waiver_signature".into(),
                                             "on".to_string(),
                                         ));
+                                    }
+                                    if registration_form_editable() {
+                                        let config = registration_form();
+                                        params.extend([
+                                            ("registration_form_required".into(), config.registration_form_required.to_string()),
+                                            ("registration_form_url".into(), config.registration_form_url.unwrap_or_default()),
+                                            ("registration_form_sheet_url".into(), config.registration_form_sheet_url.unwrap_or_default()),
+                                            ("registration_form_code_column".into(), config.registration_form_code_column.unwrap_or_default()),
+                                        ]);
                                     }
                                     let nav = navigator.clone();
                                     let url_submit = url_form_submit.clone();
@@ -812,6 +827,7 @@ pub fn TournamentSettings(url: String) -> Element {
                                 }
 
                                 if d.tournament.league.is_none() {
+                                    RegistrationFormSettings { draft: registration_form, disabled: saving() }
                                     div { class: "mb-3",
                                         h3 { class: "h5 mb-2", "Waiver" }
                                         div { class: "form-check mb-2",

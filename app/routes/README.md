@@ -103,6 +103,20 @@ Frontend code treats a 401 as "log in and retry".
 For TO-only routes use the `@require_tournament_organizer` decorator
 from `app.utils.decorators`.
 
+### Personalized registration forms
+
+`GET /_api/tournaments/<slug>/registration-form` and
+`GET /_api/leagues/<slug>/registration-form` redirect the signed-in player to
+their Google Form. The service builds the link locally from the effective
+registration settings; league events inherit their league's configuration.
+
+These routes require a player account and access to the event or league.
+Published scopes are visible to players; drafts require organizer access.
+The player identity comes from the session. A successful response is a `302`
+redirect with `Cache-Control: no-store` and `Referrer-Policy: no-referrer`.
+Errors use the normal JSON status codes; a disabled requirement returns `400`,
+and an incomplete configuration returns `503`.
+
 ## CORS in dev
 
 When `ARCTOS_CORS_DEV=1`, `app/__init__.py` adds CORS headers and
@@ -155,7 +169,7 @@ throughout) can stay a single file.
 
 ### What NOT to do
 
-- Don't promote pre-emptively. A 200-line route file that *might* grow
+- Don't promote preemptively. A 200-line route file that *might* grow
   is not a candidate.
 - Don't create new blueprints inside the package. Submodules share one
   Blueprint object so URL endpoint names stay stable across moves.

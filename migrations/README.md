@@ -57,6 +57,20 @@ SQLALCHEMY_DATABASE_URI=sqlite:////tmp/test.db uv run alembic upgrade head
 Every migration file must have a module-level docstring explaining why the
 change is needed. Review that explanation along with the schema operations.
 
+## Registration forms
+
+Revision `0027_registration_forms`, following `0026_team_managers`, adds nullable Form URL, code-question ID,
+response Sheet ID, tab ID, code-heading, and private signing-key columns to
+`registrable_configs`. Existing
+events and leagues have no response requirement until an organizer enables
+one. Response contents are not stored in the database.
+
+Back up the intended database, run `uv sync`, and apply `uv run alembic upgrade
+head` with its explicit `SQLALCHEMY_DATABASE_URI` before restarting Flask.
+The [registration-form setup](../docs/env-vars.md#registration-forms) describes
+the optional server credentials. Downgrading removes the six configuration
+columns and preserves registrations.
+
 ## Profile and event banners
 
 The current profile fields are introduced by these migrations:

@@ -23,6 +23,48 @@ class PermissionService:
     """
 
     @staticmethod
+    def managed_teams(user):
+        """Teams this account can manage, including a team account's own team."""
+        from models import Team, TeamManager
+
+        if is_team(user):
+            return [user]
+        if is_player(user):
+            return (
+                Team.query.join(TeamManager, TeamManager.team_id == Team.id)
+                .filter(TeamManager.player_id == user.id)
+                .order_by(Team.name, Team.id)
+                .all()
+            )
+        return []
+
+    @staticmethod
+    def can_manage_team(team_id: str, user) -> bool:
+        from models import TeamManager
+
+        if is_team(user):
+            return user.id == team_id
+        return is_player(user) and TeamManager.query.filter_by(team_id=team_id, player_id=user.id).first() is not None
+
+    @staticmethod
+    def organizer_query(user):
+        """TO assignments for this account and teams it manages."""
+        from sqlalchemy import and_, or_, false
+        from models import TO, TeamManager
+
+        if is_team(user):
+            return TO.query.filter_by(user_id=user.id, user_type="team")
+        if is_player(user):
+            teams = TeamManager.query.with_entities(TeamManager.team_id).filter_by(player_id=user.id)
+            return TO.query.filter(
+                or_(
+                    and_(TO.user_type == "player", TO.user_id == user.id),
+                    and_(TO.user_type == "team", TO.user_id.in_(teams)),
+                )
+            )
+        return TO.query.filter(false())
+
+    @staticmethod
     def user_type(user) -> "Option[UserType]":
         """Return the account type for *user*.
 
@@ -59,7 +101,7 @@ class PermissionService:
             user: Flask-Login user object, or ``None``.
 
         Returns:
-            ``True`` if a matching :class:`~app.models.tournament.TO` row exists.
+            ``True`` if the account or a team it manages has a matching TO assignment.
         """
         if tournament is None or user is None:
             return False
@@ -69,9 +111,7 @@ class PermissionService:
             case _:
                 return False
 
-        from models import TO
-
-        q = TO.query.filter_by(user_id=user.id, user_type=str(user_type))
+        q = PermissionService.organizer_query(user)
         if tournament.league_id:
             q = q.filter_by(league_id=tournament.league_id)
         else:
@@ -91,7 +131,7 @@ class PermissionService:
             user: Flask-Login user object (player or team), or ``None``.
 
         Returns:
-            ``True`` if a matching :class:`~app.models.tournament.TO` row exists.
+            ``True`` if the account or a team it manages has a matching TO assignment.
         """
         if not tournament_url or user is None:
             return False
@@ -109,7 +149,7 @@ class PermissionService:
             user: Flask-Login user object, or ``None``.
 
         Returns:
-            ``True`` if a matching :class:`~app.models.tournament.TO` row exists.
+            ``True`` if the account or a team it manages has a matching TO assignment.
         """
         if not league_url or user is None:
             return False
@@ -119,13 +159,11 @@ class PermissionService:
             case _:
                 return False
 
-        from models import TO
-
-        return TO.query.filter_by(user_id=user.id, user_type=str(user_type), league_id=league_url).first() is not None
+        return PermissionService.organizer_query(user).filter_by(league_id=league_url).first() is not None
 
     @staticmethod
     def organized_scopes(user) -> tuple[set[str], set[str]]:
-        """Return the ``(tournament_urls, league_urls)`` that *user* is a TO of.
+        """Return scopes organized by this account or teams it manages.
 
         Args:
             user: Flask-Login user object, or ``None``.
@@ -139,9 +177,7 @@ class PermissionService:
             case _:
                 return set(), set()
 
-        from models import TO
-
-        rows = TO.query.filter_by(user_id=user.id, user_type=str(user_type)).all()
+        rows = PermissionService.organizer_query(user).all()
         return {row.event for row in rows if row.event}, {row.league_id for row in rows if row.league_id}
 
     @staticmethod

@@ -1,0 +1,47 @@
+.team-management { max-width: 70rem; margin-inline: auto; padding-block: 1rem 2rem; }
+.team-management-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .75rem 1rem; }
+.team-management > .event-route-tabs-bar { margin-top: 1.25rem; }
+.team-management-heading h1, .team-management-heading h2 { margin-bottom: 0; }
+.team-management-heading h1 { font-size: clamp(1.5rem, 4vw, 2rem); }
+.team-management-section { padding-block: 1.75rem; border-bottom: 1px solid var(--bs-border-color); }
+.team-management-section > .team-management-heading { margin-bottom: 1rem; }
+.team-management-list { margin-block: .5rem; }
+.team-management-row { display: flex; gap: 1rem; align-items: center; justify-content: space-between; padding: 1rem 0; border-bottom: 1px solid var(--bs-border-color); color: var(--bs-body-color); text-decoration: none; }
+a.team-management-row:hover { color: var(--bs-link-color); }
+.team-management-row > div:first-child, .team-player-identity > div { min-width: 0; }
+.team-management-row strong, .team-management-row span.text-muted { display: block; overflow-wrap: anywhere; }
+.team-row-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.team-row-actions .btn, .team-management-row .btn { flex-shrink: 0; white-space: nowrap; }
+.team-player-identity { display: flex; align-items: center; gap: .75rem; }
+.team-player-avatar { width: 2.5rem; height: 2.5rem; object-fit: cover; border-radius: 50%; }
+.team-picker-results { max-height: 24rem; overflow-y: auto; }
+.team-registration-form { max-width: 36rem; display: grid; gap: 1rem; }
+.team-registration-summary { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem; }
+.team-management-footer { padding-top: 1.5rem; }
+.team-managed-roster .roster-actions { min-width: 12rem; }
+@media (max-width: 575px) {
+    .team-management { padding-top: .5rem; }
+    .team-management-section { padding-block: 1.25rem; }
+    .team-managed-roster .roster-actions { min-width: 0; }
+    .team-management-row { gap: .75rem; }
+    .team-player-avatar { display: none; }
+}
+
+.team-management .team-roster-wrapper { border: 0; background: transparent; box-shadow: none; border-radius: 0; }
+.team-managed-roster .team-row-actions .btn { min-height: 44px; }
+.team-payment-info { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 767px) {
+    .team-management .team-roster-wrapper { overflow: visible; }
+    .team-managed-roster, .team-managed-roster tbody { display: block; width: 100%; min-width: 0; }
+    .team-managed-roster thead { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); }
+    .team-managed-roster tbody tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .4rem .75rem; padding: 1rem 0; border-bottom: 1px solid var(--bs-border-color); }
+    .team-managed-roster tbody td { display: block; min-width: 0; padding: 0 !important; border: 0; background: transparent; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+    .team-managed-roster tbody td:first-child { grid-column: 1 / -1; font-weight: 600; }
+    .team-managed-roster tbody td:nth-child(2)::before,
+    .team-managed-roster tbody td:nth-child(3)::before { content: attr(data-label) ": "; color: var(--bs-secondary-color); font-weight: 400; }
+    .team-managed-roster tbody td:nth-child(4),
+    .team-managed-roster tbody td:nth-child(5) { grid-column: 1 / -1; }
+    .team-managed-roster tbody td:nth-child(4) { margin-top: .2rem; }
+    .team-managed-roster tbody td:nth-child(5) { margin-top: .4rem; }
+    .team-managed-roster .team-row-actions { justify-content: flex-start; }
+}

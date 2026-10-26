@@ -15,7 +15,6 @@ from app.domain.enums import TeamRegistrationStatus
 from app.services.permission_service import PermissionService
 from app.utils.user_helpers import is_player, is_team
 from app.utils.datetime_helpers import now_utc_naive
-from app.error_values import Some
 
 
 @dataclass(frozen=True)
@@ -50,18 +49,15 @@ class TournamentService:
             * ``user_reg_status``: Mapping of tournament URL → registration
               status dict for the current user.
         """
-        from models import Tournament, TeamRegistration, PlayerRegistration, TO, db
+        from models import Tournament, TeamRegistration, PlayerRegistration, db
 
         published_tournaments = Tournament.query.filter_by(published=True).all()
 
-        to_tournament_urls: list[str] = []
-        if user is not None and getattr(user, "is_authenticated", False):
-            match PermissionService.user_type(user):
-                case Some(user_type):
-                    to_entries = TO.query.filter_by(user_id=user.id, user_type=user_type).all()
-                    to_tournament_urls = [entry.event for entry in to_entries]
-                case _:
-                    pass
+        to_tournament_urls, league_urls = PermissionService.organized_scopes(user)
+        if league_urls:
+            to_tournament_urls.update(
+                row.url for row in Tournament.query.filter(Tournament.league_id.in_(league_urls)).all()
+            )
 
         all_tournament_urls = {t.url for t in published_tournaments}
         all_tournament_urls.update(to_tournament_urls or [])

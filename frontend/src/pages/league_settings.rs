@@ -1,4 +1,6 @@
 use crate::api;
+use crate::components::RegistrationFormSettings;
+use crate::types::RegistrationFormConfig;
 use crate::components::{BannerAccountKind, BannerUpload, EventBannerPhoto, LeaguePenaltyTypesTable, SettingsSaveActions, SettingsSaveJump, ToolPageHeader};
 use crate::types::ToEntry;
 use crate::Route;
@@ -107,6 +109,7 @@ pub fn LeagueSettings(league_url: String) -> Element {
     let mut draft_values = use_signal(HashMap::<String, String>::new);
     let mut draft_checks = use_signal(HashMap::<String, bool>::new);
     let mut draft_initialized = use_signal(|| false);
+    let mut registration_form = use_signal(RegistrationFormConfig::default);
     let local_banner_photo = use_signal(|| None::<String>);
     let mut banner_photo = try_use_context::<EventBannerPhoto>().map_or(local_banner_photo, |shared| shared.0);
     let banner_busy = use_signal(|| false);
@@ -142,6 +145,7 @@ pub fn LeagueSettings(league_url: String) -> Element {
                     ("player_registration_open".into(), d.league.player_registration_open),
                     ("published".into(), d.league.published),
                 ]));
+                registration_form.set(d.league.registration_form.clone());
                 draft_initialized.set(true);
             }
             if !banner_initialized() {
@@ -195,6 +199,11 @@ pub fn LeagueSettings(league_url: String) -> Element {
                         "require_waiver_signature".to_string(),
                         serde_json::json!(require_waiver_signature),
                     );
+                    let config = registration_form();
+                    params.insert("registration_form_required".into(), serde_json::json!(config.registration_form_required));
+                    params.insert("registration_form_url".into(), serde_json::json!(config.registration_form_url.unwrap_or_default()));
+                    params.insert("registration_form_sheet_url".into(), serde_json::json!(config.registration_form_sheet_url.unwrap_or_default()));
+                    params.insert("registration_form_code_column".into(), serde_json::json!(config.registration_form_code_column.unwrap_or_default()));
                     let n_max_teams = get_form_value("n_max_teams");
                     let max_roster = get_form_value("max_team_size_roster");
                     let max_field = get_form_value("max_team_size_field");
@@ -260,6 +269,7 @@ pub fn LeagueSettings(league_url: String) -> Element {
                                 }
                             }
                         }
+                        RegistrationFormSettings { draft: registration_form, disabled: saving() }
                         div { class: "mb-3",
                             h3 { class: "h5 mb-2", "Waiver" }
                             div { class: "form-check mb-2",

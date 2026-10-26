@@ -9,7 +9,6 @@ import threading
 
 from flask_login import current_user
 from app.domain.enums import RegistrationStatus
-from app.services._common import current_user_type
 from models import Tournament, Team
 
 
@@ -352,7 +351,7 @@ def check_tournament_access(tournament_url: str):
         :class:`~app.models.tournament.Tournament` instance (or ``None`` when
         the tournament does not exist).
     """
-    from models import Tournament, TO
+    from models import Tournament
 
     tournament = Tournament.query.get(tournament_url)
     if not tournament:
@@ -366,21 +365,9 @@ def check_tournament_access(tournament_url: str):
     if not current_user.is_authenticated:
         return False, tournament
 
-    is_to = None
-    if tournament.league_id:
-        is_to = TO.query.filter_by(
-            user_id=current_user.id,
-            user_type=current_user_type(),
-            league_id=tournament.league_id,
-        ).first()
-    if not is_to:
-        is_to = TO.query.filter_by(
-            user_id=current_user.id,
-            user_type=current_user_type(),
-            event=tournament_url,
-        ).first()
+    from app.services.permission_service import PermissionService
 
-    if not is_to:
+    if not PermissionService.is_tournament_organizer_of(tournament, current_user):
         return False, tournament
 
     return True, tournament

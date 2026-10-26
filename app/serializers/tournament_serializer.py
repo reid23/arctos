@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from app.services.dual_write import get_head_ref_allowlist_ids
+from app.services.registration_form_service import RegistrationFormService
 from app.utils.helpers import get_registrable_config
 from models import BracketPlacement, League, Team
 
@@ -30,7 +31,7 @@ def _tournament_has_bracket(t) -> bool:
         return False
 
 
-def tournament_to_dict(t) -> dict:
+def tournament_to_dict(t, *, include_registration_form_settings: bool = False) -> dict:
     """Serialise a :class:`~app.models.tournament.Tournament` to an API dict.
 
     Includes registration status, fee, waiver, head-ref policy, and league
@@ -39,6 +40,8 @@ def tournament_to_dict(t) -> dict:
 
     Args:
         t: The tournament ORM instance to serialise.
+        include_registration_form_settings: Include response-sheet settings
+            after the caller verifies organizer access.
 
     Returns:
         A JSON-serialisable dictionary suitable for the SPA.
@@ -105,6 +108,9 @@ def tournament_to_dict(t) -> dict:
             out["league"] = None
     else:
         out["league"] = None
+    out.update(RegistrationFormService.public_config(cfg))
+    if include_registration_form_settings:
+        out.update(RegistrationFormService.organizer_config(cfg))
     return out
 
 

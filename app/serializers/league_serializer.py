@@ -11,6 +11,7 @@ from __future__ import annotations
 from flask_login import current_user
 
 from app.services.permission_service import PermissionService
+from app.services.registration_form_service import RegistrationFormService
 from models import League
 
 
@@ -41,7 +42,7 @@ def require_league(league_url: str):
     return league, None
 
 
-def league_to_dict(league) -> dict:
+def league_to_dict(league, *, include_registration_form_settings: bool = False) -> dict:
     """Serialise a :class:`~app.models.league.League` to an API dict.
 
     Includes registration status, fees, waiver info, and payment instructions
@@ -50,6 +51,8 @@ def league_to_dict(league) -> dict:
 
     Args:
         league: The league ORM instance to serialise.
+        include_registration_form_settings: Include response-sheet settings
+            after the caller verifies organizer access.
 
     Returns:
         A JSON-serialisable dictionary suitable for the SPA.
@@ -58,7 +61,7 @@ def league_to_dict(league) -> dict:
     team_reg_open = bool(rc.team_registration_open) if rc else False
     player_reg_open = bool(rc.player_registration_open) if rc else False
     wf = getattr(rc, "waiver_filepath", None) if rc else None
-    return {
+    out = {
         "league_url": league.url,
         "name": league.name,
         "banner_photo": league.banner_photo,
@@ -77,3 +80,7 @@ def league_to_dict(league) -> dict:
         "waiver_filepath": wf,
         "waiver_sha256": getattr(rc, "waiver_sha256", None) if rc else None,
     }
+    out.update(RegistrationFormService.public_config(rc))
+    if include_registration_form_settings:
+        out.update(RegistrationFormService.organizer_config(rc))
+    return out

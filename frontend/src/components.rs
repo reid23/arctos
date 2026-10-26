@@ -1,9 +1,9 @@
 //! Reusable UI components.
 
 mod action_recovery;
-mod invitation_actions;
+mod registration_form;
+pub use registration_form::{RegistrationFormNotice, RegistrationFormSettings};
 pub use action_recovery::{ActionRecovery, RegistrationIntent, RequestEpoch};
-pub use invitation_actions::InvitationActions;
 
 mod appearance_menu;
 mod banner_upload;

@@ -19,6 +19,7 @@ from sqlalchemy import and_, or_
 
 from app.domain.enums import RegistrationStatus
 from app.services.profile_stats_service import past_event_counts
+from app.services.permission_service import PermissionService
 from app.utils.datetime_helpers import dt_iso
 from app.utils.helpers import can_head_ref_match
 from app.utils.profile_banner_helpers import (
@@ -34,7 +35,7 @@ from app.utils.profile_photo_helpers import (
     replace_profile_photo,
 )
 from app.utils.profile_edit_helpers import ProfileEditError, save_profile_edit
-from app.utils.user_helpers import is_player, is_team
+from app.utils.user_helpers import is_player
 from models import (
     Match,
     MatchNote,
@@ -139,7 +140,7 @@ def team_profile(team_id):
     tournament_start = {t.url: t.start_date for t in tournaments}
 
     tournament_players = {}
-    if current_user.is_authenticated and current_user.id == team_id and is_team(current_user):
+    if PermissionService.can_manage_team(team_id, current_user):
         all_player_ids = set()
         team_reg_to_players = {}
         for team_reg in regs:
@@ -225,7 +226,7 @@ def team_profile(team_id):
                     continue
 
                 can_see_note = False
-                if current_user.id == team_id:
+                if PermissionService.can_manage_team(team_id, current_user):
                     can_see_note = True
                 elif player_played_with_team and current_user.id != team_id:
                     if m.event in player_tournament_registrations:
@@ -272,6 +273,7 @@ def team_profile(team_id):
                 "website": team.website,
                 "about": team.about,
             },
+            "can_manage": PermissionService.can_manage_team(team_id, current_user),
             "past_event_count": past_event_counts("team", [team_id])[team_id],
             "registrations": [
                 {
@@ -294,8 +296,8 @@ def team_profile(team_id):
 @login_required
 def update_team_profile(team_id):
     """Save profile text and optional multipart images together."""
-    if current_user.id != team_id or not is_team(current_user):
-        return jsonify({"error": "You can only edit your own team profile"}), 403
+    if not PermissionService.can_manage_team(team_id, current_user):
+        return jsonify({"error": "You do not have permission to edit this team profile."}), 403
 
     team = Team.query.get_or_404(team_id)
     try:
@@ -308,9 +310,9 @@ def update_team_profile(team_id):
 @bp.route("/teams/<team_id>/banner-photo", methods=["POST", "DELETE"])
 @login_required
 def team_banner_photo(team_id):
-    """Replace or remove a banner belonging to this team account only."""
-    if not is_team(current_user) or current_user.id != team_id:
-        return jsonify({"error": "You can only change the banner on your own team profile"}), 403
+    """Replace or remove a banner as the team account or a manager."""
+    if not PermissionService.can_manage_team(team_id, current_user):
+        return jsonify({"error": "You do not have permission to change this team banner."}), 403
     team = Team.query.get_or_404(team_id)
     try:
         if request.method == "DELETE":
@@ -326,9 +328,9 @@ def team_banner_photo(team_id):
 @login_required
 def upload_team_profile_photo(team_id):
     """Validate and replace the team's avatar without overwriting a cached URL."""
-    if current_user.id != team_id or not is_team(current_user):
+    if not PermissionService.can_manage_team(team_id, current_user):
         return (
-            jsonify({"error": "You can only upload a photo for your own team profile"}),
+            jsonify({"error": "You do not have permission to change this team photo."}),
             403,
         )
     team = Team.query.get_or_404(team_id)
@@ -343,9 +345,9 @@ def upload_team_profile_photo(team_id):
 @login_required
 def delete_team_profile_photo(team_id):
     """Remove team profile photo."""
-    if current_user.id != team_id or not is_team(current_user):
+    if not PermissionService.can_manage_team(team_id, current_user):
         return (
-            jsonify({"error": "You can only remove a photo from your own team profile"}),
+            jsonify({"error": "You do not have permission to remove this team photo."}),
             403,
         )
     team = Team.query.get_or_404(team_id)

@@ -1,6 +1,6 @@
 # Data Accessibility Guide
 
-Updated: Oct 24, 2026
+Updated: Oct 26, 2026
 
 This document details when and how data that you explicitly enter is
 accessible to others.
@@ -11,10 +11,33 @@ Player email addresses and phone numbers are not displayed on public
 profiles. Passwords and OAuth credentials are not published.
 
 A team's **public contact email** is visible to anyone on its profile.
-The team owner can add, change or remove this address in Edit profile.
+The team account and its managers can add, change or remove this address in Edit profile.
 Creating a new team with Google does not automatically publish the Google
 email address. Existing team contact addresses remain visible until the
-owner changes or removes them.
+team account or a manager changes or removes them.
+
+## Team managers
+
+Only a team account can appoint or remove its managers. Managers are player
+accounts with access to the team's profile, registrations, rosters, and private
+team notes. If the team organizes an event or league, its managers also have
+organizer access to that event or league and the information available to its
+organizers.
+
+Manager access does not expose the team account's password or OAuth credentials.
+It does not grant access to a player's private profile information beyond the
+permissions held for a particular event or match. Removing a manager ends the
+access granted through the team; separately assigned roles still apply.
+
+## Registration forms
+
+An event or league's form requirement and responder link are public. The
+response spreadsheet link, tab, and registration code heading are visible only to its
+authorized organizers. Arctos checks the configured registration code column and
+returns registration eligibility without publishing spreadsheet rows.
+Each signed-in player opens their own personalized form link. The configuration's
+private signing key remains on the server. The organizer controls access to the
+form responses in Google Sheets.
 
 ## Injuries
  
