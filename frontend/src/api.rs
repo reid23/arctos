@@ -3564,7 +3564,7 @@ pub async fn sidecomp_log_result(
 pub async fn sidecomp_log_matchup(
     comp_id: i32,
     winner_registration_id: Option<i32>,
-    winner_player_id: &str,
+    winner_player_id: Option<&str>,
     loser_registration_id: Option<i32>,
     loser_player_id: Option<&str>,
 ) -> Result<Vec<SideCompResultEntry>, String> {

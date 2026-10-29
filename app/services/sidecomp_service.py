@@ -539,15 +539,15 @@ class SideCompService:
 
         if track_losses is not None:
             sc.track_losses = bool(track_losses)
-            if not sc.track_losses:
-                sc.track_matchups = False
         if track_chain_losses is not None:
             sc.track_chain_losses = bool(track_chain_losses)
         if track_break_losses is not None:
             sc.track_break_losses = bool(track_break_losses)
+        if not sc.loss_tracking_enabled():
+            sc.track_matchups = False
         if track_matchups is not None:
             want_matchups = bool(track_matchups)
-            if want_matchups and not sc.track_losses:
+            if want_matchups and not sc.loss_tracking_enabled():
                 return Err(ValidationError("Track matchups requires tracking losses"))
             sc.track_matchups = want_matchups
 
@@ -1133,11 +1133,11 @@ class SideCompService:
         loser_player_id: Optional[str] = None,
         ref_user_id: str,
     ) -> Result[list["SideCompResult"], ArctosError]:
-        """Record a win, and the opponent's loss when that person is known.
+        """Record a bout. Either person may be unknown.
 
-        The winner is required. The loser may be omitted. Both rows share a
-        timestamp and point at each other through ``opponent``, so undoing
-        either one removes the bout.
+        A known winner gets ``+1``. A known loser gets ``-1``. When both are
+        known the rows share a timestamp and point at each other, so undoing
+        either one removes the bout. At least one person is required.
         """
         from app.utils.datetime_helpers import now_utc_naive
         from models import SideComp, SideCompResult, db
@@ -1149,24 +1149,28 @@ class SideCompService:
             return Err(ValidationError("Matchups are not tracked for this side competition"))
 
         SideCompService._open_for_results(sc).Q()
-        winner = SideCompService._existing_registration(
-            sc, registration_id=winner_registration_id, player_id=winner_player_id
-        ).Q()
+        winner_known = winner_registration_id is not None or bool(winner_player_id)
         loser_known = loser_registration_id is not None or bool(loser_player_id)
+        if not winner_known and not loser_known:
+            return Err(ValidationError("Pick at least one person"))
+
+        winner = None
+        if winner_known:
+            winner = SideCompService._existing_registration(
+                sc, registration_id=winner_registration_id, player_id=winner_player_id
+            ).Q()
         loser = None
         if loser_known:
             loser = SideCompService._existing_registration(
                 sc, registration_id=loser_registration_id, player_id=loser_player_id
             ).Q()
+        if winner_known and loser_known:
             winner_player = winner.player if winner is not None else winner_player_id
             loser_player = loser.player if loser is not None else loser_player_id
             if winner_player == loser_player:
                 return Err(ValidationError("Pick two different people"))
-            loser_weapon = loser.weapon if loser is not None else None
-            if not sc.tracks_losses_for_weapon(loser_weapon):
-                return Err(ValidationError("Losses are not tracked for this player"))
 
-        if winner is None:
+        if winner_known and winner is None:
             if not winner_player_id:
                 return Err(ValidationError("registration_id or player_id is required"))
             winner = SideCompService._add_registration(
@@ -1181,23 +1185,26 @@ class SideCompService:
         db.session.flush()
 
         stamp = now_utc_naive()
-        win = SideCompResult(
-            comp=comp_id,
-            player=winner.id,
-            opponent=loser.id if loser is not None else None,
-            points=1,
-            ref=ref_user_id,
-            flagged=False,
-            valid=True,
-            stamp=stamp,
-        )
-        rows = [win]
+        rows = []
+        if winner is not None:
+            rows.append(
+                SideCompResult(
+                    comp=comp_id,
+                    player=winner.id,
+                    opponent=loser.id if loser is not None else None,
+                    points=1,
+                    ref=ref_user_id,
+                    flagged=False,
+                    valid=True,
+                    stamp=stamp,
+                )
+            )
         if loser is not None:
             rows.append(
                 SideCompResult(
                     comp=comp_id,
                     player=loser.id,
-                    opponent=winner.id,
+                    opponent=winner.id if winner is not None else None,
                     points=-1,
                     ref=ref_user_id,
                     flagged=False,
@@ -1594,8 +1601,8 @@ class SideCompService:
             chains = [r for r in regs if r.weapon == Pompfen.CHAIN.value]
             breaks = [r for r in regs if r.weapon != Pompfen.CHAIN.value]
             tables = [
-                build_table("chains", "Chains", chains, bool(sc.track_chain_losses)),
-                build_table("breaks", "Breaks", breaks, bool(sc.track_break_losses)),
+                build_table("chains", "Chains", chains, bool(sc.track_chain_losses or sc.track_matchups)),
+                build_table("breaks", "Breaks", breaks, bool(sc.track_break_losses or sc.track_matchups)),
             ]
         else:
             tables = [build_table("all", "Standings", regs, bool(sc.track_losses))]

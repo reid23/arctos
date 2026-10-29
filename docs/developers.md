@@ -566,8 +566,9 @@ Side competitions (duels, chains and breaks, and the like), oldest first.
 - Whether losses count is `track_losses`, except in `CHAIN_BREAKING`, where
   chains follow `track_chain_losses` and everyone else follows
   `track_break_losses`.
-- `track_matchups` is available when `track_losses` is set. Scoring then
-  records two people at once: a win for one and a loss for the other.
+- `track_matchups` is available when loss tracking is on, including chain
+  and breaker loss tracking. Scoring then records two people at a time: a
+  win for one and a loss for the other. Either person may be unknown.
 - `results_available` is `false` when the organizers have hidden the
   results.
 

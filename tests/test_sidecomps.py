@@ -1652,6 +1652,75 @@ def test_log_matchup_allows_an_unknown_opponent(test_db, tournament):
     assert row["losses"] == 0
 
 
+def test_log_matchup_can_award_the_win_to_an_unknown_person(test_db, tournament):
+    from app.services.sidecomp_service import SideCompService
+
+    right = _make_player("p_right", "Right")
+    sc, (right_reg,) = _matchup_comp(tournament, right)
+    rows = SideCompService.log_matchup(sc.id, loser_registration_id=right_reg.id, ref_user_id="ref").unwrap()
+    assert [(row.player, row.points, row.opponent) for row in rows] == [(right_reg.id, -1, None)]
+    row = SideCompService.standings(sc.id).unwrap()["tables"][0]["rows"][0]
+    assert row["player_id"] == right.id
+    assert row["wins"] == 0
+    assert row["losses"] == 1
+
+    missing = SideCompService.log_matchup(sc.id, ref_user_id="ref")
+    assert isinstance(missing, Err)
+
+
+def test_chain_comp_matchups_count_a_loss_for_either_group(test_db, tournament):
+    from app.domain.enums import Pompfen
+    from app.services.sidecomp_service import SideCompService
+
+    to_user = _make_player("to_user", "TO User")
+    _make_to(tournament.url, to_user.id)
+    chain = _make_player("p_chain", "Chain")
+    breaker = _make_player("p_break", "Breaker")
+    for player in (chain, breaker):
+        _confirm_event_registration(tournament.url, player.id)
+    sc = SideComp(
+        event=tournament.url,
+        name="Chains",
+        type="CHAIN_BREAKING",
+        registration_open=True,
+        active=True,
+        track_chain_losses=True,
+    )
+    db.session.add(sc)
+    db.session.commit()
+    enabled = SideCompService.update(
+        sc.id,
+        actor_user_id=to_user.id,
+        actor_user_type="player",
+        track_matchups=True,
+    )
+    assert isinstance(enabled, Ok)
+    assert enabled.unwrap().track_matchups is True
+
+    chain_reg = SideCompService.register_player(sc.id, player_id=chain.id, weapon="CHAIN").unwrap()
+    break_reg = SideCompService.register_player(sc.id, player_id=breaker.id, weapon="LONG").unwrap()
+    assert chain_reg.weapon == Pompfen.CHAIN.value
+    SideCompService.log_matchup(
+        sc.id,
+        winner_registration_id=chain_reg.id,
+        loser_registration_id=break_reg.id,
+        ref_user_id="ref",
+    ).unwrap()
+    tables = {table["id"]: table for table in SideCompService.standings(sc.id).unwrap()["tables"]}
+    assert tables["breaks"]["track_losses"] is True
+    assert tables["breaks"]["rows"][0]["losses"] == 1
+    assert tables["chains"]["rows"][0]["wins"] == 1
+
+    cleared = SideCompService.update(
+        sc.id,
+        actor_user_id=to_user.id,
+        actor_user_type="player",
+        track_chain_losses=False,
+        track_break_losses=False,
+    )
+    assert cleared.unwrap().track_matchups is False
+
+
 def test_log_matchup_rejects_the_same_person_and_a_comp_that_does_not_track_them(test_db, tournament):
     from app.services.sidecomp_service import SideCompService
 
