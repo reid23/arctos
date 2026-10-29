@@ -1,5 +1,5 @@
 use crate::api;
-use crate::components::{EventTab, EventTabs, ProfileHeader, ProfileBio};
+use crate::components::{EventTab, EventTabs, ProfileBio, ProfileHeader};
 use crate::components::{PaymentStatusBadge, RecordTimestamp, RegistrationStatusBadge};
 use crate::types::{TeamRegItem, TournamentPlayerItem};
 use crate::Route;
@@ -21,7 +21,10 @@ fn RegistrationRow(
 ) -> Element {
     let event_key = registration.event.clone();
     let is_league = event_key.starts_with("league:");
-    let league_url = event_key.strip_prefix("league:").unwrap_or(&event_key).to_string();
+    let league_url = event_key
+        .strip_prefix("league:")
+        .unwrap_or(&event_key)
+        .to_string();
     rsx! {
         tr {
             class: if is_expanded { "profile-team-record table-active" } else { "profile-team-record" },
@@ -78,23 +81,21 @@ fn RegistrationRow(
             td { class: "profile-record-actions table-nowrap", "data-label": "Actions",
                 onclick: move |e: Event<MouseData>| e.stop_propagation(),
                 if is_own_team {
-                    if is_league {
-                        Link {
-                            to: Route::LeagueInvitations { league_url: league_url.clone() },
-                            class: "btn btn-sm btn-outline-primary",
-                            "Manage Roster"
-                        }
-                    } else if registration.historical {
+                    if registration.historical {
                         Link {
                             to: Route::HistoricalRoster { url: event_key.clone(), team_id: team_id.clone() },
                             class: "btn btn-sm btn-outline-primary",
-                            "Manage Roster"
+                            "Manage roster"
                         }
                     } else {
                         Link {
-                            to: Route::Invitations { url: event_key.clone() },
+                            to: Route::ManageTeamEvent {
+                                team_id: team_id.clone(),
+                                kind: if is_league { "leagues".into() } else { "events".into() },
+                                slug: league_url.clone(),
+                            },
                             class: "btn btn-sm btn-outline-primary",
-                            "Manage Roster"
+                            "Manage roster"
                         }
                     }
                 }
@@ -171,7 +172,9 @@ pub fn TeamProfilePage(id: String) -> Element {
         _ => return rsx! { div { class: "alert alert-danger", "Invalid route" } },
     };
     let mut id_signal = use_signal(|| id.clone());
-    if *id_signal.peek() != id { id_signal.set(id.clone()); }
+    if *id_signal.peek() != id {
+        id_signal.set(id.clone());
+    }
     rsx! {
         TeamProfile { key: "{id}", id: id_signal, tab }
     }
@@ -226,8 +229,7 @@ pub fn TeamProfile(id: Signal<String>, tab: String) -> Element {
     rsx! {
         if let Some(Ok(d)) = val.read().as_ref() {
             {
-                let own_profile = me.read().as_ref().and_then(|result| result.as_ref().ok())
-                    .is_some_and(|user| user.user_type == "team" && user.id == d.team.id);
+                let own_profile = d.can_manage;
                 let show_notes = own_profile || !d.team_notes.is_empty();
                 let active_tab = match tab.as_str() {
                     "history" => "history",
@@ -247,7 +249,8 @@ pub fn TeamProfile(id: Signal<String>, tab: String) -> Element {
                 account_id: d.team.id.clone(), kind: "team".to_string(), name: d.team.name.clone(),
                 avatar: d.team.profile_photo.clone(), banner: d.team.banner_photo.clone(), location: d.team.location.clone(),
                 past_count: d.past_event_count,
-                edit_route: own_profile.then(|| Route::EditTeamProfile { team_id: d.team.id.clone() }),
+                edit_route: None,
+                manage_route: own_profile.then(|| Route::ManageTeam { team_id: d.team.id.clone() }),
             }
             if let Some(event) = d.team.placeholder_event.as_ref() {
                 div { class: "container-wide",
@@ -312,7 +315,7 @@ pub fn TeamProfile(id: Signal<String>, tab: String) -> Element {
                                                     let ev = reg_clone.event.clone();
                                                     let is_expanded = expanded_event() == Some(ev.clone());
                                                     let ev_for_toggle = ev.clone();
-                                                    let is_own = me.read().as_ref().and_then(|r| r.as_ref().ok()).map(|u| u.user_type == "team" && u.id == d.team.id).unwrap_or(false);
+                                                    let is_own = me.read().as_ref().and_then(|r| r.as_ref().ok()).map(|u| u.can_manage_team(&d.team.id)).unwrap_or(false);
                                                     row_views.push(rsx! {
                                                         RegistrationRow {
                                                             key: "{ev}",

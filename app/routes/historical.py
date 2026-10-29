@@ -15,8 +15,9 @@ from app.services.historical_records_service import HistoricalRecordsService
 from app.utils.decorators import require_json_body
 from app.utils.result_helpers import json_from_result
 from app.utils.responses import json_error, json_success
-from app.utils.user_helpers import is_player, is_team
-from models import Tournament, db
+from app.utils.team_access import requested_team_id
+from app.utils.user_helpers import is_player
+from models import TeamClaimInvitation, Tournament, db
 
 bp = Blueprint("historical", __name__, url_prefix="/_api")
 
@@ -170,11 +171,10 @@ def decline_claim_request(tournament_url: str, request_id: int):
 @login_required
 @require_json_body()
 def request_claim(tournament_url: str):
-    """Team: ask to claim a placeholder. Body: ``{"placeholder_team_id": ...}``."""
-    if not is_team(current_user):
-        return json_error("Only teams can claim a spot", status_code=403)
+    """A team or its manager asks to claim a placeholder."""
+    team_id = requested_team_id()
     result = HistoricalClaimsService.request_claim(
-        tournament_url, team_id=current_user.id, placeholder_team_id=g.json_body.get("placeholder_team_id", "")
+        tournament_url, team_id=team_id, placeholder_team_id=g.json_body.get("placeholder_team_id", "")
     )
     return json_from_result(result, ok_to_payload=lambda _: {})
 
@@ -182,10 +182,8 @@ def request_claim(tournament_url: str):
 @bp.route("/tournaments/<tournament_url>/claim-requests/mine", methods=["DELETE"])
 @login_required
 def withdraw_claim_request(tournament_url: str):
-    """Team: withdraw its open claim request."""
-    if not is_team(current_user):
-        return json_error("Only teams can withdraw a claim request", status_code=403)
-    result = HistoricalClaimsService.withdraw_claim_request(tournament_url, team_id=current_user.id)
+    """A team or its manager withdraws its open claim request."""
+    result = HistoricalClaimsService.withdraw_claim_request(tournament_url, team_id=requested_team_id())
     return json_from_result(result, ok_to_payload=lambda _: {})
 
 
@@ -360,18 +358,24 @@ def decline_roster_request(tournament_url: str, team_id: str, registration_id: i
 @bp.route("/me/invitations", methods=["GET"])
 @login_required
 def my_invitations():
-    """Open claim invitations (teams) or roster invitations (players). Query: ``tournament``."""
+    """Open personal invitations, or a selected managed team's invitations."""
+    selected_team = request.args.get("team_id")
+    user_id = requested_team_id() if selected_team else current_user.id
+    user_type = "team" if selected_team else current_user_type()
     return json_success(
-        HistoricalClaimsService.pending_invitations(
-            current_user.id, current_user_type(), request.args.get("tournament") or None
-        )
+        HistoricalClaimsService.pending_invitations(user_id, user_type, request.args.get("tournament") or None)
     )
 
 
 def _respond_to_claim(invitation_id: int, accept: bool):
-    if not is_team(current_user):
-        return json_error("Only teams can claim records", status_code=403)
-    result = HistoricalClaimsService.respond_to_claim(invitation_id, team_id=current_user.id, accept=accept)
+    invitation = TeamClaimInvitation.query.get(invitation_id)
+    if invitation is None:
+        return json_error("Invitation not found", status_code=404)
+    from app.services.permission_service import PermissionService
+
+    if not PermissionService.can_manage_team(invitation.invited_team, current_user):
+        return json_error("You do not manage the invited team", status_code=403)
+    result = HistoricalClaimsService.respond_to_claim(invitation_id, team_id=invitation.invited_team, accept=accept)
     return json_from_result(result, ok_to_payload=lambda tournament: {"tournament_url": tournament.url})
 
 

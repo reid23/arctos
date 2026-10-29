@@ -34,6 +34,7 @@ pub fn EditRegistrationModal(
     context: EditRegistrationContext,
     user_type: String,
     #[props(default = false)] historical: bool,
+    #[props(optional)] team_id: Option<String>,
     on_close: EventHandler<()>,
     on_success: EventHandler<()>,
 ) -> Element {
@@ -68,7 +69,7 @@ pub fn EditRegistrationModal(
             }
             div { class: "modal-body",
                 if is_team {
-                    EditTeamRegistrationContent { context: context.clone(), load, mutation, save_error, on_close, on_success }
+                    EditTeamRegistrationContent { context: context.clone(), team_id: team_id.clone(), load, mutation, save_error, on_close, on_success }
                 } else {
                     EditPlayerRegistrationContent {
                         context: context.clone(), historical, load, mutation, save_error, on_close, on_success,
@@ -99,7 +100,7 @@ pub fn EditRegistrationModal(
                 }
                 if show_deregister_confirm() {
                     DeregisterConfirmOverlay {
-                        context: context.clone(), mutation, is_team, historical, on_close, on_success,
+                        context: context.clone(), team_id: team_id.clone(), mutation, is_team, historical, on_close, on_success,
                         on_cancel: move |_| show_deregister_confirm.set(false),
                     }
                 }
@@ -137,6 +138,7 @@ pub fn EditRegistrationModal(
 #[component]
 fn DeregisterConfirmOverlay(
     context: EditRegistrationContext,
+    team_id: Option<String>,
     is_team: bool,
     historical: bool,
     mut mutation: Signal<RegistrationMutation>,
@@ -202,11 +204,18 @@ fn DeregisterConfirmOverlay(
                         mutation.set(RegistrationMutation::Withdrawing);
                         deregister_error.set(None);
                         let ctx = context.clone();
+                        let selected_team = team_id.clone();
                         spawn(async move {
                             let result = match (&ctx, is_team) {
                                 (EditRegistrationContext::League { league_url }, true) => api::league_deregister_team(league_url).await,
                                 (EditRegistrationContext::League { league_url }, false) => api::league_deregister_player(league_url).await,
-                                (EditRegistrationContext::Tournament { tournament_url }, true) => api::deregister_team(tournament_url).await,
+                                (EditRegistrationContext::Tournament { tournament_url }, true) => {
+                                    if let Some(team_id) = selected_team.as_deref() {
+                                        api::deregister_managed_team(tournament_url, team_id).await
+                                    } else {
+                                        api::deregister_team(tournament_url).await
+                                    }
+                                }
                                 (EditRegistrationContext::Tournament { tournament_url }, false) => api::deregister_player(tournament_url).await,
                             };
                             mutation.set(RegistrationMutation::Idle);
@@ -480,6 +489,7 @@ fn EditPlayerRegistrationContent(
 #[component]
 fn EditTeamRegistrationContent(
     context: EditRegistrationContext,
+    team_id: Option<String>,
     mut load: Signal<RegistrationLoad>,
     mut mutation: Signal<RegistrationMutation>,
     mut save_error: Signal<Option<String>>,
@@ -491,8 +501,10 @@ fn EditTeamRegistrationContent(
     let mut error = use_signal(|| None::<String>);
 
     let context_clone = context.clone();
+    let team_for_fetch = team_id.clone();
     let mut fetch = use_resource(move || {
         let ctx = context_clone.clone();
+        let selected_team = team_for_fetch.clone();
         async move {
             load.set(RegistrationLoad::Loading);
             error.set(None);
@@ -501,7 +513,7 @@ fn EditTeamRegistrationContent(
                     api::get_my_team_registration_league(league_url).await
                 }
                 EditRegistrationContext::Tournament { tournament_url } => {
-                    api::get_my_team_registration(tournament_url).await
+                    api::get_team_registration_for(tournament_url, selected_team.as_deref()).await
                 }
             };
             match res {
@@ -522,6 +534,7 @@ fn EditTeamRegistrationContent(
     let onsubmit = move |evt: Event<FormData>| {
         evt.prevent_default();
         let ctx = context_for_submit.clone();
+        let selected_team = team_id.clone();
         let on_close = on_close.clone();
         let on_success = on_success.clone();
         async move {
@@ -540,7 +553,7 @@ fn EditTeamRegistrationContent(
                     api::update_my_team_registration_league(league_url, &req).await
                 }
                 EditRegistrationContext::Tournament { tournament_url } => {
-                    api::update_my_team_registration(tournament_url, &req).await
+                    api::update_team_registration_for(tournament_url, selected_team.as_deref(), &req).await
                 }
             };
             mutation.set(RegistrationMutation::Idle);

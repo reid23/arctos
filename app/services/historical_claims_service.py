@@ -204,8 +204,7 @@ class HistoricalClaimsService:
     def _roster_access(
         tournament_url: str, team_id: str, actor_user_id: str, actor_user_type: str
     ) -> Result[tuple["Tournament", "TeamRegistration"], ArctosError]:
-        """Load a historical tournament and team, requiring the actor to be that team or an organiser."""
-        from app.domain.enums import UserType
+        """Load a historical roster for its team, a manager, or an organiser."""
         from app.services._common import get_tournament_or_err, resolve_actor
         from app.services.permission_service import PermissionService
         from app.services.registration_resolver import team_registration_for_tournament
@@ -216,10 +215,13 @@ class HistoricalClaimsService:
         registration = team_registration_for_tournament(tournament, team_id)
         if registration is None:
             return Err(NotFoundError("Team not found in this tournament"))
-        is_the_team = actor_user_type == UserType.TEAM.value and actor_user_id == team_id
         actor = resolve_actor(actor_user_id, actor_user_type)
-        if not is_the_team and not PermissionService.is_tournament_organizer_of(tournament, actor):
-            return Err(UnauthorizedError("Only this team or the tournament organizers can manage this roster"))
+        if not PermissionService.can_manage_team(team_id, actor) and not PermissionService.is_tournament_organizer_of(
+            tournament, actor
+        ):
+            return Err(
+                UnauthorizedError("Only this team, its managers, or the tournament organizers can manage this roster")
+            )
         return Ok((tournament, registration))
 
     @staticmethod
@@ -374,13 +376,12 @@ class HistoricalClaimsService:
 
         This tournament's matches, referees, roster, and registration move onto
         the placeholder. The team account is left as it was. The actor must be
-        that team or an organiser.
+        that team, one of its managers, or an organiser.
         """
         import uuid
 
         from sqlalchemy import select
 
-        from app.domain.enums import UserType
         from app.services._common import get_tournament_or_err, resolve_actor
         from app.services.historical_records_service import PLACEHOLDER_ID_PREFIX
         from app.services.permission_service import PermissionService
@@ -403,10 +404,13 @@ class HistoricalClaimsService:
         team = Team.query.get(team_id)
         if registration is None or team is None or team.placeholder_event:
             return Err(ValidationError("This spot is not claimed by a team account"))
-        is_the_team = actor_user_type == UserType.TEAM.value and actor_user_id == team_id
         actor = resolve_actor(actor_user_id, actor_user_type)
-        if not is_the_team and not PermissionService.is_tournament_organizer_of(tournament, actor):
-            return Err(UnauthorizedError("Only this team or the tournament organizers can un-claim this spot"))
+        if not PermissionService.can_manage_team(team_id, actor) and not PermissionService.is_tournament_organizer_of(
+            tournament, actor
+        ):
+            return Err(
+                UnauthorizedError("Only this team, its managers, or the tournament organizers can un-claim this spot")
+            )
 
         placeholder = Team(
             id=f"{PLACEHOLDER_ID_PREFIX}{uuid.uuid4().hex[:12]}",

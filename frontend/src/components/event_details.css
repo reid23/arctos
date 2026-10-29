@@ -2,7 +2,7 @@
 .arctos-app .app-main.event-full-width { width: 100%; max-width: none; padding: 0; }
 .arctos-app .event-detail-page { width: 100%; max-width: 1440px; min-width: 0; margin-inline: auto; background: var(--ui-surface); }
 .arctos-app .event-detail-hero { width: 100%; margin: 0; border: 0; border-radius: 0; background: var(--ui-surface); color: var(--ui-text); }
-.arctos-app .event-hero-inner { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1.5rem; padding: 24px; text-align: left; }
+.arctos-app .event-hero-inner { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.25rem; padding: 24px; text-align: left; }
 .arctos-app .event-detail-hero h1 { margin: 0; color: var(--ui-text); font-size: clamp(1.5rem, 3vw, 2rem); line-height: 1.2; letter-spacing: -.025em; overflow-wrap: anywhere; }
 .arctos-app .event-detail-content { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.5rem; width: 100%; padding: 24px 24px 3rem; }
 .arctos-app .event-detail-content > * { min-width: 0; }
@@ -17,14 +17,26 @@
 .arctos-app .event-hero-meta li { display: flex; align-items: baseline; gap: .6rem; min-width: 0; }
 .arctos-app .event-hero-meta li i { width: 1rem; flex-shrink: 0; text-align: center; }
 .arctos-app .event-hero-meta li span { overflow-wrap: anywhere; }
-.arctos-app .event-hero-actions, .arctos-app .sidecomp-actions { display: flex; flex-direction: column; align-items: stretch; gap: .75rem; width: 240px; max-width: 100%; }
+.arctos-app .sidecomp-actions { display: flex; flex-direction: column; align-items: stretch; gap: .75rem; width: 240px; max-width: 100%; }
+.arctos-app .event-header-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; grid-template-areas: "status registration organizer"; align-items: center; gap: .75rem 1rem; }
+.arctos-app .event-header-controls:not(:has(.event-header-organizer)) { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "status registration"; }
+.arctos-app .event-header-status { grid-area: status; min-width: 0; }
+.arctos-app .event-header-organizer { grid-area: organizer; justify-self: end; min-width: 0; }
+.arctos-app .event-hero-actions { grid-area: registration; min-width: 0; }
+.arctos-app .event-hero-actions .event-participant-actions { flex-direction: row; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+.arctos-app .event-hero-actions .organize-menu { margin-left: 0; }
+.arctos-app .event-hero-actions .organize-menu > .btn { position: relative; z-index: 3; width: 100%; }
+.arctos-app .event-hero-actions .organize-dropdown .dropdown-item { white-space: normal; overflow-wrap: anywhere; }
+.arctos-app .event-hero-actions:has(.organize-menu.is-open), .arctos-app .event-header-organizer:has(.organizer-tools.is-open) { position: relative; z-index: 1040; }
+.arctos-app .event-hero-actions .registration-waiver-warning { flex-basis: 100%; }
+.arctos-app .event-header-controls:not(:has(.event-header-status, .event-header-organizer, .event-participant-actions > :not(style))) { display: none; }
 .arctos-app .event-hero-actions:empty { display: none; }
 .arctos-app .event-participant-actions { display: flex; flex-direction: column; align-items: stretch; gap: .5rem; }
 .arctos-app .event-participant-actions:empty, .arctos-app .sidecomp-result-actions:empty { display: none; }
 .arctos-app .event-participant-actions .btn { min-height: 44px; margin: 0; }
 .arctos-app .event-participant-actions .event-registration-action { min-height: 48px; }
 .arctos-app .event-participant-actions .btn:disabled { opacity: 1; color: var(--ui-muted); background: var(--ui-surface-muted); border-color: var(--ui-border); }
-.arctos-app .event-hero-actions > .organizer-tools, .arctos-app .sidecomp-actions > .organizer-tools { align-self: flex-end; }
+.arctos-app .sidecomp-actions > .organizer-tools { align-self: flex-end; }
 .arctos-app .sidecomp-heading.sidecomp-registration-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 1.5rem; }
 .arctos-app .sidecomp-identity { min-width: 0; }
 .arctos-app .sidecomp-identity h2 { overflow-wrap: anywhere; }
@@ -91,7 +103,11 @@
 @media (max-width: 767.98px) {
   .arctos-app .event-hero-inner { grid-template-columns: minmax(0, 1fr); padding: 20px 16px; }
   .arctos-app .sidecomp-heading.sidecomp-registration-header { grid-template-columns: minmax(0, 1fr); }
-  .arctos-app .event-hero-actions, .arctos-app .sidecomp-actions { width: 100%; }
+  .arctos-app .sidecomp-actions { width: 100%; }
+  .arctos-app .event-header-controls { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "status organizer" "registration registration"; }
+  .arctos-app .event-header-controls:not(:has(.event-header-organizer)) { grid-template-columns: minmax(0, 1fr); grid-template-areas: "status" "registration"; }
+  .arctos-app .event-hero-actions .event-participant-actions { justify-content: flex-start; }
+  .arctos-app .event-hero-actions .event-participant-actions > :is(.btn, .organize-menu) { flex: 1 1 9rem; }
   .arctos-app .event-info-grid { grid-template-columns: minmax(0, 1fr); }
   .arctos-app .event-route-tabs { gap: .4rem; padding-inline: 16px; scroll-padding-inline: 16px; }
   .arctos-app .event-route-tab { min-height: 52px; font-size: .9rem; }
@@ -101,3 +117,4 @@
 
 .arctos-app .event-banner-image { width: 100%; aspect-ratio: 3 / 1; overflow: hidden; background: linear-gradient(115deg, var(--ui-gradient-start), var(--ui-gradient-end)); }
 .arctos-app .event-banner-image img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.arctos-app .event-header-controls:not(:has(.event-header-status, .event-header-organizer)) { grid-template-columns: minmax(0, 1fr); grid-template-areas: "registration"; }
