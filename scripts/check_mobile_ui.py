@@ -421,7 +421,9 @@ class SmokeCheck:
                     options = page.locator("#organize-options")
                     await expect(options).to_be_hidden()
                     await expect(
-                        page.get_by_role("link", name=re.compile(r"^(?:Create new Event|Create a league|Log past Event)$"))
+                        page.get_by_role(
+                            "link", name=re.compile(r"^(?:Create new Event|Create a league|Log past Event)$")
+                        )
                     ).to_have_count(0)
                     await trigger.focus()
                     await page.keyboard.press("Enter")

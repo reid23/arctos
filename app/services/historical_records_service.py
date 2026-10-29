@@ -110,9 +110,7 @@ def _referees_by_match(match_uuids: list[str]) -> dict[str, list["MatchReferee"]
     rows_by_match: dict[str, list] = {}
     if not match_uuids:
         return rows_by_match
-    for row in (
-        MatchReferee.query.filter(MatchReferee.match_uuid.in_(match_uuids)).order_by(MatchReferee.slot).all()
-    ):
+    for row in MatchReferee.query.filter(MatchReferee.match_uuid.in_(match_uuids)).order_by(MatchReferee.slot).all():
         rows_by_match.setdefault(row.match_uuid, []).append(row)
     return rows_by_match
 
@@ -274,9 +272,7 @@ class HistoricalRecordsService:
         """Edit a historical tournament's name, place, dates, description, and visibility."""
         from models import db
 
-        tournament = HistoricalRecordsService.organizer_tournament(
-            tournament_url, actor_user_id, actor_user_type
-        ).Q()
+        tournament = HistoricalRecordsService.organizer_tournament(tournament_url, actor_user_id, actor_user_type).Q()
         name = (name or "").strip()
         if not name:
             return Err(ValidationError("Name is required"))
@@ -295,9 +291,7 @@ class HistoricalRecordsService:
         return Ok(tournament)
 
     @staticmethod
-    def _add_placeholders(
-        tournament: "Tournament", teams: list[tuple[str, str | None]]
-    ) -> list["TeamRegistration"]:
+    def _add_placeholders(tournament: "Tournament", teams: list[tuple[str, str | None]]) -> list["TeamRegistration"]:
         """Add (without committing) a placeholder team and its confirmed registration per name."""
         from app.domain.enums import TeamRegistrationStatus
         from models import Team, TeamRegistration, db
@@ -338,17 +332,13 @@ class HistoricalRecordsService:
         from app.services.registration_resolver import team_registrations_for_tournament
         from models import db
 
-        tournament = HistoricalRecordsService.organizer_tournament(
-            tournament_url, actor_user_id, actor_user_type
-        ).Q()
+        tournament = HistoricalRecordsService.organizer_tournament(tournament_url, actor_user_id, actor_user_type).Q()
         cleaned = _clean_team_entries(names).Q()
         if not cleaned:
             return Err(ValidationError("Enter at least one team name"))
         existing = team_registrations_for_tournament(tournament)
         taken_names = {registration.pseudonym.casefold() for registration in existing}
-        taken_shortnames = {
-            registration.shortname.casefold() for registration in existing if registration.shortname
-        }
+        taken_shortnames = {registration.shortname.casefold() for registration in existing if registration.shortname}
         duplicates = [name for name, _shortname in cleaned if name.casefold() in taken_names]
         if duplicates:
             return Err(ValidationError(f"Already in this tournament: {', '.join(duplicates)}"))
@@ -378,9 +368,7 @@ class HistoricalRecordsService:
         from app.utils.name_validation import team_pseudonym_char_error
         from models import Team, db
 
-        tournament = HistoricalRecordsService.organizer_tournament(
-            tournament_url, actor_user_id, actor_user_type
-        ).Q()
+        tournament = HistoricalRecordsService.organizer_tournament(tournament_url, actor_user_id, actor_user_type).Q()
         name = (name or "").strip()
         if not name:
             return Err(ValidationError("Team name is required"))
@@ -396,9 +384,7 @@ class HistoricalRecordsService:
         if update_shortname:
             cleaned_shortname = _normalize_shortname(shortname).Q()
             if cleaned_shortname and any(
-                other.team != team_id
-                and other.shortname
-                and other.shortname.casefold() == cleaned_shortname.casefold()
+                other.team != team_id and other.shortname and other.shortname.casefold() == cleaned_shortname.casefold()
                 for other in registrations
             ):
                 return Err(ValidationError(f"Short name already used: {cleaned_shortname}"))
@@ -424,9 +410,7 @@ class HistoricalRecordsService:
         from app.services.registration_resolver import team_registration_for_tournament
         from models import Match, MatchReferee, PlayerRegistration, Team, TeamClaimInvitation, db
 
-        tournament = HistoricalRecordsService.organizer_tournament(
-            tournament_url, actor_user_id, actor_user_type
-        ).Q()
+        tournament = HistoricalRecordsService.organizer_tournament(tournament_url, actor_user_id, actor_user_type).Q()
         registration = team_registration_for_tournament(tournament, team_id)
         if registration is None:
             return Err(NotFoundError("Team not found in this tournament"))
@@ -500,9 +484,7 @@ class HistoricalRecordsService:
         from app.utils.name_validation import match_name_char_error
         from models import Match, db
 
-        tournament = HistoricalRecordsService.organizer_tournament(
-            tournament_url, actor_user_id, actor_user_type
-        ).Q()
+        tournament = HistoricalRecordsService.organizer_tournament(tournament_url, actor_user_id, actor_user_type).Q()
         matches = Match.query.filter_by(event=tournament.url).all()
         match = None
         if match_uuid:
@@ -753,9 +735,7 @@ class HistoricalRecordsService:
         """
         from models import Match
 
-        tournament = HistoricalRecordsService.organizer_tournament(
-            tournament_url, actor_user_id, actor_user_type
-        ).Q()
+        tournament = HistoricalRecordsService.organizer_tournament(tournament_url, actor_user_id, actor_user_type).Q()
         matches = Match.query.filter_by(event=tournament.url).all()
         match = next((m for m in matches if m.uuid == match_uuid), None)
         if match is None:
@@ -816,22 +796,16 @@ class HistoricalRecordsService:
         )
         roster_request_counts = Counter(
             registration.team
-            for registration in player_registrations_for_tournament(
-                tournament, statuses=[RegistrationStatus.REQUESTED]
-            )
+            for registration in player_registrations_for_tournament(tournament, statuses=[RegistrationStatus.REQUESTED])
             if registration.team
         )
 
-        matches = (
-            Match.query.filter_by(event=tournament.url).order_by(Match.completed_time, Match.name).all()
-        )
+        matches = Match.query.filter_by(event=tournament.url).order_by(Match.completed_time, Match.name).all()
         match_uuids = [m.uuid for m in matches]
         referee_rows = _referees_by_match(match_uuids)
         points_by_match: dict[str, list] = {}
         if match_uuids:
-            for point in (
-                Point.query.filter(Point.match.in_(match_uuids)).order_by(Point.stamp, Point.set_number).all()
-            ):
+            for point in Point.query.filter(Point.match.in_(match_uuids)).order_by(Point.stamp, Point.set_number).all():
                 if not point.rerolled:
                     points_by_match.setdefault(point.match, []).append(point)
 
@@ -856,7 +830,10 @@ class HistoricalRecordsService:
                 "roster_size": roster_sizes.get(registration.team, 0),
                 "roster_request_count": roster_request_counts.get(registration.team, 0),
                 "claim_invitation": (
-                    {"team_id": invitation.invited_team, "team_name": invited.name if invited else invitation.invited_team}
+                    {
+                        "team_id": invitation.invited_team,
+                        "team_name": invited.name if invited else invitation.invited_team,
+                    }
                     if invitation
                     else None
                 ),
@@ -885,14 +862,11 @@ class HistoricalRecordsService:
                 "team2": m.team2,
                 "team1_initial": m.team1_initial,
                 "team2_initial": m.team2_initial,
-                "referees": [
-                    {"team_id": row.team_id, "initial": row.initial} for row in referee_rows.get(m.uuid, [])
-                ],
+                "referees": [{"team_id": row.team_id, "initial": row.initial} for row in referee_rows.get(m.uuid, [])],
                 "winner": winner.val.value if isinstance(winner, Some) else None,
                 "set_type": set_type,
                 "points": [
-                    {"set": point.set_number or 1, "winner": point.winner}
-                    for point in points_by_match.get(m.uuid, [])
+                    {"set": point.set_number or 1, "winner": point.winner} for point in points_by_match.get(m.uuid, [])
                 ],
             }
 

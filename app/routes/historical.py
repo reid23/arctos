@@ -154,9 +154,7 @@ def unclaim_team(tournament_url: str, team_id: str):
 @login_required
 def approve_claim_request(tournament_url: str, request_id: int):
     """TO-only: merge a placeholder into the team that asked for it."""
-    result = HistoricalClaimsService.decide_claim_request(
-        tournament_url, request_id, **_actor(), approve=True
-    )
+    result = HistoricalClaimsService.decide_claim_request(tournament_url, request_id, **_actor(), approve=True)
     return _editor_response(tournament_url, result)
 
 
@@ -164,9 +162,7 @@ def approve_claim_request(tournament_url: str, request_id: int):
 @login_required
 def decline_claim_request(tournament_url: str, request_id: int):
     """TO-only: decline a team's claim request."""
-    result = HistoricalClaimsService.decide_claim_request(
-        tournament_url, request_id, **_actor(), approve=False
-    )
+    result = HistoricalClaimsService.decide_claim_request(tournament_url, request_id, **_actor(), approve=False)
     return _editor_response(tournament_url, result)
 
 

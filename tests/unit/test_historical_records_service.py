@@ -66,9 +66,7 @@ def team_ids(tournament) -> dict[str, str]:
     return {registration.pseudonym: registration.team for registration in team_registrations_for_tournament(tournament)}
 
 
-def save(
-    tournament, *, name, team1, team2, winner="TEAM1", points=None, referees=None, match_uuid=None, set_type=None
-):
+def save(tournament, *, name, team1, team2, winner="TEAM1", points=None, referees=None, match_uuid=None, set_type=None):
     return HistoricalRecordsService.save_match(
         tournament.url,
         **ORGANIZER,
@@ -158,7 +156,9 @@ def test_save_match_records_teams_points_and_winner(historical):
         {"set": 1, "winner": "TEAM1"},
     ]
 
-    match = save(historical, name="Pool 1", team1="alpha", team2=ids["Beta"], points=points, referees=["Gamma"]).unwrap()
+    match = save(
+        historical, name="Pool 1", team1="alpha", team2=ids["Beta"], points=points, referees=["Gamma"]
+    ).unwrap()
 
     assert (match.team1, match.team2) == (ids["Alpha"], ids["Beta"])
     assert match.team1_initial == ids["Alpha"]
@@ -312,7 +312,9 @@ def test_remove_team_requires_it_to_be_in_no_match(historical):
 @pytest.mark.unit
 def test_editor_state_reports_teams_and_matches(historical, real_team):
     ids = team_ids(historical)
-    save(historical, name="Pool 1", team1="Alpha", team2="Beta", points=[{"set": 1, "winner": "TEAM2"}], winner="TEAM2").unwrap()
+    save(
+        historical, name="Pool 1", team1="Alpha", team2="Beta", points=[{"set": 1, "winner": "TEAM2"}], winner="TEAM2"
+    ).unwrap()
     HistoricalClaimsService.invite_team_to_claim(
         historical.url, **ORGANIZER, placeholder_team_id=ids["Gamma"], invited_team_id=real_team.id
     ).unwrap()
@@ -431,7 +433,9 @@ def test_roster_invitation_lifecycle(historical, roster_player):
     pending = HistoricalClaimsService.pending_invitations(roster_player.id, "player")
     assert [item["team_name"] for item in pending["roster_invitations"]] == ["Alpha"]
 
-    HistoricalClaimsService.respond_to_roster_invitation(registration.id, player_id=roster_player.id, accept=True).unwrap()
+    HistoricalClaimsService.respond_to_roster_invitation(
+        registration.id, player_id=roster_player.id, accept=True
+    ).unwrap()
     assert registration.status == RegistrationStatus.CONFIRMED
     assert HistoricalClaimsService.pending_invitations(roster_player.id, "player")["roster_invitations"] == []
 
@@ -591,7 +595,9 @@ def test_teams_can_have_shortnames(organizer):
         end_date="",
         team_names=[{"name": "Alpha Squad", "shortname": "ALP"}, "Beta"],
     ).unwrap()
-    registrations = {registration.pseudonym: registration for registration in team_registrations_for_tournament(tournament)}
+    registrations = {
+        registration.pseudonym: registration for registration in team_registrations_for_tournament(tournament)
+    }
     assert registrations["Alpha Squad"].shortname == "ALP"
     assert registrations["Beta"].shortname is None
     listed = {team["name"]: team["shortname"] for team in HistoricalRecordsService.editor_state(tournament)["teams"]}
@@ -691,9 +697,7 @@ def test_claim_and_roster_requests(historical, real_team, roster_player):
     [outgoing] = HistoricalClaimsService.pending_invitations(real_team.id, "team")["outgoing_team_requests"]
     assert outgoing["placeholder_name"] == "Alpha"
 
-    HistoricalClaimsService.decide_claim_request(
-        historical.url, outgoing["id"], **ORGANIZER, approve=True
-    ).unwrap()
+    HistoricalClaimsService.decide_claim_request(historical.url, outgoing["id"], **ORGANIZER, approve=True).unwrap()
     assert team_ids(historical)["Alpha"] == real_team.id
 
     HistoricalClaimsService.request_roster(

@@ -39,7 +39,9 @@ def _decline_other_open_roster_rows(event: str, player_id: str, keep_id: int) ->
             row.status = RegistrationStatus.REJECTED
 
 
-def _apply_jersey(registration, player, jersey_name: str | None, jersey_number: str | None, *, fill_blanks: bool) -> None:
+def _apply_jersey(
+    registration, player, jersey_name: str | None, jersey_number: str | None, *, fill_blanks: bool
+) -> None:
     """Copy jersey fields onto a roster row.
 
     When *fill_blanks* is false, an empty request leaves that field as it was.
@@ -76,9 +78,7 @@ class HistoricalClaimsService:
         from app.utils.datetime_helpers import now_utc_naive
         from models import Team, TeamClaimInvitation, db
 
-        tournament = HistoricalRecordsService.organizer_tournament(
-            tournament_url, actor_user_id, actor_user_type
-        ).Q()
+        tournament = HistoricalRecordsService.organizer_tournament(tournament_url, actor_user_id, actor_user_type).Q()
         placeholder = Team.query.get(placeholder_team_id)
         if placeholder is None or placeholder.placeholder_event != tournament.url:
             return Err(NotFoundError("Unclaimed team not found in this tournament"))
@@ -110,9 +110,7 @@ class HistoricalClaimsService:
         from app.services.historical_records_service import HistoricalRecordsService
         from models import Team, TeamClaimInvitation, db
 
-        tournament = HistoricalRecordsService.organizer_tournament(
-            tournament_url, actor_user_id, actor_user_type
-        ).Q()
+        tournament = HistoricalRecordsService.organizer_tournament(tournament_url, actor_user_id, actor_user_type).Q()
         placeholder = Team.query.get(placeholder_team_id)
         if placeholder is None or placeholder.placeholder_event != tournament.url:
             return Err(NotFoundError("Unclaimed team not found in this tournament"))
@@ -294,7 +292,9 @@ class HistoricalClaimsService:
             if occupied.team == team_id:
                 return Err(ValidationError(f"{player.name} is already on this roster"))
             return Err(ValidationError(f"{player.name} is already on another team's roster for this tournament"))
-        registration = next((row for row in rows if row.status == RegistrationStatus.REQUESTED and row.team == team_id), None)
+        registration = next(
+            (row for row in rows if row.status == RegistrationStatus.REQUESTED and row.team == team_id), None
+        )
         if registration is None:
             registration = next(
                 (row for row in rows if row.status in (RegistrationStatus.REJECTED, RegistrationStatus.CANCELLED)),
@@ -350,7 +350,11 @@ class HistoricalClaimsService:
         from models import PlayerRegistration, db
 
         registration = PlayerRegistration.query.get(registration_id)
-        if registration is None or registration.player != player_id or registration.status != RegistrationStatus.INVITED:
+        if (
+            registration is None
+            or registration.player != player_id
+            or registration.status != RegistrationStatus.INVITED
+        ):
             return Err(NotFoundError("Invitation not found"))
         if accept:
             _decline_other_open_roster_rows(registration.event, registration.player, registration.id)
@@ -515,9 +519,7 @@ class HistoricalClaimsService:
         from app.services.registration_resolver import team_registration_for_tournament
         from models import Team, TeamClaimRequest, db
 
-        tournament = HistoricalRecordsService.organizer_tournament(
-            tournament_url, actor_user_id, actor_user_type
-        ).Q()
+        tournament = HistoricalRecordsService.organizer_tournament(tournament_url, actor_user_id, actor_user_type).Q()
         claim_request = TeamClaimRequest.query.get(request_id)
         placeholder = Team.query.get(claim_request.placeholder_team) if claim_request else None
         if claim_request is None or placeholder is None or placeholder.placeholder_event != tournament.url:
@@ -680,7 +682,15 @@ class HistoricalClaimsService:
             outgoing requests, and roster requests waiting on this team.
         """
         from app.domain.enums import RegistrationStatus, UserType
-        from models import Player, PlayerRegistration, Team, TeamClaimInvitation, TeamClaimRequest, TeamRegistration, Tournament
+        from models import (
+            Player,
+            PlayerRegistration,
+            Team,
+            TeamClaimInvitation,
+            TeamClaimRequest,
+            TeamRegistration,
+            Tournament,
+        )
 
         def tournament_json(tournament) -> dict:
             return {

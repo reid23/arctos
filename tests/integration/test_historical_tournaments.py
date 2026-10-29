@@ -187,7 +187,10 @@ def test_team_claims_a_placeholder(client, historical_url, real_team):
     assert claimed["placeholder"] is False
     assert detail["is_current_team_registered"] is True
     profile = client.get("/_api/teams/rigor").get_json()
-    assert any(registration["event"] == historical_url and registration["historical"] for registration in profile["registrations"])
+    assert any(
+        registration["event"] == historical_url and registration["historical"]
+        for registration in profile["registrations"]
+    )
 
 
 @pytest.mark.integration
@@ -226,9 +229,7 @@ def test_unpublished_records_stay_off_profiles(client, historical_url, real_team
     alpha = team_id_named(state, "Alpha")
     beta = team_id_named(state, "Beta")
     publish(client, historical_url)
-    client.put(
-        f"/_api/tournaments/{historical_url}/records/teams/{alpha}/claim-invitation", json={"team_id": "rigor"}
-    )
+    client.put(f"/_api/tournaments/{historical_url}/records/teams/{alpha}/claim-invitation", json={"team_id": "rigor"})
     login_as(client, real_team)
     [claim] = client.get("/_api/me/invitations").get_json()["team_claims"]
     client.post(f"/_api/me/invitations/claims/{claim['id']}/accept")
@@ -275,10 +276,13 @@ def test_bracket_diagram_uses_recorded_links(client, historical_url):
         json={"name": "Final", "team1": "Semi 1::winner", "team2": "Gamma", "winner": "TEAM1"},
     ).get_json()
 
-    assert client.post(
-        f"/_api/tournaments/{historical_url}/bracket-placements/add",
-        json={"match": semi["match_uuid"], "x_pos": 40, "y_pos": 40},
-    ).status_code == 200
+    assert (
+        client.post(
+            f"/_api/tournaments/{historical_url}/bracket-placements/add",
+            json={"match": semi["match_uuid"], "x_pos": 40, "y_pos": 40},
+        ).status_code
+        == 200
+    )
     placed = client.post(
         f"/_api/tournaments/{historical_url}/bracket-placements/add",
         json={"match": final["match_uuid"], "x_pos": 400, "y_pos": 40},
