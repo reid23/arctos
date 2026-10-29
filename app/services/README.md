@@ -10,6 +10,43 @@ docstring to see what it covers. `dual_write.py` is the canonical
 interface for the four normalised join tables - call its helpers
 instead of querying those tables directly.
 
+## Public documents and application entry
+
+[`public_page_service.py`](public_page_service.py) builds immutable Events and
+event Info view models. Routes pass the visitor, current calendar day, and
+URL prefix. The service applies permissions, selects one directory page, and
+batches registration configuration, confirmed team counts, and personal status.
+League events use league registration scope. Descriptions pass through the
+existing Markdown sanitizer.
+
+[`public_league_service.py`](public_league_service.py) builds the Leagues directory
+and league Info models. It paginates in SQL, filters Active/Past counts by the
+search query, and batches visible round summaries and registration status.
+Season lifecycle uses all rounds; displayed dates and counts use only visible
+rounds. League Info includes sanitized description, live fees and capacity,
+waiver requirements, and the requesting account's status.
+
+`DirectoryPage` is shared by the Jinja directory and `GET /_api/public/events`.
+It contains bounded cards, counts, search state, and pagination links. Event
+models include public facts and permitted actions. Account-specific status
+belongs to the requesting visitor; the HTTP layer serves these responses with
+`private, no-store`. Unknown fees remain distinct from free registration.
+
+[`frontend_shell.py`](frontend_shell.py) validates the build manifest and URL
+prefix, renders application entry, and serves prepared assets for local/staging
+use. Missing application assets produce a recoverable 503. Public HTML warms
+a parked runtime; marked reading links fetch another document while startup
+is pending or unavailable. Navigation activates the application once its bridge
+is ready. Interactive entries display feedback until their route and styles
+are ready. Data comes from the configured database and permission services.
+
+Jinja handles document rendering; Dioxus handles application workflows. Shared
+styles and appearance preferences preserve the existing design. See
+[architecture](../../docs/public-html-architecture.md) for the data and startup
+contracts, [deployment](../../docs/DEPLOY.md#public-html-rollout) for asset
+serving, and [verification](../../docs/public-html-verification.md) for external
+performance measurements.
+
 ## `RegistrationService` methods
 
 The registration service provides the following key methods:

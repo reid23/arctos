@@ -8,26 +8,73 @@ use chrono::Local;
 use dioxus::prelude::*;
 
 #[component]
-pub fn LeaguesIndexWithQuery(q: String, view: String) -> Element {
+pub fn LeaguesIndexWithQuery(q: String, view: String, page: String) -> Element {
     rsx! { LeaguesIndex {} }
 }
 
 #[component]
 pub fn LeaguesIndex() -> Element {
-    let mut data = use_resource(move || async move {
-        api::leagues_list(Local::now().date_naive()).await.map_err(|error| error.to_string())
+    let account = crate::auth::use_account();
+    let mut data = use_resource(move || {
+        // A Resource's Future waits for its next completion; awaiting an
+        // already-completed account would wait forever. Subscribe to its value
+        // and state instead, and restart this resource when the account settles.
+        let pending = *account.state().read() == UseResourceState::Pending;
+        let identity = account_identity(account.read().as_ref());
+        async move {
+            if pending {
+                return std::future::pending().await;
+            }
+            let result =
+                crate::league_cache::load(Local::now().date_naive(), identity.clone()).await;
+            (identity, result)
+        }
     });
     let controls = use_directory(Directory::Leagues, true);
     let mut search = controls.search;
     let show_past = move || (controls.state)().past;
-    let val = data.value();
-    use_directory_scroll(controls, val.read().as_ref().is_some_and(Result::is_ok));
-    let counts = val.read().as_ref().and_then(|result| result.as_ref().ok()).map(|response| {
-        let past = response.leagues.iter().filter(|league| {
-            response.past_leagues.contains(&league.league_url)
-        }).count();
-        (response.leagues.len() - past, past)
-    });
+    // A cached revisit renders its cards on the first frame, before the async
+    // resource is polled. The current account must be settled before reuse.
+    let account_pending = *account.state().read() == UseResourceState::Pending;
+    let identity = account_identity(account.read().as_ref());
+    let cached = if !account_pending {
+        identity
+            .as_ref()
+            .and_then(|identity| crate::league_cache::peek(Local::now().date_naive(), &identity))
+    } else {
+        None
+    };
+    let data_pending = *data.state().read() == UseResourceState::Pending;
+    let resolved = data
+        .read()
+        .as_ref()
+        // A retry may retain the previous resource value. Only the explicit
+        // account/day cache is safe to show before the new request settles.
+        .filter(|(owner, _)| !data_pending && !account_pending && owner == &identity)
+        .map(|(_, result)| result.clone())
+        .or_else(|| cached.map(Ok));
+    use_directory_scroll(controls, resolved.as_ref().is_some_and(Result::is_ok));
+    let counts = resolved
+        .as_ref()
+        .and_then(|result| result.as_ref().ok())
+        .map(|response| {
+            let query = search()
+                .trim()
+                .chars()
+                .take(200)
+                .collect::<String>()
+                .to_lowercase();
+            let matching: Vec<_> = response
+                .leagues
+                .iter()
+                .filter(|league| league.name.to_lowercase().contains(&query))
+                .collect();
+            let past = matching
+                .iter()
+                .filter(|league| response.past_leagues.contains(&league.league_url))
+                .count();
+            (matching.len() - past, past)
+        });
     rsx! {
         PageIntro { page_key: "leagues", title: "Leagues", focus_target: "page-content",
             "A league is a long-running series of events with shared registration."
@@ -58,7 +105,7 @@ pub fn LeaguesIndex() -> Element {
                 label { class: "visually-hidden", r#for: "league-search", "Search league names" }
                 i { class: "fas fa-search", aria_hidden: "true" }
                 input {
-                    id: "league-search", r#type: "search", class: "form-control",
+                    id: "league-search", r#type: "search", class: "form-control", maxlength: "200",
                     placeholder: "Find a league…", value: "{search()}",
                     oninput: move |event| search.set(event.value()),
                         onblur: move |_| controls.flush(),
@@ -66,9 +113,9 @@ pub fn LeaguesIndex() -> Element {
                 }
             }
         }
-        if let Some(Ok(response)) = val.read().as_ref() {
+        if let Some(Ok(response)) = resolved.as_ref() {
             {
-                let query = search().trim().to_lowercase();
+                let query = search().trim().chars().take(200).collect::<String>().to_lowercase();
                 let mut filtered: Vec<_> = response.leagues.iter().filter(|league| {
                     response.past_leagues.contains(&league.league_url) == show_past()
                         && league.name.to_lowercase().contains(&query)
@@ -78,15 +125,20 @@ pub fn LeaguesIndex() -> Element {
                         let end = response.event_dates.get(&league.league_url).and_then(|dates| {
                             dates.end_date.as_deref().or(dates.start_date.as_deref()).and_then(listing_date)
                         });
-                        (std::cmp::Reverse(end), league.name.to_lowercase())
+                        (std::cmp::Reverse(end), league.name.to_lowercase(), league.league_url.clone())
                     });
                 } else {
                     filtered.sort_by_key(|league| {
                         let start = response.event_dates.get(&league.league_url)
                             .and_then(|dates| dates.start_date.as_deref()).and_then(listing_date);
-                        (start.is_none(), start, league.name.to_lowercase())
+                        (start.is_none(), start, league.name.to_lowercase(), league.league_url.clone())
                     });
                 }
+                // Match the public document's default page size when the
+                // initialized application takes over a directory URL.
+                let total_pages = filtered.len().div_ceil(24).max(1) as u32;
+                let page = (controls.state)().page.min(total_pages);
+                let offset = (page as usize - 1) * 24;
                 rsx! {
                     h2 { class: "visually-hidden", if show_past() { "Past leagues" } else { "Active leagues" } }
                     if filtered.is_empty() {
@@ -100,7 +152,7 @@ pub fn LeaguesIndex() -> Element {
                         }
                     } else {
                         div { class: "arctos-card-grid arctos-league-grid",
-                            for league in filtered {
+                            for league in filtered.into_iter().skip(offset).take(24) {
                                 LeagueCard {
                                     key: "{league.league_url}",
                                     league: league.clone(),
@@ -112,17 +164,61 @@ pub fn LeaguesIndex() -> Element {
                             }
                         }
                     }
+                    if total_pages > 1 {
+                        nav { class: "arctos-pagination", aria_label: "League pages",
+                            if page > 1 {
+                                button { class: "btn btn-outline-secondary", r#type: "button",
+                                    onclick: move |_| controls.page(page - 1, true), "Previous" }
+                            }
+                            span { class: "arctos-page-position", aria_live: "polite", "Page {page}" }
+                            if page < total_pages {
+                                button { class: "btn btn-outline-secondary", r#type: "button",
+                                    onclick: move |_| controls.page(page + 1, true), "Next" }
+                            }
+                        }
+                    }
                 }
             }
-        } else if let Some(Err(error)) = val.read().as_ref() {
+        } else if let Some(Err(error)) = resolved.as_ref() {
             div { class: "arctos-empty-state", role: "alert",
                 h2 { "Leagues could not be loaded" }
                 p { "{error}" }
-                button { class: "btn btn-primary", r#type: "button", onclick: move |_| data.restart(), "Try again" }
+                button { class: "btn btn-primary", r#type: "button", onclick: move |_| {
+                    crate::league_cache::invalidate();
+                    data.restart();
+                }, "Try again" }
             }
         } else {
             div { class: "arctos-empty-state", role: "status", "Loading leagues…" }
         }
+    }
+}
+
+fn account_identity(
+    account: Option<&Result<crate::types::User, api::AccountError>>,
+) -> Option<String> {
+    match account {
+        Some(Ok(user)) => Some(format!("{}:{}", user.user_type, user.id)),
+        Some(Err(api::AccountError::Unauthenticated)) => Some("anonymous".into()),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod cache_identity_tests {
+    use super::*;
+
+    #[test]
+    fn unresolved_or_failed_account_checks_do_not_get_a_cache_partition() {
+        assert_eq!(account_identity(None), None);
+        assert_eq!(
+            account_identity(Some(&Err(api::AccountError::Unavailable))),
+            None
+        );
+        assert_eq!(
+            account_identity(Some(&Err(api::AccountError::Unauthenticated))),
+            Some("anonymous".into())
+        );
     }
 }
 

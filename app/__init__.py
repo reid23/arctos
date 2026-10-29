@@ -100,6 +100,17 @@ def create_app(config: dict | None = None) -> Flask:
     app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-key")
     app.config["SQLALCHEMY_DATABASE_URI"] = config.get("SQLALCHEMY_DATABASE_URI", "sqlite:///tournament.db")
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+    # Rollout is explicit: deployment can route frontend requests through Flask
+    # before enabling useful public documents. Application assets remain separate.
+    app.config["PUBLIC_HTML_ENABLED"] = os.environ.get("ARCTOS_PUBLIC_HTML_ENABLED", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    app.config["PUBLIC_HTML_PAGE_SIZE"] = 24
+    app.config["PUBLIC_CANONICAL_ORIGIN"] = os.environ.get("ARCTOS_PUBLIC_ORIGIN", "")
+    app.config["PUBLIC_CALENDAR_TIMEZONE"] = os.environ.get("ARCTOS_PUBLIC_CALENDAR_TIMEZONE", "UTC")
     # Record / footage uploads use multi-MB POST bodies; set explicitly so Werkzeug does not reject large chunks.
     # Reverse proxies (nginx client_max_body_size, etc.) may still need raising in deployment.
     app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("MAX_CONTENT_LENGTH_BYTES", str(100 * 1024 * 1024)))
@@ -134,6 +145,32 @@ def create_app(config: dict | None = None) -> Flask:
     # Override with custom config if provided
     if config:
         app.config.update(config)
+
+    # Fail clearly at boot for an invalid calendar boundary configuration.
+    from zoneinfo import ZoneInfo
+
+    ZoneInfo(app.config["PUBLIC_CALENDAR_TIMEZONE"])
+    from urllib.parse import urlsplit
+
+    origin = app.config["PUBLIC_CANONICAL_ORIGIN"]
+    if origin:
+        parsed_origin = urlsplit(origin)
+        if (
+            parsed_origin.scheme not in {"http", "https"}
+            or not parsed_origin.hostname
+            or parsed_origin.username
+            or parsed_origin.password
+            or "?" in origin
+            or "#" in origin
+            or parsed_origin.port == 0
+            or parsed_origin.query
+            or parsed_origin.fragment
+            or parsed_origin.path not in {"", "/"}
+            or "\\" in origin
+            or any(char.isspace() or ord(char) < 32 for char in origin)
+        ):
+            raise ValueError("PUBLIC_CANONICAL_ORIGIN must be an HTTP(S) origin without path or credentials")
+        app.config["PUBLIC_CANONICAL_ORIGIN"] = origin.rstrip("/")
 
     # SQLite: increase busy timeout; finalize workers and HTTP handlers share one file.
     # The same timeout is also re-asserted via PRAGMA in `set_sqlite_pragmas` below so
@@ -199,6 +236,16 @@ def create_app(config: dict | None = None) -> Flask:
                       and deletes silently orphan child rows. This is the one
                       non-obvious pragma; do not remove it.
                     """
+                    # SQLite's built-in lower()/LIKE only fold ASCII. The
+                    # public directory previously searched with Rust Unicode
+                    # to_lowercase(); keep that behavior inside the bounded SQL
+                    # query without overriding SQLite lower() for other callers.
+                    dbapi_connection.create_function(
+                        "arctos_lower",
+                        1,
+                        lambda value: value.lower() if isinstance(value, str) else value,
+                        deterministic=True,
+                    )
                     cur = dbapi_connection.cursor()
                     try:
                         cur.execute("PRAGMA journal_mode=WAL")
@@ -262,6 +309,17 @@ def create_app(config: dict | None = None) -> Flask:
     app.register_blueprint(teams_bp)
     app.register_blueprint(oauth_bp)
     app.register_blueprint(api_v1_bp)
+
+    # Existing downloadable waivers keep their explicit routes ahead of the
+    # frontend fallback. Public documents and application assets have separate
+    # response/cache policies.
+    from app.routes.waivers import bp as waivers_bp
+    from app.routes.public_pages import bp as public_pages_bp
+    from app.services.frontend_shell import init_frontend_shell
+
+    app.register_blueprint(waivers_bp)
+    init_frontend_shell(app)
+    app.register_blueprint(public_pages_bp)
 
     # Register template filters
     from app import filters

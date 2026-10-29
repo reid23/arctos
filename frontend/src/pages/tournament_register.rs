@@ -1,5 +1,5 @@
 use crate::api;
-use crate::components::TeamRegistrationHelpModal;
+use crate::components::{has_existing_registration, EditRegistrationContext, ExistingRegistration, TeamRegistrationHelpModal};
 use crate::Route;
 use dioxus::prelude::*;
 use wasm_bindgen::JsCast;
@@ -52,6 +52,24 @@ pub fn TournamentRegister(url: String) -> Element {
     // Keep the standalone form unmounted while replacing a direct event URL.
     if league_url().is_some() {
         return rsx! { p { role: "status", "Loading registration…" } };
+    }
+
+    // A public event's registration link is a stable entry for both first-time
+    // participants and existing registrations. Do not submit a duplicate
+    // registration or require an interactive overview just to open its editor.
+    if let Some(Ok(detail)) = val.read().as_ref() {
+        if let Some(Ok(user)) = me.read().as_ref() {
+            if has_existing_registration(&user.user_type, detail.is_current_team_registered, detail.is_current_player_registered) {
+                return rsx! {
+                    ExistingRegistration {
+                        context: EditRegistrationContext::Tournament { tournament_url: url.clone() },
+                        user_type: user.user_type.clone(),
+                        return_to: Route::TournamentHome { url: url.clone() },
+                        roster: (user.user_type == "team").then(|| Route::Invitations { url: url.clone() }),
+                    }
+                };
+            }
+        }
     }
 
     rsx! {
@@ -293,7 +311,7 @@ pub fn TournamentRegister(url: String) -> Element {
                 }
             }
         } else if let Some(Err(e)) = val.read().as_ref() {
-            p { class: "text-danger", "{e}" }
+            p { class: "text-danger", role: "alert", "{e}" }
         } else {
             p { "Loading…" }
         }

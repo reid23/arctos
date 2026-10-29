@@ -3,6 +3,8 @@ use dioxus::prelude::*;
 use reqwest::Client;
 use serde_json::Value;
 
+pub mod public_events;
+
 /// Same-origin requests work behind nginx and the Dioxus development proxy,
 /// including when a phone opens the dev server over the local network.
 /// An explicit build-time override remains available for separate API hosts.
@@ -12,9 +14,10 @@ pub fn base_url() -> String {
     }
     #[cfg(target_arch = "wasm32")]
     {
-        web_sys::window()
+        let origin = web_sys::window()
             .and_then(|window| window.location().origin().ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        format!("{origin}{}", crate::public_navigation::document_prefix())
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -87,6 +90,16 @@ fn client() -> Client {
 }
 
 fn with_credentials(req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    // The directory cache is intentionally conservative: any state-changing
+    // request (including login/logout) invalidates it before the next visit.
+    // Non-cloneable request bodies are writes in this client and invalidate too.
+    let read_only = req.try_clone().and_then(|copy| copy.build().ok())
+        .is_some_and(|request| matches!(request.method().as_str(), "GET" | "HEAD" | "OPTIONS")
+            // This POST is a pure rendering transformation used while reading.
+            || (request.method().as_str() == "POST" && request.url().path().ends_with("/_api/render-markdown")));
+    if !read_only {
+        crate::league_cache::invalidate();
+    }
     #[cfg(target_arch = "wasm32")]
     {
         req.fetch_credentials_include()

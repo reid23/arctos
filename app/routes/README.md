@@ -1,8 +1,8 @@
 # `app/routes/` - Flask blueprints
 
-Every HTTP handler lives here. Routes are organised into Flask
-blueprints by topic, but they all share the same URL prefix:
-**`/_api/`**.
+HTTP handlers are organised into Flask blueprints by topic. Most browser
+application APIs use **`/_api/`**; public document, OAuth, third-party API,
+and waiver routes intentionally use their existing prefixes.
 
 Each file in this directory is a blueprint; its module-level docstring
 states the topic it covers. New endpoints should go into the most
@@ -23,9 +23,10 @@ manageable files instead of one mega-module.
 
 ### URL prefix
 
-All blueprints register with `url_prefix="/_api"`. The waivers blueprint
-is the one exception, intentionally - the frontend links to
-`/<event>/waiver` directly.
+Most application blueprints register with `url_prefix="/_api"`. The waivers
+blueprint registers without that prefix because the frontend links to
+`/<event>/waiver` directly. `public_pages` also registers without a prefix to
+handle public documents and application entry at existing URLs.
 
 `/api/` (no underscore) is the stable, public surface for third-party
 apps, documented in [`docs/developers.md`](../../docs/developers.md).
@@ -62,6 +63,37 @@ codes:
 - `401` when unauthenticated (handled centrally by `login_manager.unauthorized_handler`)
 - `403` when forbidden
 - `404` when a resource isn't found
+
+### Public HTML and application documents
+
+[`public_pages.py`](public_pages.py) classifies document GET requests. With
+`ARCTOS_PUBLIC_HTML_ENABLED=1`, Flask renders `/`, `/leagues`, and published
+`/<event>` and `/leagues/<league>` Info pages through Jinja. `?tab=info` selects
+the same reading page. Other declared application URLs use the startup shell.
+The public routing flag defaults to `0`.
+
+Both directories preserve `q`, `view=past`, and `page`. The Events directory's
+`/_api/public/events` endpoint shares the same bounded projection with Dioxus.
+Event Teams/Side events tabs, `?tab=app`, and authorized drafts use Dioxus.
+`?app=1` explicitly selects application rendering. Existing URLs remain valid.
+
+The blueprint owns response status, metadata, templates, and cache headers.
+Services own data selection and permissions. With public routing enabled,
+missing or inaccessible events/leagues return 404; document-selection failures return
+503. Indexing follows route publication and purpose, as documented in the
+[indexing policy](../../docs/public-html-indexing.md). API and asset namespaces
+retain their own response types and missing-resource handling.
+
+Documents and the shared Events endpoint use `private, no-store` and vary on
+cookies. The current account's registration/payment/waiver summary is scoped to
+its request. Mutations remain on authenticated APIs. Calendar-day filtering
+uses the visitor's validated timezone preference or configured fallback;
+printed event dates retain their entered day. Canonical URLs use the configured
+trusted origin.
+
+When adding an application route, update this classifier, the Rust `Route`
+enum, and their contract tests together. See
+[architecture](../../docs/public-html-architecture.md) for the ownership map.
 
 ### Thin routes
 
@@ -108,7 +140,8 @@ from `app.utils.decorators`.
 When `ARCTOS_CORS_DEV=1`, `app/__init__.py` adds CORS headers and
 handles `OPTIONS` preflight for every path. The browser sends the
 session cookie because cookies are configured `SameSite=None; Secure`.
-In production, nginx serves the SPA same-origin and CORS isn't needed.
+In production, nginx serves assets and proxies Flask documents/APIs on the
+same origin. Application API requests use the existing session credentials.
 
 ## Adding a new endpoint
 
@@ -155,7 +188,7 @@ throughout) can stay a single file.
 
 ### What NOT to do
 
-- Don't promote pre-emptively. A 200-line route file that *might* grow
+- Don't promote preemptively. A 200-line route file that *might* grow
   is not a candidate.
 - Don't create new blueprints inside the package. Submodules share one
   Blueprint object so URL endpoint names stay stable across moves.

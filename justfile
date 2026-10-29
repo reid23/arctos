@@ -108,8 +108,12 @@ coverage-check *ARGS:
 
 # ── Run ───────────────────────────────────────────────────────────────────────
 
+# Generate public styles from the existing frontend CSS without a Rust build.
+public-assets:
+    @uv run python scripts/prepare_public_assets.py --theme-only
+
 # Run the backend with gunicorn. Loads {{env_file}} if present.
-run:
+run: public-assets
     #!/usr/bin/env bash
     set -euo pipefail
     uv sync
@@ -135,7 +139,7 @@ frontend *ARGS:
     @cd frontend && dx serve "$@"
 
 # Isolated sample events/accounts for trying the interface locally.
-demo:
+demo: public-assets
     @uv run python -m scripts.dev_demo
 
 # Run frontend unit tests on the host target (`.cargo/config.toml` defaults to wasm32).

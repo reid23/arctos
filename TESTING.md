@@ -166,6 +166,13 @@ Save screenshot output outside the checkout and attach relevant images directly
 to the pull request. Include the viewport size and state shown. Screenshots are
 visual references, not an exhaustive test record.
 
+### Public documents and startup
+
+See [public entry verification](docs/public-html-verification.md) for prepared
+release setup, focused server tests, browser acceptance checks, and comparative
+performance measurements. The browser suites cover reading during startup,
+application handoff, account isolation, and retained directory navigation.
+
 ### Manual checks and device limits
 
 For changed forms, check failed reads, invalid fields, delayed saves, and rejected

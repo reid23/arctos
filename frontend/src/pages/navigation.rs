@@ -317,8 +317,8 @@ mod tests {
     #[test]
     fn filtered_directories_keep_current_page_context() {
         for (route, destination, section) in [
-            (Route::IndexWithQuery { q: "Open".into(), view: "past".into() }, Route::Index {}, MainSection::Events),
-            (Route::LeaguesIndexWithQuery { q: "Coast".into(), view: "past".into() }, Route::LeaguesIndex {}, MainSection::Leagues),
+            (Route::IndexWithQuery { q: "Open".into(), view: "past".into(), page: "2".into() }, Route::Index {}, MainSection::Events),
+            (Route::LeaguesIndexWithQuery { q: "Coast".into(), view: "past".into(), page: "2".into() }, Route::LeaguesIndex {}, MainSection::Leagues),
             (Route::PlayersListWithQuery { q: "Lee".into(), page: "2".into() }, Route::PlayersList {}, MainSection::Players),
             (Route::TeamsListWithQuery { q: "Otters".into() }, Route::TeamsList {}, MainSection::Teams),
         ] {

@@ -1,0 +1,69 @@
+{% extends 'public/base.html' %}
+{% from 'public/macros.html' import personal_status, facts %}
+{% from 'public/icons.html' import icon %}
+{% block content %}
+<main class="app-main event-full-width" id="page-content" tabindex="-1" data-public-page="league">
+  <div class="event-detail-page">
+    <header id="page-banner" class="event-detail-hero">
+      <div class="event-banner-image">{% if page.banner_url %}<img src="{{ page.banner_url }}" alt="" width="1200" height="400" decoding="async">{% endif %}</div>
+      <div class="event-hero-inner">
+        <div class="event-hero-main">
+          <h1 id="page-banner-heading" tabindex="-1">{{ page.card.name }}</h1>
+          <ul class="event-hero-meta">
+            <li><i aria-hidden="true">{{ icon('calendar') }}</i><span>{{ page.card.event_count }} {{ 'event' if page.card.event_count == 1 else 'events' }}</span></li>
+            <li><i aria-hidden="true">{{ icon('users') }}</i><span>{{ page.card.team_count }}{% if page.card.max_teams is not none %} / {{ page.card.max_teams }}{% endif %} teams</span></li>
+          </ul>
+          {% if page.card.registration_open %}<div class="event-hero-badges">
+            {% if page.card.registration_open %}<span class="event-registration-badge"><i aria-hidden="true">{{ icon('circle-check') }}</i>Registration open</span>{% endif %}
+          </div>{% endif %}
+          {{ personal_status(page.account_status) }}
+        </div>
+        <div class="event-hero-actions">
+          <div class="event-participant-actions" role="group" aria-label="League registration">
+            {% if page.roster_action %}<a class="btn btn-outline-secondary" href="{{ page.roster_action.url }}">{{ page.roster_action.label }}</a>{% endif %}
+            {% if page.registration_action %}<a class="btn {{ 'btn-outline-secondary' if page.registration_action.label == 'Edit registration' else 'btn-primary event-registration-action' }}" href="{{ page.registration_action.url }}">{{ page.registration_action.label }}</a>{% elif page.registration_message %}<button class="btn btn-secondary" type="button" disabled>{{ page.registration_message }}</button>{% endif %}
+            {% if page.registration_message and page.registration_action %}<p class="event-scope-note mb-0">{{ page.registration_message }}</p>{% endif %}
+          </div>
+          {% if page.organizer_links %}
+          <details class="organizer-tools">
+            <summary class="organizer-tools-trigger" id="organizer-tools-trigger">Organizer tools <i aria-hidden="true">{{ icon('chevron-down') }}</i></summary>
+            <div class="organizer-tools-dropdown" id="organizer-tools-options">{% for link in page.organizer_links %}<a class="dropdown-item" href="{{ link.url }}">{{ link.label }}</a>{% endfor %}</div>
+          </details>
+          {% endif %}
+        </div>
+      </div>
+    </header>
+    <div class="event-route-tabs-bar">
+      <nav class="container-wide event-route-tabs" aria-label="League sections">
+        {% set tab_icons = {'Info': 'info', 'Events': 'calendar', 'Teams': 'users', 'Results': 'trophy'} %}
+        {% for link in page.nav_links %}
+        <a class="event-route-tab"{% if link.label == 'Info' %} data-public-reading id="league-tab-info" aria-current="page"{% endif %} href="{{ link.url }}"><i aria-hidden="true">{{ icon(tab_icons.get(link.label, 'info')) }}</i>{{ link.label }}{% if link.label == 'Events' %} ({{ page.card.event_count }}){% elif link.label == 'Teams' %} ({{ page.card.team_count }}){% endif %}</a>
+        {% endfor %}
+      </nav>
+    </div>
+    <div class="container-wide event-detail-content">
+      <section id="league-section-info" class="event-section" aria-labelledby="league-tab-info">
+        <div class="event-info-grid">
+          <section class="card event-about-card" aria-labelledby="about-heading">
+            <div class="card-header"><h2 id="about-heading">About this league</h2></div>
+            <div class="card-body"><div class="markdown-content" data-event-about>{% if page.description_html %}{{ page.description_html | safe }}{% else %}<p class="text-muted mb-0">League details have not been added yet.</p>{% endif %}</div></div>
+          </section>
+          <section class="card event-registration-card" aria-labelledby="registration-heading">
+            <div class="card-header"><h2 id="registration-heading"><i aria-hidden="true">{{ icon('clipboard-list') }}</i>Registration details</h2></div>
+            <div class="card-body">
+              <p class="event-scope-note">Registration and fees cover every event in this league.</p>
+              {{ facts(page.facts) }}
+              {% if page.waiver_required %}<p class="event-detail-note"><i aria-hidden="true">{{ icon('file') }}</i>A signed waiver is required for each player.</p>{% endif %}
+              {% if page.terms_url %}<a class="event-terms-link" href="{{ page.terms_url }}" target="_blank" rel="noopener noreferrer">Registration terms <i aria-hidden="true">{{ icon('arrow-up-right') }}</i></a>{% endif %}
+            </div>
+          </section>
+          <section class="card event-limits-card" aria-labelledby="limits-heading">
+            <div class="card-header"><h2 id="limits-heading"><i aria-hidden="true">{{ icon('users') }}</i>Team limits</h2></div>
+            <div class="card-body">{{ facts(page.limits) }}</div>
+          </section>
+        </div>
+      </section>
+    </div>
+  </div>
+</main>
+{% endblock %}

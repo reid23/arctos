@@ -22,6 +22,29 @@ and fill only the values you need.
 `ARCTOS_PORT`
 : (default `5006`) Backend port when running `python run_app.py`.
 
+`ARCTOS_PUBLIC_HTML_ENABLED`
+: (default `0`) Set to `1` for Flask's Events/Leagues document routing and initial
+  visibility checks. Public facts arrive in the first HTML response while the
+  application starts in the background. Requires the document proxy setup in
+  [DEPLOY](DEPLOY.md#public-html-rollout).
+
+`ARCTOS_FRONTEND_DIST`
+: Absolute path to the prepared Dioxus `public` output containing
+  `arctos-assets.json`, `index.html`, and `assets/`. Defaults to the checkout's
+  `frontend/dist/public`. Run `scripts/prepare_public_assets.py` after bundling.
+  Set the same value in deployment and gunicorn environments when staging.
+
+`ARCTOS_PUBLIC_ORIGIN`
+: Trusted canonical origin, such as `https://arctos.example.org`. Accepts an
+  HTTP(S) origin with a host; credentials, paths, queries, and fragments are
+  rejected. Canonical and Open Graph URLs are generated when configured.
+
+`ARCTOS_PUBLIC_CALENDAR_TIMEZONE`
+: (default `UTC`) IANA timezone for Upcoming/Past filtering when the request
+  lacks a valid `arctos_timezone` cookie. Later requests use the browser zone
+  saved by the appearance script. Event date labels preserve their entered
+  calendar day in every timezone.
+
 `SQLALCHEMY_DATABASE_URI`
 : SQLAlchemy database URI. Format: `sqlite:///tournament.db` for a local
   SQLite file, or any SQLAlchemy-supported database URI.
@@ -54,6 +77,7 @@ and fill only the values you need.
   To enable the extra sounds for the demo organizer:
 
   ```sh
+  just public-assets
   SILLY_USERS=demo-organizer uv run python -m scripts.dev_demo
   ```
 

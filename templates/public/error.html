@@ -1,0 +1,9 @@
+{% extends 'public/base.html' %}
+{% block content %}
+<main class="container-wide app-main" id="page-content" tabindex="-1" data-public-page="error">
+  <h1>{{ title }}</h1>
+  <p>{{ message | default(description) }}</p>
+  <a class="btn btn-outline-secondary" href="{{ home_url }}">Back to events</a>
+  {% if status == 503 %}<a class="btn btn-outline-secondary" href="{{ request.script_root + request.full_path.rstrip('?') }}">Try again</a>{% endif %}
+</main>
+{% endblock %}

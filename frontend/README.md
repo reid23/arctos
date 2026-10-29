@@ -1,9 +1,11 @@
 # Rust frontend
 
-Arctos is a [Dioxus](https://dioxuslabs.com/) single-page application compiled to
-WebAssembly. The browser calls the Flask API under `/_api/`. In production,
-nginx serves the frontend and proxies API requests; see the
-[deployment guide](../docs/DEPLOY.md).
+Arctos uses [Dioxus](https://dioxuslabs.com/) compiled to WebAssembly for
+interactive workflows. The browser calls Flask under `/_api/`. Flask also owns
+the initial document: public routing serves Events, Leagues, and their Info
+pages as HTML. Interactive destinations display startup feedback before Dioxus.
+See [entry architecture](../docs/public-html-architecture.md) and
+[deployment](../docs/DEPLOY.md).
 
 ## Run locally
 
@@ -32,16 +34,26 @@ cd frontend
 dx bundle --release
 ```
 
-Deploy the output path reported by Dioxus. The project does not need a Node
-build or a CSS/font CDN. Bundled dependencies and licenses are in
+Deploy the output path reported by Dioxus. The frontend builds with Rust and
+serves bundled CSS and fonts locally. Dependencies and licenses are in
 [`assets/vendor/`](assets/vendor/README.md).
+
+Exercise Flask public entry on port 5006 with public routing enabled and a
+prepared release bundle. After bundling, run `scripts/prepare_public_assets.py`
+from the repository root with `--dist` set to Dioxus's public output directory.
+Set `ARCTOS_FRONTEND_DIST` to the same directory. The
+[script guide](../scripts/README.md#public-html-assets-and-browser-checks)
+contains preparation and browser commands. `dx serve` on port 8080 serves the
+application directly.
 
 ## Code map
 
 | File or directory | Responsibility |
 | --- | --- |
 | `src/main.rs` | Route declarations and application startup |
-| `src/api.rs` | HTTP requests, credentials, and response errors |
+| `src/public_navigation.rs` | Persistent app history and the parked public-document navigation bridge |
+| `src/api.rs`, `src/api/public_events.rs` | HTTP requests, credentials, response errors, and the paginated Events API |
+| `src/league_cache.rs` | Account/date-scoped Leagues cache and invalidation |
 | `src/types.rs` | Shared API response and request types |
 | `src/auth.rs` | Shared account loading and retry state |
 | `src/pages/` | Route views and their styles |
@@ -59,9 +71,26 @@ query variants for filters or sections; preserve those parameters and browser
 Back/Forward behavior when adding navigation. Event sections use real links,
 with `aria-current="page"` on the current destination.
 
+With public routing enabled, Flask serves `/` and `/leagues` (including
+`q`, `view`, and `page`) and published event/league Info as Flask documents.
+Other tabs and workflows, authorized drafts, and explicit `?app=1` requests
+use the application.
+
+Documents marked `data-public-background="true"` initialize a parked runtime.
+`public_navigation.rs` activates its Router through the cancelable navigation
+bridge. While startup is pending or failed, marked reading links
+and GET forms replace the public document with fresh Flask HTML, preserving
+the single runtime. Once ready, navigation activates the application.
+Subsequent public reading and workflows stay in the running app. History
+preserves raw queries, page numbers, fragments, return parameters, and native
+modified/external/download behavior. Dedicated output routes retain their own
+documents.
+
 League events register through their league. A direct event registration URL
 redirects to the league registration page before displaying a form. The
-backend's `can_view_schedule` flag controls schedule access. The tab remains
+same registration URLs dispatch already-registered players and teams to the
+existing registration editor, preserving save, cancel, withdrawal, and roster
+access. The backend's `can_view_schedule` flag controls schedule access. The tab remains
 named **Schedule**; it is disabled without access, and authorized organizers
 can open an unpublished schedule. Editing is a separate route.
 
@@ -70,6 +99,26 @@ The wrapper includes session credentials. Update the matching Rust type when a
 backend response changes. Keep authentication failure distinct from a temporary
 account-service failure: `auth::use_account()` exposes that distinction and
 Layout provides the shared retry notice.
+
+`PublicPageService` selects request-scoped view models for Jinja. Dioxus Events
+uses the same paginated `DirectoryPage` through `/_api/public/events`.
+`PublicLeagueService` selects the bounded server directory. Dioxus applies
+24-item pagination and query-filtered counts to its account/date-scoped Leagues
+response, which it reuses for up to 60 seconds. Writes, account changes, expiry,
+and Retry refresh data.
+
+Public CSS is generated from the frontend sources by `just public-assets` and
+by release preparation. Restart Flask after regeneration to refresh its cached
+asset versions and compressed responses. Generated files are ignored by Git. `public.css`
+contains native-control adapters. Review shared component changes in both the
+Flask documents and the running application.
+
+`boot.js` displays startup feedback for interactive destinations;
+`background.js` keeps public reading available until an application route and
+its styles are ready. Both preserve appearance preferences and a single
+visible header. See [architecture](../docs/public-html-architecture.md) and
+[verification](../docs/public-html-verification.md) for the handoff contract
+and browser checks.
 
 ## UI conventions
 

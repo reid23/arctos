@@ -1,0 +1,74 @@
+{% extends 'public/base.html' %}
+{% from 'public/macros.html' import personal_status, dates %}
+{% from 'public/icons.html' import icon %}
+{% block content %}
+<main class="container-wide app-main" id="page-content" tabindex="-1" data-public-page="directory">
+  <header id="page-banner" class="arctos-page-banner" data-public-intro="events">
+    <div id="page-banner-content">
+      <h1 id="page-banner-heading" tabindex="-1">Events</h1>
+      <p>Find <a href="https://en.wikipedia.org/wiki/Jugger">jugger</a> tournaments and results.</p>
+    </div>
+    <button id="page-banner-dismiss" class="arctos-intro-dismiss" type="button" aria-label="Collapse Events introduction" title="Collapse introduction" aria-expanded="true" aria-controls="page-banner-content" data-public-intro-dismiss="events" data-focus-target="event-discovery" hidden><i aria-hidden="true">{{ icon('chevron-up') }}</i></button>
+  </header>
+  <h1 class="visually-hidden" data-public-intro-heading="events" hidden>Events</h1>
+  <section id="event-discovery" class="arctos-discovery" aria-label="Find an event" tabindex="-1">
+    <div class="arctos-discovery-toolbar">
+      <div class="arctos-discovery-actions">
+        <nav class="arctos-segmented" aria-label="Event dates">
+          <a class="arctos-segment{% if page.view == 'upcoming' %} is-active{% endif %}" data-public-reading href="{{ page.upcoming_url }}"{% if page.view == 'upcoming' %} aria-current="page"{% endif %}>Upcoming <span class="arctos-count">{{ page.upcoming_count }}</span></a>
+          <a class="arctos-segment{% if page.view == 'past' %} is-active{% endif %}" data-public-reading href="{{ page.past_url }}"{% if page.view == 'past' %} aria-current="page"{% endif %}>Past <span class="arctos-count">{{ page.past_count }}</span></a>
+        </nav>
+        <details class="organize-menu">
+          <summary class="organize-trigger" id="organize-trigger">Organize <i aria-hidden="true">{{ icon('chevron-down') }}</i></summary>
+          <div class="organize-dropdown" id="organize-options"><a class="dropdown-item" href="{{ request.script_root }}/create-event">Create an event</a><a class="dropdown-item" href="{{ request.script_root }}/leagues/new">Create a league</a></div>
+        </details>
+      </div>
+      <form data-public-reading class="arctos-event-search" method="get" action="{{ home_url }}" role="search">
+        <label class="visually-hidden" for="event-search">Search event names, locations, or leagues</label>
+        {% if page.view == 'past' %}<input type="hidden" name="view" value="past">{% endif %}
+        <i aria-hidden="true">{{ icon('search') }}</i>
+        <input id="event-search" name="q" type="search" class="form-control" value="{{ page.query }}" maxlength="200" placeholder="Find an event or location…">
+        <button class="public-search-submit" type="submit" aria-label="Search" title="Search"><i aria-hidden="true">{{ icon('arrow-right') }}</i></button>
+      </form>
+    </div>
+    {% if page.query %}<p class="arctos-results-count">{{ page.total }} {{ 'event' if page.total == 1 else 'events' }} matching “{{ page.query }}”. <a data-public-reading href="{{ page.clear_url }}">Clear search</a></p>{% endif %}
+    {% if page.cards %}
+    <div class="arctos-card-grid">
+      {% for card in page.cards %}
+      <article class="card arctos-event-card event-card">
+        <div class="card-body">
+          <div class="arctos-card-statuses">
+            {% if not card.published %}<span class="badge bg-warning text-dark" title="Draft · Only visible to organizers">Unpublished</span>{% endif %}
+            {% if page.view == 'past' %}<span class="badge arctos-badge-neutral">Past event</span>{% else %}<span class="badge {{ 'arctos-badge-success' if card.registration_open else 'arctos-badge-neutral' }}">{{ card.registration_label }}</span>{% endif %}
+          </div>
+          <h2 class="arctos-card-title"><a data-public-reading href="{{ card.url }}">{{ card.name }}</a></h2>
+          {% if card.league_name %}<a class="arctos-league-link" data-public-reading href="{{ card.league_url }}"><i aria-hidden="true">{{ icon('trophy') }}</i>{{ card.league_name }}</a>{% endif %}
+          <ul class="arctos-meta-list">
+            <li><i aria-hidden="true">{{ icon('location') }}</i><span>{{ card.location }}</span></li>
+            <li><i aria-hidden="true">{{ icon('calendar') }}</i><span>{{ dates(card) }}</span></li>
+            <li><i aria-hidden="true">{{ icon('users') }}</i><span>{{ card.team_count }}{% if card.max_teams is not none %} / {{ card.max_teams }}{% endif %} teams registered</span></li>
+          </ul>
+          {{ personal_status(card.account_status) }}
+        </div>
+        <div class="arctos-card-footer"><a class="btn btn-outline-secondary w-100" data-public-reading href="{{ card.url }}">{{ 'Preview event' if not card.published else 'View event' }} <i aria-hidden="true">{{ icon('arrow-right') }}</i></a></div>
+      </article>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="arctos-empty-state" role="status">
+      <i aria-hidden="true">{{ icon('calendar') }}</i>
+      <h2>{{ 'No matching events' if page.query else ('No past events yet' if page.view == 'past' else 'No upcoming events yet') }}</h2>
+      <p>{{ 'Try another event name, location or league.' if page.query else ('Completed events will appear here after their final day.' if page.view == 'past' else 'Check back for new events, or explore the leagues.') }}</p>
+      {% if page.query or page.view != 'past' %}<a class="btn btn-outline-secondary" data-public-reading href="{{ page.clear_url if page.query else request.script_root + '/leagues' }}">{{ 'Clear search' if page.query else 'Browse leagues' }}</a>{% endif %}
+    </div>
+    {% endif %}
+    {% if page.previous_url or page.next_url %}
+    <nav class="arctos-pagination" aria-label="Event pages">
+      {% if page.previous_url %}<a class="btn btn-outline-secondary" rel="prev" data-public-reading href="{{ page.previous_url }}">Previous</a>{% endif %}
+      <span class="arctos-page-position">Page {{ page.page }}</span>
+      {% if page.next_url %}<a class="btn btn-outline-secondary" rel="next" data-public-reading href="{{ page.next_url }}">Next</a>{% endif %}
+    </nav>
+    {% endif %}
+  </section>
+</main>
+{% endblock %}

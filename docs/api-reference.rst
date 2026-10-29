@@ -13,6 +13,7 @@ corresponds to a top-level module or subpackage under ``app/``.
    api/app.exceptions
    api/app.error_handlers
    api/app.models
+   api/app.routes.public_pages
    api/app.services
    api/app.utils
    api/app.serializers

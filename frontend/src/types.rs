@@ -77,6 +77,86 @@ pub struct TournamentsResponse {
     pub user_reg_status: std::collections::HashMap<String, UserRegStatus>,
 }
 
+/// The same permission-filtered projection Flask renders into the public
+/// directory. Pagination, search, ordering and calendar boundaries stay on the
+/// server when the visitor enters the interactive application.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PublicEventsPage {
+    pub query: String,
+    pub view: String,
+    pub page: u32,
+    pub page_size: u32,
+    pub total: u32,
+    pub upcoming_count: u32,
+    pub past_count: u32,
+    pub cards: Vec<PublicEventCard>,
+    pub previous_url: Option<String>,
+    pub next_url: Option<String>,
+    pub upcoming_url: String,
+    pub past_url: String,
+    pub clear_url: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PublicEventCard {
+    pub url: String,
+    pub name: String,
+    pub date_start: String,
+    pub date_end: Option<String>,
+    pub date_label: String,
+    pub location: String,
+    pub league_name: Option<String>,
+    pub league_url: Option<String>,
+    pub team_count: u32,
+    pub max_teams: Option<u32>,
+    pub registration_open: bool,
+    pub registration_label: String,
+    pub published: bool,
+    pub account_status: Option<PublicRegistrationSummary>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PublicRegistrationSummary {
+    pub account_type: String,
+    pub status: String,
+    pub status_label: String,
+    pub paid: bool,
+    pub waiver_status: Option<String>,
+}
+
+#[cfg(test)]
+mod public_events_response_tests {
+    use super::PublicEventsPage;
+
+    #[test]
+    fn public_projection_decodes_without_the_full_tournament_or_registration_record() {
+        let page: PublicEventsPage = serde_json::from_value(serde_json::json!({
+            "query": "A&B", "view": "past", "page": 2, "page_size": 24,
+            "total": 25, "upcoming_count": 0, "past_count": 25,
+            "previous_url": "/?q=A%26B&view=past", "next_url": null,
+            "upcoming_url": "/?q=A%26B", "past_url": "/?q=A%26B&view=past",
+            "clear_url": "/?view=past",
+            "cards": [{
+                "url": "/cup", "name": "A&B Cup", "date_start": "2026-01-02",
+                "date_end": null, "date_label": "Jan 2, 2026", "location": "Field",
+                "league_name": null, "league_url": null, "team_count": 3,
+                "max_teams": null, "registration_open": false,
+                "registration_label": "Registration closed", "published": true,
+                "account_status": {
+                    "account_type": "player", "status": "CONFIRMED", "status_label": "Confirmed",
+                    "paid": false, "waiver_status": "Needs updating"
+                }
+            }]
+        })).unwrap();
+        assert_eq!(page.page, 2);
+        assert_eq!(page.total, 25);
+        assert!(page.next_url.is_none());
+        assert_eq!(page.cards[0].date_label, "Jan 2, 2026");
+        assert_eq!(page.cards[0].account_status.as_ref().unwrap().waiver_status.as_deref(), Some("Needs updating"));
+        assert!(page.cards[0].max_teams.is_none());
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UserRegStatus {
     #[serde(rename = "type")]

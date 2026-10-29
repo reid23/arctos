@@ -184,6 +184,7 @@ fn AccountAvatar(photo: Option<String>) -> Element {
 
 #[component]
 pub fn Layout() -> Element {
+    super::directory_state::use_page_scroll(false);
     let auth_version = use_signal(|| 0u32);
     provide_context(auth_version);
     let banner_preferences = use_signal(stored_page_banners);

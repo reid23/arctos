@@ -17,8 +17,8 @@
 .arctos-app .organize-dismiss { position: fixed; inset: 0; z-index: 1; border: 0; padding: 0; background: transparent; cursor: default; }
 .arctos-app .organize-dropdown { position: absolute; z-index: 2; top: calc(100% + 4px); right: 0; width: max-content; max-width: calc(100vw - 32px); padding: 4px; border: 1px solid var(--ui-border); border-radius: .6rem; background: var(--ui-surface); box-shadow: 0 4px 12px var(--ui-shadow); }
 .arctos-app .organize-dropdown .dropdown-item { display: flex; align-items: center; min-height: 44px; font-size: .875rem; white-space: nowrap; }
-.arctos-app .arctos-segmented { display: inline-flex; padding: 4px; background: var(--ui-surface-muted); border: 1px solid var(--ui-border); border-radius: .8rem; gap: 4px; }
-.arctos-app .arctos-segment { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; border: 0; background: transparent; color: var(--ui-muted); border-radius: .6rem; min-height: 44px; padding: .6rem 1rem; font-size: .9rem; font-weight: 600; white-space: nowrap; }
+.arctos-app .arctos-segmented { display: inline-flex; flex-wrap: wrap; max-width: 100%; padding: 4px; background: var(--ui-surface-muted); border: 1px solid var(--ui-border); border-radius: .8rem; gap: 4px; }
+.arctos-app .arctos-segment { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; border: 0; background: transparent; color: var(--ui-muted); border-radius: .6rem; min-height: 44px; padding: .6rem 1rem; font-size: .9rem; font-weight: 600; white-space: normal; overflow-wrap: normal; }
 .arctos-app .arctos-segment.is-active { background: var(--ui-surface); color: var(--ui-accent-text); box-shadow: 0 1px 4px var(--ui-shadow); }
 .arctos-app .arctos-count { border-radius: 1rem; background: var(--ui-surface-hover); padding: .08rem .45rem; font-size: .75rem; }
 .arctos-app .arctos-event-search { position: relative; flex: 0 1 350px; }

@@ -6,7 +6,9 @@ mod auth;
 mod components;
 mod display;
 mod form_validation;
+mod league_cache;
 mod pages;
+mod public_navigation;
 mod time_format;
 mod url_slug;
 mod viewport;
@@ -22,8 +24,8 @@ use pages::*;
 #[rustfmt::skip]
 enum Route {
     #[layout(Layout)]
-    #[route("/?:q&:view")]
-    IndexWithQuery { q: String, view: String },
+    #[route("/?:q&:view&:page")]
+    IndexWithQuery { q: String, view: String, page: String },
 
     #[route("/")]
     Index {},
@@ -46,8 +48,8 @@ enum Route {
     #[route("/auth/google/complete-profile")]
     GoogleCompleteProfile {},
 
-    #[route("/leagues?:q&:view")]
-    LeaguesIndexWithQuery { q: String, view: String },
+    #[route("/leagues?:q&:view&:page")]
+    LeaguesIndexWithQuery { q: String, view: String, page: String },
 
     #[route("/leagues")]
     LeaguesIndex {},
@@ -240,21 +242,37 @@ enum Route {
     NotFound { segments: Vec<String> },
 }
 
-/// The page's path and query string (without `?`) as it was loaded. The router
-/// rewrites the address bar to its own form of the route before any page
-/// renders, which drops query parameters the route doesn't declare and
-/// percent-decodes the ones it does.
+/// Startup fallback for environments without browser location access. In the
+/// browser the persistent history adapter preserves raw URLs, so route entry
+/// helpers read the current location rather than a stale public-page snapshot.
 static INITIAL_LOCATION: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
 static INITIAL_FRAGMENT: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
 
-/// The query string the app was loaded with, if it was loaded at `path`.
+/// Raw query for the route currently being entered, if it owns `path`.
 pub fn initial_query(path: &str) -> Option<String> {
+    #[cfg(target_arch = "wasm32")]
+    if let Some(location) = web_sys::window().map(|window| window.location()) {
+        let current = location.pathname().ok()?;
+        let prefix = public_navigation::document_prefix();
+        let current = public_navigation::without_prefix(&current, &prefix)?;
+        return (current.trim_end_matches('/') == path.trim_end_matches('/'))
+            .then(|| location.search().unwrap_or_default().trim_start_matches('?').to_string());
+    }
     let (initial_path, query) = INITIAL_LOCATION.get()?;
     (initial_path.trim_end_matches('/') == path.trim_end_matches('/')).then(|| query.clone())
 }
 
-/// The fragment before the router's initial normalization, including `#`.
+/// Raw fragment for the route currently being entered, including `#`.
 pub(crate) fn initial_fragment(path: &str) -> Option<String> {
+    #[cfg(target_arch = "wasm32")]
+    if let Some(location) = web_sys::window().map(|window| window.location()) {
+        let current = location.pathname().ok()?;
+        let prefix = public_navigation::document_prefix();
+        let current = public_navigation::without_prefix(&current, &prefix)?;
+        let fragment = location.hash().ok()?;
+        return (current.trim_end_matches('/') == path.trim_end_matches('/') && !fragment.is_empty())
+            .then_some(fragment);
+    }
     let (initial_path, fragment) = INITIAL_FRAGMENT.get()?;
     (initial_path.trim_end_matches('/') == path.trim_end_matches('/') && !fragment.is_empty()).then(|| fragment.clone())
 }
@@ -268,10 +286,11 @@ fn main() {
         let _ = INITIAL_LOCATION.set((path, query));
     }
     dioxus::launch(|| {
+        let active = public_navigation::use_application_runtime();
         rsx! {
             document::Link { rel: "icon", r#type: "image/svg+xml", media: "(prefers-color-scheme: light)", href: asset!("/assets/arctos-light.png") }
             document::Link { rel: "icon", r#type: "image/svg+xml", media: "(prefers-color-scheme: dark)", href: asset!("/assets/arctos-dark.png") }
-            Router::<Route> {}
+            if active { Router::<Route> {} }
         }
     });
 }

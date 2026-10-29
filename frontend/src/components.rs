@@ -17,6 +17,7 @@ mod ass_entry;
 mod change_password_card;
 mod connected_apps_card;
 mod edit_registration_modal;
+mod registration_entry;
 mod event_about;
 mod team_registration_help_modal;
 mod event_header;
@@ -47,6 +48,7 @@ pub use profile_image_editor::{ImageDraft, ProfileImageEditor, ProfileImageContr
 pub use change_password_card::ChangePasswordCard;
 pub use connected_apps_card::ConnectedAppsCard;
 pub use edit_registration_modal::{EditRegistrationContext, EditRegistrationModal};
+pub use registration_entry::{has_existing_registration, ExistingRegistration};
 pub use event_about::EventAbout;
 pub use event_header::{EventBannerPhoto, EventHeader, EventTab, EventTabs};
 pub use team_registration_help_modal::TeamRegistrationHelpModal;

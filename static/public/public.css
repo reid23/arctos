@@ -1,0 +1,220 @@
+/* Only adapters for server documents and native controls. Visual component
+   rules are generated verbatim from the existing Dioxus styles in design.css. */
+.public-document, .public-startup {
+  margin: 0;
+  background: var(--ui-bg);
+  color: var(--ui-text);
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.public-shell {
+  overflow-wrap: anywhere;
+}
+
+.public-icon {
+  display: inline-block;
+  vertical-align: -.125em;
+  flex-shrink: 0;
+}
+
+.public-shell i {
+  font-style: normal;
+  line-height: 1;
+}
+
+/* Dioxus inserts its shared .brand-mark rule after this stylesheet. Keep the
+   inactive mark hidden while both headers coexist during startup. */
+.public-shell .app-brand .public-mark-dark {
+  display: none;
+}
+
+.arctos-public[data-bs-theme="dark"] .public-mark-light {
+  display: none;
+}
+
+.arctos-public[data-bs-theme="dark"] .public-mark-dark {
+  display: block;
+}
+
+@media (prefers-color-scheme: dark) {
+  .arctos-public:not([data-bs-theme]) .public-mark-light {
+    display: none;
+  }
+  .arctos-public:not([data-bs-theme]) .public-mark-dark {
+    display: block;
+  }
+}
+
+.public-shell summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.public-shell summary::-webkit-details-marker {
+  display: none;
+}
+
+.public-shell details[open] > summary {
+  color: var(--ui-text);
+  background: var(--ui-surface-hover);
+}
+
+.public-shell .public-menu[open] {
+  z-index: 1040;
+}
+
+.public-shell .organizer-tools[open], .public-shell .organize-menu[open] {
+  z-index: 1040;
+}
+
+.public-shell .event-hero-actions:has(.organizer-tools[open]) {
+  z-index: 1040;
+}
+
+.public-shell .organize-dropdown {
+  max-width: calc(100vw - 32px);
+}
+
+.public-shell .arctos-segment {
+  text-decoration: none;
+}
+
+.public-shell .arctos-event-search {
+  margin: 0;
+}
+
+.public-shell .arctos-event-search input {
+  padding-right: 3rem;
+}
+
+.public-shell .public-search-submit {
+  position: absolute;
+  right: 0;
+  top: 0;
+  height: 100%;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 .75rem;
+  border: 0;
+  border-left: 1px solid var(--ui-control-border);
+  border-radius: 0 8px 8px 0;
+  color: var(--ui-link);
+  background: transparent;
+}
+
+.public-shell .public-search-submit:hover {
+  background: var(--ui-surface-hover);
+}
+
+.public-shell .public-search-submit:focus-visible {
+  outline-offset: -4px;
+}
+
+.public-shell .public-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  margin-top: 1.5rem;
+}
+
+.public-shell .public-pagination .btn {
+  min-height: 44px;
+}
+
+.public-shell .arctos-meta-list li > span {
+  min-width: 0;
+}
+
+.public-shell .event-detail-list > div {
+  flex-wrap: wrap;
+  gap: .25rem 1rem;
+}
+
+.public-shell .event-detail-list :is(dt, dd) {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.public-shell .event-hero-meta li {
+  align-items: baseline;
+}
+
+.public-shell .markdown-content :is(img, video) {
+  max-width: 100%;
+  height: auto;
+}
+
+.public-shell .markdown-content pre {
+  overflow-x: auto;
+}
+
+.public-shell .markdown-content table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.arctos-public[data-public-events-hidden] [data-public-intro="events"],
+.arctos-public[data-public-leagues-hidden] [data-public-intro="leagues"] {
+  display: none;
+}
+
+/* Keep the familiar chrome visible while the real application mounts out of
+   sight. Visibility (not display:none) preserves its layout measurements. */
+.public-startup #main, .public-background #main {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.public-app-status {
+  margin-block: .75rem;
+  color: var(--ui-muted);
+}
+
+.public-shell [data-app-pending] {
+  cursor: progress;
+  opacity: .65;
+}
+
+.public-boot {
+  max-width: 48rem;
+}
+
+.public-boot-status {
+  margin-block: .75rem 1rem;
+  color: var(--ui-muted);
+}
+
+.public-boot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .5rem 1.25rem;
+}
+
+.public-boot-actions a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
+
+.public-boot[data-boot-state="failed"] [data-boot-message] {
+  color: var(--ui-danger-text);
+}
+
+@media (max-width: 575.98px) {
+  .public-shell .app-nav-link {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .public-shell .appearance-mode-options {
+    grid-template-columns: repeat(auto-fit, minmax(5rem, 1fr));
+  }
+}

@@ -100,11 +100,13 @@ pub fn LeagueHomeContent(
         let md = about_markdown();
         let has_overview = show_overview();
         async move {
-            if !has_overview { return Ok(String::new()); }
-            match md.as_deref() {
-                Some(m) if !m.is_empty() => api::render_markdown(m).await,
-                _ => Ok(String::new()),
-            }
+            let rendered = if !has_overview { Ok(String::new()) } else {
+                match md.as_deref() {
+                    Some(m) if !m.is_empty() => api::render_markdown(m).await,
+                    _ => Ok(String::new()),
+                }
+            };
+            (md, rendered)
         }
     });
 
@@ -125,6 +127,12 @@ pub fn LeagueHomeContent(
         matches!(*tab, "events" | "teams") || (content.is_some() && (section_title.is_some() || *tab == "results"))
     }).unwrap_or("info").to_string();
     let backend = api::base_url();
+    let scroll_ready = has_overview && me_res.read().is_some()
+        && val.read().as_ref().is_some_and(|result| result.as_ref().is_ok_and(|details| {
+            active_tab != "info" || about_html.value().read().as_ref()
+                .is_some_and(|(source, _)| *source == details.league.about)
+        }));
+    super::directory_state::use_page_scroll(scroll_ready);
 
     rsx! {
         if let Some(Ok(d)) = val.read().as_ref() {
@@ -196,7 +204,9 @@ pub fn LeagueHomeContent(
                 section { id: "league-section-info", class: "event-section", aria_labelledby: "league-tab-info", hidden: active_tab != "info",
                     EventAbout {
                         card_title: "About this league".to_string(),
-                        about_html: about_html.value().read().as_ref().and_then(|r| r.as_ref().ok()).cloned(),
+                        about_html: about_html.value().read().as_ref()
+                            .filter(|(source, _)| *source == d.league.about)
+                            .and_then(|(_, result)| result.as_ref().ok()).cloned(),
                         about_raw: d.league.about.clone(),
                         empty_message: "League details have not been added yet.".to_string(),
                         team_registration_open: d.league.team_registration_open,
