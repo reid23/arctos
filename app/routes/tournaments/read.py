@@ -40,6 +40,7 @@ from app.services.match_start_eligibility import (
     why_sections_to_dict,
 )
 from app.services.permission_service import PermissionService
+from app.services.schedule_item_service import schedule_items_payload
 from app.services.registration_resolver import (
     is_player_registered,
     is_team_registered,
@@ -299,15 +300,7 @@ def _check_to(tournament_url):
 
 
 def _schedule_published_check(tournament_url, tournament):
-    if tournament.schedule_published:
-        return True
-    if not current_user.is_authenticated:
-        return False
-    if PermissionService.is_tournament_organizer(tournament_url, current_user):
-        return True
-    if is_player(current_user) and can_head_ref_match(tournament_url, current_user.id, match=None):
-        return True
-    return False
+    return PermissionService.can_view_schedule(tournament, current_user)
 
 
 def _team_pseudonym_and_photo(tournament, team_id):
@@ -500,6 +493,7 @@ def tournament_detail(tournament_url):
             "to_entries": to_entries,
             "is_current_team_registered": is_current_team_registered,
             "is_current_player_registered": is_current_player_registered,
+            "can_view_schedule": PermissionService.can_view_schedule(tournament, current_user),
             "penalty_types": penalty_types_data,
         }
     )
@@ -687,6 +681,7 @@ def tournament_schedule(tournament_url):
         {
             "tournament": tournament_to_dict(tournament),
             "matches": match_list,
+            "schedule_items": schedule_items_payload(tournament_url),
             "fields": fields,
             "team_options": team_options,
         }
@@ -882,6 +877,7 @@ def tournament_schedule_setup(tournament_url):
         {
             "tournament": tournament_to_dict(tournament),
             "matches": match_list,
+            "schedule_items": schedule_items_payload(tournament_url),
             "fields": fields_data,
             "tags": tags_data,
             "script_variables": script_variables_data,
@@ -1269,12 +1265,15 @@ def tournament_match_detail(tournament_url):
             "match_notes": match_notes,
             "point_notes_map": point_notes_map,
             "is_head_ref": is_head_ref,
+            "schedule_published": bool(tournament.schedule_published),
+            "can_view_schedule": PermissionService.can_view_schedule(tournament, current_user),
             "can_start": can_start,
             "block_reasons": block_reasons,
             "why_sections": why_sections_to_dict(why_sections),
             "conflicting_match": conflicting_match,
             "match_players": match_players,
             "penalty_types": penalty_types_data,
+            "historical": bool(tournament.historical),
         }
     )
 

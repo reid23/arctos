@@ -1,192 +1,197 @@
 # Testing
 
-## Setup
+Choose checks for the behavior being changed. Backend tests verify domain rules,
+permissions, data integrity, and API contracts. Rust tests verify pure frontend
+logic. Browser checks verify interactions that need a rendered application.
+A screenshot or passing compile check is not a substitute for those tests.
 
-Install dependencies including the test group:
+## Setup and commands
 
 ```bash
 uv sync --group test
+just test                     # backend pytest suite
+just test -k registration     # focused backend tests
+just frontend-test            # Rust tests on the host target
+just lint
+just typecheck
+uv run ruff format --check .
 ```
 
-## Running Tests
+`just unit` and `just integration` select the corresponding pytest markers.
+You can pass pytest flags to `just test`, such as `-n 4` to limit parallel workers
+or `--tb=long` for full tracebacks. The commands are defined in `justfile`;
+pytest defaults and markers are in `pyproject.toml`.
+
+Check the browser build target separately:
 
 ```bash
-just test          # full suite
-just unit          # unit tests only (fast, no DB)
-just integration   # integration tests only
+cd frontend
+cargo check --locked --target wasm32-unknown-unknown
 ```
 
-Without `just`:
+CI runs backend tests with coverage, Python lint/format and type checks, frontend unit
+tests, and the WebAssembly compile check. Browser suites require running servers
+and are separate from ordinary pytest.
 
-```bash
-uv run pytest tests/
-uv run pytest tests/ -m unit
-uv run pytest tests/ -m integration
-```
+## Type checks
 
-Useful flags:
+Run `just typecheck` (or `uv run mypy`) to check the modules listed under
+`[tool.mypy].files` in `pyproject.toml`. The same command runs in pre-commit
+and CI. The checked scope covers `app/error_values.py`,
+`app/utils/name_validation.py`, and their static API contracts in
+`tests/typecheck/error_values.py`.
 
-```bash
-just test -k "registration"   # filter by name
-just test --tb=long           # full tracebacks
-```
+The contract file uses `assert_type` for inferred types and precise
+`type: ignore` comments for deliberately invalid calls. Mypy's unused-ignore
+check reports when an invalid call becomes accepted. These checks cover
+callback types, error types, and decorated function signatures. Runtime
+tests verify that `Option` and `Result` reject boolean conversion. Ordinary
+string, collection, and numeric conditions need explicit predicates during
+code review.
+
+Add each fully typed module to the file list together with its contracts.
+Imports outside that list are skipped; their implementations require their
+own tests and review.
+
+## Writing useful tests
+
+Test outcomes and failure boundaries, rather than reproducing the implementation
+or asserting incidental markup. Useful cases include:
+
+- An unauthorized account cannot read or change another account's data.
+- Invalid input leaves existing data unchanged and gives a usable error.
+- A failed save retains its draft; an uncertain write is reconciled before retry.
+- A transaction cannot leave half an update committed.
+- A delayed response cannot replace a newer query or draft.
+- A keyboard/touch interaction reaches the same action as a pointer click.
+
+Use a focused regression test for a bug when practical. Cosmetic and wording
+changes normally need review, not a new unit test. Run the relevant tests first;
+repeat broad suites when the scope or a failure warrants it.
+
+### Backend fixtures
+
+Shared fixtures live in `tests/conftest.py`; helpers are in `tests/utils.py`.
+See [tests/README.md](tests/README.md) for test organization.
+
+| Fixture/helper | Purpose |
+| --- | --- |
+| `app` | Session-scoped Flask app with a temporary SQLite database |
+| `test_db` | Recreates tables for each test and keeps its app context open |
+| `client` | Flask test client using that database |
+| `tournament`, `player`, `team` | Basic domain records |
+| `team_registration`, `head_ref_player` | Registration and referee setup |
+| `make_registrable_config()` | Registration settings with closed defaults |
+| `login_as(client, user)` | Authenticated test session without a login request |
+
+Fixtures that depend on `test_db` can use the session directly. Avoid opening
+and closing an extra app context inside a fixture, which can detach the objects
+it returns. Tests with multiple sessions or explicit transactions should manage
+their lifetimes deliberately.
+
+Standalone tournaments need a `RegistrableConfig`; league events inherit their
+league's config. Use the shared helper instead of duplicating model defaults.
+Assert the actual endpoint contract: API errors may be 400, 401, 403, 404, or 409,
+and OAuth callbacks use redirects. Not every `/_api/` response is JSON.
+
+Image and profile tests should cover ownership, accepted media, size/pixel limits,
+metadata removal, atomic text/image updates, and cleanup on failure. Migration
+and demo tests should use temporary databases and verify that source snapshots
+and existing destination data are preserved. They must not depend on a personal
+snapshot or production database.
 
 ## Coverage
 
-Run the suite with coverage:
+```bash
+just coverage                         # report without the project-wide floor
+just coverage -k registration         # useful for focused investigation
+just coverage --cov-report=html       # writes htmlcov/index.html
+just coverage-check                   # CI-style floor
+```
+
+Coverage measures `app/`, including branches, with a configured minimum of 30%.
+A filtered run does not represent project coverage, so `just coverage` disables
+the floor for that run. Use the report to locate untested behavior; do not add
+low-value assertions solely to increase the percentage.
+
+## Mobile browser verification
+
+Start an isolated demo and the frontend in separate terminals:
 
 ```bash
-just coverage
-just coverage -k "registration"   # filtered coverage run
+just demo
+just frontend
 ```
 
-`just coverage` disables the project-wide coverage floor so filtered
-runs can report useful local numbers without failing because they only
-exercise part of the app.
-
-Run the CI-style coverage gate:
+Install Chromium and run a browser check from the repository root:
 
 ```bash
-just coverage-check
+uv run playwright install chromium
+uv run python scripts/check_mobile_ui.py --screenshots /tmp/arctos-ui
 ```
 
-Without `just`:
+Playwright is installed with the application dependencies because scoreboard
+rendering also uses it. Pass
+`--browser-executable /path/to/chromium` to use an installed browser, or
+`--base-url http://127.0.0.1:8080` to select the frontend URL. The runners require
+a local origin and the demo-only marker endpoint. They block real data writes,
+except demo login and read-only Markdown rendering, and intercept responses for
+write/error scenarios. Do not remove those guards to test against a real site.
+
+Run the smallest relevant suite. Each accepts the same base-URL, browser, and
+screenshot options; use `--help` for its supported filters.
+
+| Script in `scripts/` | Main purpose |
+| --- | --- |
+| `check_mobile_ui.py` | Common routes, discovery, registration, live controls, and recovery |
+| `check_appearance_ui.py` | Theme/mode preferences, persistence, menus, and contrast |
+| `check_event_ui.py` | Event navigation, rosters, registration destinations, and schedule access |
+| `check_registration_ui.py` | Contextual registration actions for guest/player/team accounts |
+| `check_results_ui.py` | Populated and empty results, statistics, keyboard sorting, ribbon inclusion, and match expansion |
+| `check_sidecomp_results_ui.py` | Weapon filters, group selection, personal results, access changes, and delayed responses |
+| `check_profile_ui.py` | Profile sections, draft persistence, Markdown, and staged image edits |
+| `check_event_tools_ui.py` | Organizer tools, settings, shared headers, and retained input |
+| `check_stones_ui.py` | Playback state, mute/preview, audio caching, and calibration controls |
+
+For example:
 
 ```bash
-uv run pytest tests/ --cov=app --cov-report=term-missing --cov-fail-under=0
-uv run pytest tests/ --cov=app --cov-report=term-missing --cov-fail-under=0 -k "registration"
+uv run python scripts/check_mobile_ui.py --workflow registration-and-schedule
+uv run python scripts/check_profile_ui.py --screenshots /tmp/arctos-profiles
 ```
 
-Generate an HTML report (lands in `htmlcov/`, gitignored):
+Browser response fixtures exercise UI behavior; backend tests separately verify
+that real services enforce permissions and persist or roll back changes.
+Save screenshot output outside the checkout and attach relevant images directly
+to the pull request. Include the viewport size and state shown. Screenshots are
+visual references, not an exhaustive test record.
 
-```bash
-just coverage --cov-report=html
-open htmlcov/index.html                  # or xdg-open on Linux
-```
+### Manual checks and device limits
 
-Coverage settings live under `[tool.coverage.*]` in `pyproject.toml`:
+For changed forms, check failed reads, invalid fields, delayed saves, and rejected
+writes. No editable blank record should appear after a failed load. Drafts must
+survive failures; feedback must identify the relevant field or service problem.
+Pending writes must prevent duplicate actions.
 
-- **Source** is `app/` (tests, scripts, and migrations are not measured).
-- **Branch coverage** is on, so untested `else` branches count as misses.
-- **`fail_under = 30`** is a soft floor that catches significant
-  regressions without blocking small fluctuations. CI enforces it with
-  `just coverage-check`. Current actual coverage is around 33% (with
-  branch coverage on); raise the floor when overall coverage grows.
+For dialogs, check initial focus, Tab/Shift+Tab, Escape, background taps, nested
+dialogs, and focus return. Confirm the intended Cancel behavior: a provisional
+bracket item is removed, a saved item is kept, and calibration restores its
+snapshot. Pending writes must not be dismissed. Refreshing schedule helpers
+must retain other edited rows and block writes after a failed refresh.
 
-## Structure
+Review phones at 320px and 390px, a short landscape viewport, and desktop.
+Tables should scroll within their own container. Long dialogs must reach every
+field and action. A virtual keyboard must not cover the only save/close control.
+Check themes, enlarged text, and keyboard focus as relevant to the change.
 
-```
-tests/
-├── conftest.py          # shared fixtures (app, test_db, client, tournament, player, team, …)
-├── utils.py             # helpers: make_registrable_config(), login_as()
-├── test_basic.py
-├── test_dependencies.py
-├── test_match_start.py
-├── test_matches_api.py
-├── test_permissions.py
-├── test_registration_flow.py
-├── test_registration_reregister.py
-├── test_tournament_service.py
-├── test_update_tags_recompute.py
-└── unit/
-    ├── test_services_unit.py
-    └── test_tag_resolution.py
-```
+Chromium viewport emulation does not reproduce an iPhone. For an Apple-device
+issue, record the route, device model, iOS/browser version, orientation, and
+keyboard state. Check keyboard open/close and rotation, Safari toolbar changes,
+notches/safe areas, native dates/selects, Photos/Files selection, and crop gestures.
+Do not disable pinch zoom. CSS inset fixtures can verify arithmetic, but not
+physical-device behavior.
 
-## Markers
-
-| Marker        | Meaning                          |
-|---------------|----------------------------------|
-| `unit`        | Pure logic, no database or HTTP  |
-| `integration` | Hits the SQLite test DB via HTTP |
-| `slow`        | Long-running tests               |
-
-Mark a test:
-
-```python
-@pytest.mark.unit
-def test_something():
-    ...
-```
-
-## Key Fixtures
-
-All fixtures are defined in `tests/conftest.py`.
-- See [scope](https://docs.pytest.org/en/6.2.x/fixture.html#scope-sharing-fixtures-across-classes-modules-packages-or-session)
-
-
-| Fixture             | Scope    | Description                                      |
-|---------------------|----------|--------------------------------------------------|
-| `app`               | session  | Flask app wired to a temporary SQLite file       |
-| `test_db`           | function | Drops and recreates all tables before each test  |
-| `client`            | function | `FlaskLoginClient` test client                   |
-| `tournament`        | function | Published tournament with two fields             |
-| `player`            | function | A `Player` row with password set                 |
-| `team`              | function | A `Team` row with password set                   |
-| `team_registration` | function | Confirmed, paid `TeamRegistration`               |
-| `head_ref_player`   | function | Player whose ID is in `head_refs_allowed_list`   |
-
-`test_db` keeps the app context open for the entire test, so ORM objects created by other fixtures stay attached to the session without needing extra `with app.app_context()` blocks.
-
-## Utilities
-
-**`make_registrable_config(**kwargs)`** — creates a `RegistrableConfig` with safe defaults (all registration closed). Pass keyword arguments to override specific fields.
-
-**`login_as(client, user)`** — injects Flask-Login session keys so a user is considered authenticated without going through the login endpoint.
-
-## Configuration
-
-pytest options live in `pyproject.toml` under `[tool.pytest.ini_options]`.
-
----
-
-## Best Practices
-
-For general pytest guidance see the [official how-to guides](https://docs.pytest.org/en/stable/how-to/index.html). Project-specific rules are below.
-
-**Mark every test** with `@pytest.mark.unit` or `@pytest.mark.integration` so it can be run in isolation.
-
-**Use shared fixtures** from `tests/conftest.py` (`test_db`, `client`, `tournament`, `player`, `team`, …). Only write a new fixture when something genuinely test-specific is needed.
-
-**One app context per test, owned by `test_db`** — `test_db` opens an app context that lives for the whole test. Fixtures that depend on `test_db` should write directly to the session; don't push a second `with app.app_context()` inside them.
-
-```python
-# good
-@pytest.fixture
-def my_thing(test_db):
-    obj = MyModel(...)
-    db.session.add(obj)
-    db.session.commit()
-    db.session.refresh(obj)
-    return obj
-
-# bad — second context closes before the test body runs
-@pytest.fixture
-def my_thing(app, test_db):
-    with app.app_context():
-        ...
-```
-
-**Reading DB state after HTTP calls** — the test client handles requests in its own context. Wrap post-request queries in `with app.app_context()`:
-
-```python
-resp = client.post("/_api/...")
-assert resp.status_code == 200
-
-with app.app_context():
-    row = MyModel.query.filter_by(...).first()
-    assert row.status == "CONFIRMED"
-```
-
-**API endpoints return JSON, not redirects** — all `/_api/` routes return `200` on success and `400` on validation failure. Don't assert for `302`.
-
-**Creating tournaments** — `Tournament` requires a `registrable_config_id`. Use `make_registrable_config()`:
-
-```python
-from tests.utils import make_registrable_config
-
-cfg = make_registrable_config(registration_open=True, team_registration_open=True)
-t = Tournament(url="my-event", ..., registrable_config_id=cfg.id)
-```
-
-**Don't use `db.session.begin()`** — `test_db` already manages the transaction. Call `db.session.add()` / `db.session.commit()` directly.
+Google/YouTube flows require configured integrations. Audio hardware, Bluetooth
+latency, actual recording, screen readers, and native file pickers also require
+appropriate manual checks. A muted browser audio test cannot verify audible
+synchronization.

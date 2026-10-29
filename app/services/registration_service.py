@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Optional
 from sqlalchemy import select
 
 from app.domain.enums import MatchStatus, RegistrationStatus, TeamRegistrationStatus
-from app.error_values import Err, Ok, Result, allow_Q
+from app.error_values import Err, Ok, Result, Some, allow_Q
 from app.exceptions import (
     ArctosError,
     RegistrationClosedError,
@@ -170,9 +170,9 @@ class RegistrationService:
         normalised_shortname: str | None = (shortname or "").strip() or None
         if not pseudonym:
             return Err(ValidationError("Team pseudonym is required"))
-        pn_err = team_pseudonym_char_error(pseudonym)
-        if pn_err:
-            return Err(ValidationError(pn_err))
+        match team_pseudonym_char_error(pseudonym):
+            case Some(error):
+                return Err(ValidationError(error))
 
         if scope.is_league:
             existing_reg = TeamRegistration.query.filter_by(league_id=scope.league_url, team=team_id).first()
@@ -480,9 +480,9 @@ class RegistrationService:
 
         pseudonym_value = (pseudonym or "").strip() or team.name
         normalised_shortname: str | None = (shortname or "").strip() or None
-        pn_err = team_pseudonym_char_error(pseudonym_value)
-        if pn_err:
-            return Err(ValidationError(pn_err))
+        match team_pseudonym_char_error(pseudonym_value):
+            case Some(error):
+                return Err(ValidationError(error))
 
         from app.utils.helpers import get_registrable_config
 

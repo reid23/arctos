@@ -1,0 +1,79 @@
+/* Only live match preparation, scoring and result confirmation use these rules. */
+.arctos-app .operator-setup .live-match-fields,
+.arctos-app .operator-finalize .live-match-fields { min-width: 0; margin: 0; padding: 0; border: 0; }
+.arctos-app .operator-setup .live-match-actions,
+.arctos-app .operator-finalize .live-match-actions,
+.arctos-app .run-match-page .live-match-actions { display: flex; flex-wrap: wrap; gap: .65rem; align-items: center; }
+.arctos-app .operator-setup .live-match-actions > .btn,
+.arctos-app .operator-finalize .live-match-actions > .btn,
+.arctos-app .run-match-page .live-match-actions > .btn { min-height: 48px; white-space: normal; }
+.arctos-app .operator-setup .live-match-prerequisites,
+.arctos-app .operator-finalize .live-match-prerequisites { margin: .75rem 0; padding-left: 1.25rem; color: var(--ui-muted); font-size: .9rem; }
+.arctos-app .operator-setup .live-match-prerequisites li,
+.arctos-app .operator-finalize .live-match-prerequisites li { margin: .25rem 0; }
+.arctos-app .operator-finalize .live-winner-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
+.arctos-app .operator-finalize .live-winner-choice { display: flex; gap: .75rem; align-items: center; min-height: 56px; padding: .8rem 1rem; border: 1px solid var(--ui-control-border); border-radius: .65rem; cursor: pointer; overflow-wrap: anywhere; }
+.arctos-app .operator-finalize .live-winner-choice:has(input:checked) { border-color: var(--ui-link); background: var(--ui-accent-soft); color: var(--ui-accent-text); }
+.arctos-app .operator-finalize .live-winner-choice:focus-within { outline: 2px solid var(--ui-link); outline-offset: 2px; }
+.arctos-app .operator-finalize .live-winner-choice input { flex-shrink: 0; margin: 0; }
+.arctos-app .operator-finalize .live-signature-block { min-width: 0; margin-bottom: 1rem; }
+.arctos-app .operator-finalize .live-signature-block .btn { min-height: 44px; white-space: normal; }
+.arctos-app .operator-finalize .live-signature-block canvas { touch-action: none; }
+.arctos-app .operator-finalize .live-match-fields:disabled canvas { pointer-events: none; }
+.arctos-app .run-match-page .live-match-team { min-width: 0; flex-basis: 0; overflow-wrap: anywhere; }
+.arctos-app .run-match-page .live-match-label { display: block; color: var(--ui-muted); font-size: .875rem; }
+.arctos-app .run-match-page .live-stone-summary { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: .5rem; }
+.arctos-app .run-match-page .live-stone-summary .btn { min-height: 44px; }
+.arctos-app .run-match-page .live-stone-count { display: block; font-size: 2rem; font-weight: 650; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.arctos-app .run-match-page .live-stone-editor { padding: 1rem 0 .25rem; scroll-margin-block: 6rem 11rem; }
+.arctos-app .run-match-page .live-stone-editor input { max-width: 14rem; min-height: 48px; font-size: 1.25rem; }
+.arctos-app .run-match-page #stone-save-error .btn { min-height: 44px; margin: .25rem .5rem .25rem 0 !important; white-space: normal; }
+.arctos-app .run-match-page .set-number-controls button.set-step-btn { min-width: 44px; min-height: 44px; }
+.arctos-app .live-match-action-bar .live-action-status { grid-column: 1 / -1; margin: 0; color: var(--ui-muted); font-size: .8rem; line-height: 1.35; text-align: center; }
+@media (max-width: 767.98px) {
+    .arctos-app .run-match-page { padding-bottom: calc(120px + env(safe-area-inset-bottom)); }
+    .arctos-app .mobile-button-wrapper.operator-match-controls.live-match-action-bar { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: .5rem; padding: .6rem max(.75rem, env(safe-area-inset-right, 0px)) calc(.65rem + env(safe-area-inset-bottom)) max(.75rem, env(safe-area-inset-left, 0px)); }
+    .arctos-app .mobile-button-wrapper.operator-match-controls.live-match-action-bar.live-correction-open { display: none; }
+    .arctos-app .live-match-action-bar .btn { min-width: 0; min-height: 56px; padding: .65rem .5rem; font-size: .95rem; line-height: 1.25; white-space: normal; }
+    .arctos-app .operator-setup .live-match-actions > *,
+    .arctos-app .operator-finalize .live-match-actions > * { width: 100%; }
+    .arctos-app .operator-finalize .live-winner-options { grid-template-columns: minmax(0, 1fr); }
+    .arctos-app .run-match-page .live-stone-editor .live-match-actions { align-items: stretch; }
+    .arctos-app .run-match-page .live-stone-editor .live-match-actions .btn { flex: 1 1 auto; }
+}
+
+/* Keep the score and the latest point together within a phone viewport. */
+.arctos-app .run-match-page .live-match-heading { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
+.arctos-app .run-match-page .live-match-heading h2 { margin: 0; font-size: 1.25rem; overflow-wrap: anywhere; }
+.arctos-app .run-match-page .live-match-heading #quick-timer { position: relative; inset: auto; min-width: 44px; min-height: 44px; height: 44px; padding: 0 .5rem; font-size: 1.4rem; border-radius: .5rem; box-shadow: none; }
+.arctos-app .run-match-page .live-match-metadata { display: flex; flex-wrap: wrap; gap: .25rem 1rem; margin-top: .25rem; font-size: .8125rem; color: var(--ui-muted); }
+.arctos-app .run-match-page .live-score-row { margin-bottom: .75rem; }
+.arctos-app .run-match-page #score-stones-card { margin-top: .75rem; }
+.arctos-app .run-match-page #score-stones-card > .card-body { padding: .75rem; }
+.arctos-app .run-match-page .live-desktop-point-action { margin-top: .5rem; }
+.arctos-app .run-match-page .live-desktop-point-action .btn { min-height: 44px; }
+.arctos-app .run-match-page .live-points-section h3 { margin: 0 0 .5rem; font-size: 1rem; }
+.arctos-app .run-match-page .point-history { border: 0; border-radius: 0; background: transparent; }
+.arctos-app .run-match-page #points-table { margin: 0; }
+.arctos-app .run-match-page .set-number-controls { flex-direction: row; width: 112px; }
+.arctos-app .run-match-page .set-number-controls .set-number-display { min-width: 24px; }
+.arctos-app .run-match-page .set-number-controls button.set-step-btn { width: 44px; height: 44px; }
+.arctos-app .operator-finalize .finalize-points-scroll { border: 0; border-radius: 0; background: transparent; }
+.arctos-app .operator-finalize .finalize-points-table { width: 100%; margin: 0; table-layout: auto; }
+.arctos-app .operator-finalize .finalize-points-table > :not(caption) > * > * { padding: .5rem; }
+.arctos-app .operator-finalize .finalize-points-table th:not(:nth-child(3)) { width: 1%; white-space: nowrap; }
+.arctos-app .operator-finalize .finalize-point-winner { overflow-wrap: anywhere; }
+.arctos-app .operator-finalize .finalize-point-notes td { padding-top: 0; overflow-wrap: anywhere; }
+.arctos-app .operator-finalize .finalize-score-section { padding-block: 1rem; border-block: 1px solid var(--ui-border); }
+@media (max-width: 767.98px) {
+    .arctos-app .run-match-page .live-stone-panel { margin-top: .5rem; padding-top: .5rem; border-top: 1px solid var(--ui-border); }
+    .arctos-app .mobile-button-wrapper.operator-match-controls.live-match-action-bar.live-point-running { grid-template-columns: minmax(0, 1fr); }
+    .arctos-app .operator-finalize .finalize-points-table > :not(caption) > * > * { padding: .4rem .3rem; font-size: .8125rem; }
+}
+@media (max-width: 575.98px) {
+    .arctos-app .run-match-page #points-table .point-entry { gap: 6px 8px; margin-bottom: 0; padding: 8px 0; border: 0; border-bottom: 1px solid var(--ui-border); border-radius: 0; background: transparent; }
+    .arctos-app .run-match-page .point-mobile-label { margin-bottom: 2px; }
+    .arctos-app .run-match-page .winner-option { padding: 6px; }
+    .arctos-app .run-match-page #points-table .point-note-details { margin: 0; border: 0; border-bottom: 1px solid var(--ui-border); border-radius: 0; }
+    .arctos-app .run-match-page #points-table .point-note-details > td { padding: 0 0 8px; }
+}

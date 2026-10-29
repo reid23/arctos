@@ -41,6 +41,7 @@ backups/
 target/
 **/target/
 Cargo.lock
+!frontend/Cargo.lock
 
 # build stuff
 /frontend/dist/

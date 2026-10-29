@@ -451,6 +451,8 @@ fn collect_autocomplete(
 
 #[component]
 pub fn TeamTokenInput(
+    input_id: String,
+    #[props(optional)] described_by: Option<String>,
     team_options: Vec<TeamOption>,
     tags: Vec<TagSetupData>,
     matches: Vec<MatchSetupData>,
@@ -802,6 +804,8 @@ pub fn TeamTokenInput(
                     }
                 }
                 input {
+                    id: input_id,
+                    aria_describedby: described_by,
                     class: "team-token-input-field",
                     "type": "text",
                     placeholder: if tokens_empty { placeholder.clone() } else { "".to_string() },
@@ -974,11 +978,19 @@ pub fn TeamSelectionField(
 ) -> Element {
     let wrapper = wrapper_class.as_deref().unwrap_or("mb-3");
     let label_cls = label_class.as_deref().unwrap_or("form-label");
+    static FIELD_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let input_id = use_hook(|| {
+        let id = FIELD_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        format!("team-selection-{id}")
+    });
+    let help_id = format!("{input_id}-help");
 
     rsx! {
         div { class: "{wrapper}",
-            label { class: "{label_cls}", "{label}" }
+            label { class: "{label_cls}", r#for: input_id.clone(), "{label}" }
             TeamTokenInput {
+                input_id: input_id.clone(),
+                described_by: help_text.as_ref().map(|_| help_id.clone()),
                 team_options,
                 tags,
                 matches,
@@ -988,7 +1000,7 @@ pub fn TeamSelectionField(
                 placeholder,
             }
             if let Some(help) = &help_text {
-                div { class: "form-text", "{help}" }
+                div { id: help_id, class: "form-text", "{help}" }
             }
         }
     }

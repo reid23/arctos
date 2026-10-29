@@ -6,8 +6,8 @@ declines. Several teams may request the same placeholder.
 Player roster requests reuse ``player_registrations.status``, which is a
 plain string column, so the ``REQUESTED`` value needs no schema change.
 
-Revision ID: 0024_team_claim_requests
-Revises: 0023_historical_tournaments
+Revision ID: 0027_team_claim_requests
+Revises: 0026_historical_tournaments
 Create Date: 2026-10-22
 """
 
@@ -19,8 +19,8 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision: str = "0024_team_claim_requests"
-down_revision: Union[str, Sequence[str], None] = "0023_historical_tournaments"
+revision: str = "0027_team_claim_requests"
+down_revision: Union[str, Sequence[str], None] = "0026_historical_tournaments"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

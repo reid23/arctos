@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 from app.error_values import Err, Ok, Result, allow_Q
 from app.exceptions import ArctosError, ValidationError
 from app.serializers.match_schedule_serializer import MatchScheduleSerializer
+from app.services.schedule_item_service import schedule_items_payload, validate_schedule_item
 from app.utils.match_ref_resolution import (
     refs_string_to_tokens,
     resolve_refs_slots,
@@ -607,6 +608,7 @@ class ScheduleImportExportService:
             matches=match_dicts,
             variables=variable_dicts,
             metadata=metadata,
+            schedule_items=schedule_items_payload(tournament_url),
         )
 
         return Ok(toml_content)
@@ -631,7 +633,7 @@ class ScheduleImportExportService:
         Returns:
             Result containing ImportResult with counts and errors
         """
-        from models import Field, Match, ScriptVariable, Tag, db
+        from models import Field, Match, ScheduleItem, ScriptVariable, Tag, db
 
         # Parse TOML
         parsed = parse_toml_schedule(toml_content).Q()
@@ -640,6 +642,7 @@ class ScheduleImportExportService:
         tags_data = parsed["tags"]
         fields_data = parsed["fields"]
         matches_data = parsed["matches"]
+        items_data = parsed["schedule_items"]
 
         # Verify target tournament exists
         from app.services._common import get_tournament_or_err
@@ -707,6 +710,21 @@ class ScheduleImportExportService:
             res = MatchScheduleSerializer.match_from_dict(match_data, tournament_url)
             if isinstance(res, Err):
                 errors.append(f"Match validation error: {res.val.message}")
+
+        validated_items = []
+        seen_item_ids = set()
+        for item_data in items_data or []:
+            try:
+                item_id = item_data.get("id")
+                if item_id is not None and (type(item_id) is not int or item_id < 1 or item_id in seen_item_ids):
+                    raise ValueError("Activity IDs must be unique positive integers.")
+                seen_item_ids.add(item_id)
+                values = validate_schedule_item(
+                    tournament_url, item_data, field_names={field.get("name") for field in fields_data}
+                )
+                validated_items.append((item_id, values))
+            except ValueError as error:
+                errors.append(f"Activity validation error: {error}")
 
         # If any validation errors, abort before making any changes
         if errors:
@@ -827,6 +845,9 @@ class ScheduleImportExportService:
                     # Same tournament: update by ID
                     field = Field.query.filter_by(id=field_dict["id"], event=tournament_url).first()
                     if field:
+                        ScheduleItem.query.filter_by(event=tournament_url, field=field.name).update(
+                            {"field": field_dict["name"]}
+                        )
                         field.name = field_dict["name"]
                         fields_updated += 1
                     else:
@@ -1028,6 +1049,33 @@ class ScheduleImportExportService:
             else:
                 # No tags in file -> delete all tags for this event
                 Tag.query.filter_by(event=tournament_url).delete(synchronize_session=False)
+
+            # Activities omitted from a file remain intact. Included activities
+            # replace this event's activity list in the same transaction.
+            if items_data is not None:
+                kept_item_ids = []
+                for item_id, values in validated_items:
+                    item = (
+                        ScheduleItem.query.filter_by(event=tournament_url, id=item_id).first()
+                        if item_id and is_same_tournament
+                        else None
+                    )
+                    if item is None:
+                        item = ScheduleItem(event=tournament_url, **values)
+                        db.session.add(item)
+                    else:
+                        for key, value in values.items():
+                            if key != "request_id":
+                                setattr(item, key, value)
+                    db.session.flush()
+                    kept_item_ids.append(item.id)
+                ScheduleItem.query.filter_by(event=tournament_url).filter(~ScheduleItem.id.in_(kept_item_ids)).delete(
+                    synchronize_session=False
+                )
+            # A removed field does not remove the activity itself.
+            ScheduleItem.query.filter_by(event=tournament_url).filter(
+                ScheduleItem.field.isnot(None), ~ScheduleItem.field.in_(kept_field_names)
+            ).update({"field": None}, synchronize_session=False)
 
             # Fields: match by name within this tournament.
             if kept_field_names:

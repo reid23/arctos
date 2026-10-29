@@ -6,6 +6,8 @@ pub struct User {
     pub name: String,
     #[serde(rename = "type")]
     pub user_type: String,
+    #[serde(default)]
+    pub profile_photo: Option<String>,
     /// True if the account has a password set (can change password). False for Google-only accounts.
     #[serde(default)]
     pub has_password: bool,
@@ -15,6 +17,8 @@ pub struct User {
 pub struct Tournament {
     pub url: String,
     pub name: String,
+    #[serde(default)]
+    pub banner_photo: Option<String>,
     pub start_date: String,
     pub end_date: Option<String>,
     pub location: Option<String>,
@@ -124,6 +128,8 @@ pub struct UnattachedPlayer {
 pub struct LeagueInfo {
     pub league_url: String,
     pub name: String,
+    #[serde(default)]
+    pub banner_photo: Option<String>,
     pub about: Option<String>,
     pub team_reg_fee: Option<f64>,
     pub player_reg_fee: Option<f64>,
@@ -148,8 +154,42 @@ pub struct LeagueInfo {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LeaguesListResponse {
     pub leagues: Vec<LeagueInfo>,
+    #[serde(default)]
     pub team_counts: std::collections::HashMap<String, u32>,
+    #[serde(default)]
     pub user_reg_status: std::collections::HashMap<String, UserRegStatus>,
+    #[serde(default)]
+    pub event_dates: std::collections::HashMap<String, LeagueEventDates>,
+    /// Seasons that have ended, accounting for every round, including drafts.
+    #[serde(default)]
+    pub past_leagues: std::collections::HashSet<String>,
+}
+
+/// The date range and count of the league events visible to the current viewer.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LeagueEventDates {
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
+    #[serde(default)]
+    pub event_count: u32,
+}
+
+#[cfg(test)]
+mod league_list_response_tests {
+    use super::LeaguesListResponse;
+
+    #[test]
+    fn organized_leagues_can_omit_directory_metadata() {
+        let response: LeaguesListResponse = serde_json::from_value(serde_json::json!({
+            "leagues": [{"league_url": "season", "name": "Season"}]
+        }))
+        .unwrap();
+        assert_eq!(response.leagues[0].league_url, "season");
+        assert!(response.team_counts.is_empty());
+        assert!(response.user_reg_status.is_empty());
+        assert!(response.event_dates.is_empty());
+        assert!(response.past_leagues.is_empty());
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -174,6 +214,8 @@ pub struct LeagueResultsResponse {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TournamentDetailResponse {
     pub tournament: Tournament,
+    #[serde(default)]
+    pub can_view_schedule: bool,
     pub teams_with_counts: Vec<TeamWithCount>,
     pub unattached_players: Vec<UnattachedPlayer>,
     pub to_entries: Vec<ToEntry>,
@@ -904,6 +946,10 @@ pub struct MatchDetailResponse {
     pub point_notes_map: std::collections::HashMap<String, Vec<MatchNoteData>>,
     pub is_head_ref: bool,
     #[serde(default)]
+    pub can_view_schedule: bool,
+    #[serde(default)]
+    pub schedule_published: bool,
+    #[serde(default)]
     pub can_start: bool,
     #[serde(default)]
     pub block_reasons: Vec<String>,
@@ -915,6 +961,8 @@ pub struct MatchDetailResponse {
     pub match_players: Vec<MatchPlayerForNotes>,
     #[serde(default)]
     pub penalty_types: Vec<PenaltyType>,
+    #[serde(default)]
+    pub historical: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -973,6 +1021,8 @@ pub struct RefPermissionsSection {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StartMatchResponse {
     pub tournament: Tournament,
+    #[serde(default)]
+    pub can_view_schedule: bool,
     pub match_info: StartMatchInfo,
     pub team1_players: Vec<StartMatchPlayer>,
     pub team2_players: Vec<StartMatchPlayer>,
@@ -1019,6 +1069,8 @@ pub struct StartMatchPostResponse {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FinalizeMatchResponse {
     pub tournament: Tournament,
+    #[serde(default)]
+    pub can_view_schedule: bool,
     pub match_info: FinalizeMatchInfo,
     pub points: Vec<FinalizePoint>,
     pub point_notes_map: std::collections::HashMap<String, Vec<FinalizeNote>>,
@@ -1074,6 +1126,8 @@ pub struct PlayerListItem {
     pub name: String,
     pub profile_photo: Option<String>,
     pub location: Option<String>,
+    #[serde(default)]
+    pub past_event_count: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1089,9 +1143,15 @@ pub struct PlayerProfileData {
     pub id: String,
     pub name: String,
     pub profile_photo: Option<String>,
+    #[serde(default)]
+    pub banner_photo: Option<String>,
     pub phone: Option<String>,
     pub location: Option<String>,
     pub bio: Option<String>,
+    #[serde(default)]
+    pub pronouns: Option<String>,
+    #[serde(default)]
+    pub pompfen: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1106,6 +1166,8 @@ pub struct PlayerInjury {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PlayerProfileResponse {
     pub player: PlayerProfileData,
+    #[serde(default)]
+    pub past_event_count: u32,
     pub registrations: Vec<PlayerRegItem>,
     #[serde(default)]
     pub injuries: Vec<PlayerInjury>,
@@ -1161,6 +1223,8 @@ pub struct TeamListItem {
     pub name: String,
     pub profile_photo: Option<String>,
     pub location: Option<String>,
+    #[serde(default)]
+    pub past_event_count: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1173,6 +1237,8 @@ pub struct TeamProfileData {
     pub id: String,
     pub name: String,
     pub profile_photo: Option<String>,
+    #[serde(default)]
+    pub banner_photo: Option<String>,
     pub location: Option<String>,
     pub email: Option<String>,
     pub website: Option<String>,
@@ -1185,6 +1251,8 @@ pub struct TeamProfileData {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TeamProfileResponse {
     pub team: TeamProfileData,
+    #[serde(default)]
+    pub past_event_count: u32,
     pub registrations: Vec<TeamRegItem>,
     #[serde(default)]
     pub team_notes: Vec<TeamNoteItem>,
@@ -1367,23 +1435,6 @@ pub struct UpdateMatchRequest {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct UpdatePlayerProfileRequest {
-    pub name: Option<String>,
-    pub phone: Option<String>,
-    pub location: Option<String>,
-    pub bio: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct UpdateTeamProfileRequest {
-    pub name: Option<String>,
-    pub location: Option<String>,
-    pub email: Option<String>,
-    pub website: Option<String>,
-    pub about: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PlayerRegistrationData {
     pub id: u32,
     pub jersey_name: Option<String>,
@@ -1438,6 +1489,8 @@ pub struct UpdateTeamRegistrationRequest {
 pub struct ScheduleSetupResponse {
     pub tournament: Tournament,
     pub matches: Vec<MatchSetupData>,
+    #[serde(default)]
+    pub schedule_items: Vec<ScheduleItemData>,
     pub fields: Vec<FieldSetupData>,
     pub tags: Vec<TagSetupData>,
     #[serde(default)]
@@ -1764,6 +1817,8 @@ pub struct SideCompRegistrant {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SideCompDetail {
+    #[serde(default)]
+    pub schedule_items: Vec<ScheduleItemData>,
     pub id: i32,
     pub event: String,
     pub name: String,
@@ -1909,7 +1964,14 @@ pub struct SideCompStandingTable {
     pub title: String,
     #[serde(default)]
     pub track_losses: bool,
+    #[serde(default)]
+    pub available_weapons: Vec<String>,
+    pub weapon: Option<String>,
+    #[serde(default)]
+    pub sort: String,
     pub rows: Vec<SideCompStandingRow>,
+    #[serde(default)]
+    pub personal_row: Option<SideCompStandingRow>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1921,6 +1983,8 @@ pub struct SideCompStandings {
     #[serde(default)]
     pub finalized: bool,
     pub only_show_top_n_results: Option<i32>,
+    #[serde(default)]
+    pub showing_all_results: bool,
     #[serde(default)]
     pub results_page_enabled: bool,
     pub tables: Vec<SideCompStandingTable>,
@@ -2196,4 +2260,29 @@ pub struct MyInvitationsResponse {
     pub outgoing_roster_requests: Vec<OutgoingRosterRequest>,
     #[serde(default)]
     pub incoming_roster_requests: Vec<IncomingRosterRequest>,
+}
+
+/// A fixed-time activity or linked side competition, separate from match results.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ScheduleItemData {
+    pub id: i32,
+    pub sidecomp_id: Option<i32>,
+    pub title: String,
+    pub description: Option<String>,
+    pub start_time: String,
+    pub end_time: String,
+    pub field: Option<String>,
+    pub location: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SaveScheduleItem {
+    pub request_id: String,
+    pub sidecomp_id: Option<i32>,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub start_time: String,
+    pub end_time: String,
+    pub field: Option<String>,
+    pub location: Option<String>,
 }

@@ -69,15 +69,15 @@ pub fn PendingInvitations(
     }
 
     rsx! {
-        div { class: "card border-warning mb-4",
-            div { class: "card-header",
-                h5 { class: "mb-0",
-                    i { class: "fas fa-envelope-open-text me-2 text-warning" }
+        section { class: "edit-section mb-4",
+            div { class: "edit-section-heading",
+                h2 { class: "h5 mb-0",
+                    i { class: "fas fa-envelope-open-text me-2", aria_hidden: "true" }
                     "Invitations"
                 }
             }
             if let Some(message) = error() {
-                div { class: "alert alert-danger m-3 mb-0 py-2", "{message}" }
+                div { class: "alert alert-danger mb-3 py-2", role: "alert", "{message}" }
             }
             ul { class: "list-group list-group-flush",
                 for claim in data.team_claims.iter() {
@@ -102,13 +102,13 @@ pub fn PendingInvitations(
                                 }
                                 div { class: "d-flex gap-2",
                                     button {
-                                        class: "btn btn-sm btn-success",
+                                        class: "btn btn-primary",
                                         disabled: responding(),
                                         onclick: move |_| respond.call((true, invitation_id, true)),
                                         "Accept"
                                     }
                                     button {
-                                        class: "btn btn-sm btn-outline-secondary",
+                                        class: "btn btn-outline-secondary",
                                         disabled: responding(),
                                         onclick: move |_| respond.call((true, invitation_id, false)),
                                         "Decline"
@@ -147,13 +147,13 @@ pub fn PendingInvitations(
                                 }
                                 div { class: "d-flex gap-2",
                                     button {
-                                        class: "btn btn-sm btn-success",
+                                        class: "btn btn-primary",
                                         disabled: responding(),
                                         onclick: move |_| respond.call((false, invitation_id, true)),
                                         "Yes, add me"
                                     }
                                     button {
-                                        class: "btn btn-sm btn-outline-secondary",
+                                        class: "btn btn-outline-secondary",
                                         disabled: responding(),
                                         onclick: move |_| respond.call((false, invitation_id, false)),
                                         "Decline"
@@ -185,7 +185,7 @@ pub fn PendingInvitations(
                                 }
                                 div { class: "d-flex gap-2",
                                     button {
-                                        class: "btn btn-sm btn-success",
+                                        class: "btn btn-primary",
                                         disabled: responding(),
                                         onclick: move |_| {
                                             let tournament_url = approve_url.clone();
@@ -208,7 +208,7 @@ pub fn PendingInvitations(
                                         "Approve"
                                     }
                                     button {
-                                        class: "btn btn-sm btn-outline-secondary",
+                                        class: "btn btn-outline-secondary",
                                         disabled: responding(),
                                         onclick: move |_| {
                                             let tournament_url = decline_url.clone();

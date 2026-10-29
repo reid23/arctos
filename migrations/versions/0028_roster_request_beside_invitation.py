@@ -5,8 +5,8 @@ per event. A player who was invited by one team and asks to join another
 needs both rows. Settled and invited rows stay unique. One open request
 stays unique. Rejected and cancelled rows are not.
 
-Revision ID: 0025_roster_request_beside_invitation
-Revises: 0024_team_claim_requests
+Revision ID: 0028_roster_request_beside_invitation
+Revises: 0027_team_claim_requests
 Create Date: 2026-10-23
 """
 
@@ -18,8 +18,8 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision: str = "0025_roster_request_beside_invitation"
-down_revision: Union[str, Sequence[str], None] = "0024_team_claim_requests"
+revision: str = "0028_roster_request_beside_invitation"
+down_revision: Union[str, Sequence[str], None] = "0027_team_claim_requests"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

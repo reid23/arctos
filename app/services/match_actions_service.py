@@ -301,35 +301,127 @@ class MatchActionsService:
         *,
         match_id: str,
         stones_remaining: int | str | None,
+        correction: dict | None = None,
     ) -> Result[dict, ArctosError]:
-        """Update the stones-remaining count for a ``STONES``-mode match.
+        """Save a count, optionally rebasing an active point on the same global beat.
 
-        Args:
-            tournament_url: Tournament URL slug scoping the match.
-            user_id: Requesting player's ID (must be a head ref).
-            match_id: UUID of the target match.
-            stones_remaining: New stones-remaining value (coerced to int).
-
-        Returns:
-            :class:`~app.error_values.Ok` wrapping
-            ``{"stones_remaining": int}``, or
-            :class:`~app.error_values.Err`.
+        A manual correction carries the observed timestamp and expected active/latest
+        point IDs. Retrying that unchanged payload produces the same starting anchor;
+        the original point timestamp (and therefore duration) is never rewritten.
+        Legacy end-point/rerun calls omit ``correction`` and keep count-only behavior.
         """
-        from models import db
+        import math
+
+        from sqlalchemy import update
+
+        from app.utils.datetime_helpers import now_utc_naive
+        from models import Match, Point, db
 
         if not match_id or stones_remaining is None:
             return Err(ValidationError("Match ID and stones_remaining required", status_code=400))
+        if isinstance(stones_remaining, bool):
+            return Err(ValidationError("stones_remaining must be a nonnegative integer", status_code=400))
         try:
             stones_remaining_i = int(stones_remaining)
-        except (ValueError, TypeError):
-            return Err(ValidationError("stones_remaining must be an integer", status_code=400))
+            if str(stones_remaining_i) != str(stones_remaining).strip() or not 0 <= stones_remaining_i <= 2_147_483_647:
+                raise ValueError
+        except (ValueError, TypeError, OverflowError):
+            return Err(ValidationError("stones_remaining must be a nonnegative integer", status_code=400))
 
         match = MatchActionsService._require_match(tournament_url, match_id).Q()
         MatchActionsService._require_head_ref(tournament_url, user_id, match=match).Q()
+        if correction is None:
+            match.stones_remaining = stones_remaining_i
+            db.session.commit()
+            return Ok({"stones_remaining": stones_remaining_i})
 
-        match.stones_remaining = stones_remaining_i
+        if (
+            not isinstance(correction, dict)
+            or not {"point_id", "latest_point_id", "observed_at_ms"} <= correction.keys()
+        ):
+            return Err(ValidationError("Correction requires point state and observation time", status_code=400))
+        if match.set_type != "STONES":
+            return Err(ValidationError("Stone corrections require a stones match", status_code=400))
+        observed_ms = correction["observed_at_ms"]
+        if (
+            isinstance(observed_ms, bool)
+            or not isinstance(observed_ms, (int, float))
+            or (isinstance(observed_ms, float) and not math.isfinite(observed_ms))
+        ):
+            return Err(ValidationError("Invalid correction observation time", status_code=400))
+        now = now_utc_naive()
+        now_ms = now.replace(tzinfo=timezone.utc).timestamp() * 1000
+        if observed_ms > now_ms + 5000 or observed_ms < now_ms - 300_000:
+            return Err(
+                ValidationError("Correction time is stale. Check the current count and try again.", status_code=409)
+            )
+
+        # Acquire the match write lock before reading point state, including on SQLite.
+        # All updates below are committed together; validation never changes the count.
+        db.session.execute(update(Match).where(Match.uuid == match_id).values(stones_remaining=Match.stones_remaining))
+        db.session.refresh(match)
+        points = (
+            Point.query.filter_by(match=match_id)
+            .order_by(Point.stamp, Point.uuid)
+            .populate_existing()
+            .with_for_update()
+            .all()
+        )
+        latest = points[-1] if points else None
+        active = [point for point in points if point.end_stamp is None]
+        expected_active = correction["point_id"]
+        expected_latest = correction["latest_point_id"]
+        actual_active = active[0] if len(active) == 1 else None
+        if (
+            len(active) > 1
+            or expected_active != (actual_active.uuid if actual_active else None)
+            or expected_latest != (latest.uuid if latest else None)
+        ):
+            db.session.rollback()
+            return Err(
+                ValidationError("The point changed. Check the current count before correcting it.", status_code=409)
+            )
+        payload: dict[str, Any] = {"stones_remaining": stones_remaining_i, "corrected_point": None}
+        if actual_active is not None:
+            if actual_active.stamp is None:
+                db.session.rollback()
+                return Err(ValidationError("The point has no start time", status_code=409))
+            stamp_ms = actual_active.stamp.replace(tzinfo=timezone.utc).timestamp() * 1000
+            if observed_ms < stamp_ms:
+                db.session.rollback()
+                return Err(ValidationError("Correction time is before the point started", status_code=400))
+            elapsed_observed = max(math.floor(observed_ms / 1500) - math.floor(stamp_ms / 1500), 0)
+            elapsed_now = max(math.floor(now_ms / 1500) - math.floor(stamp_ms / 1500), 0)
+            anchor = stones_remaining_i + elapsed_observed
+            if anchor > 2_147_483_647:
+                db.session.rollback()
+                return Err(ValidationError("Stone count is too large", status_code=400))
+            if "expected_anchor" in correction and actual_active.stones_at_start not in (
+                correction["expected_anchor"],
+                anchor,
+            ):
+                db.session.rollback()
+                return Err(
+                    ValidationError(
+                        "The stone count changed. Check the current count before correcting it.", status_code=409
+                    )
+                )
+            actual_active.stones_at_start = anchor
+            payload["stones_remaining"] = max(anchor - elapsed_now, 0)
+            payload["corrected_point"] = {"uuid": actual_active.uuid, "stones_at_start": anchor}
+        elif "expected_remaining" in correction and match.stones_remaining not in (
+            correction["expected_remaining"],
+            stones_remaining_i,
+        ):
+            db.session.rollback()
+            return Err(
+                ValidationError(
+                    "The stone count changed. Check the current count before correcting it.", status_code=409
+                )
+            )
+        match.stones_remaining = payload["stones_remaining"]
         db.session.commit()
-        return Ok({"stones_remaining": stones_remaining_i})
+        return Ok(payload)
 
     @staticmethod
     @allow_Q

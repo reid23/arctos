@@ -20,6 +20,7 @@ from models import (
     db,
 )
 from app.domain.enums import RegistrationStatus
+from app.error_values import Some
 from app.services._common import current_user_type, Scope
 from app.services.permission_service import PermissionService
 from app.services.registration_service import RegistrationService
@@ -913,9 +914,9 @@ def update_my_team_registration_league(league_url):
 
     if "pseudonym" in data:
         pseudonym = data["pseudonym"].strip()
-        pn_err = team_pseudonym_char_error(pseudonym)
-        if pn_err:
-            return jsonify({"error": pn_err}), 400
+        match team_pseudonym_char_error(pseudonym):
+            case Some(error):
+                return jsonify({"error": error}), 400
         if not pseudonym:
             return jsonify({"error": "Team name is required"}), 400
         reg.pseudonym = pseudonym
@@ -1313,9 +1314,9 @@ def update_my_team_registration(tournament_url):
 
     if "pseudonym" in data:
         pseudonym = data["pseudonym"].strip()
-        pn_err = team_pseudonym_char_error(pseudonym)
-        if pn_err:
-            return jsonify({"error": pn_err}), 400
+        match team_pseudonym_char_error(pseudonym):
+            case Some(error):
+                return jsonify({"error": error}), 400
         if not pseudonym:
             return jsonify({"error": "Team name is required"}), 400
         reg.pseudonym = pseudonym

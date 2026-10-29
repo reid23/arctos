@@ -8,6 +8,7 @@ endpoints. The dict shape is part of the API contract:
         "id":           str,
         "name":         str,
         "type":         "player" | "team",
+        "profile_photo": str | None,
         "has_password": bool,
     }
 
@@ -26,7 +27,7 @@ def user_json() -> dict | None:
 
     Returns:
         A dict with keys ``id``, ``name``, ``type`` (``"player"`` or
-        ``"team"``), and ``has_password``; or ``None`` when no user is
+        ``"team"``), ``profile_photo``, and ``has_password``; or ``None`` when no user is
         authenticated.
     """
     if not current_user.is_authenticated:
@@ -37,5 +38,6 @@ def user_json() -> dict | None:
         "id": current_user.id,
         "name": current_user.name,
         "type": t,
+        "profile_photo": current_user.profile_photo,
         "has_password": has_password,
     }

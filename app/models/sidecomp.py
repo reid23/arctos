@@ -46,10 +46,12 @@ class SideComp(db.Model):
         track_break_losses: :attr:`track_losses` for breakers in chain/breaking.
         allowed_weapons: JSON-encoded list of :class:`Pompfen` member names
             that players may select when registering. Defaults to all.
-        only_show_top_n_results: When ``None``, the results page shows all
-            ranked players. When ``0``, the results page is hidden. When a
-            positive integer ``N``, each results table shows only the top
-            ``N`` players (filters then apply within that cut).
+        only_show_top_n_results: When ``None``, public standings show all
+            ranked players. When ``0``, all results are hidden. A positive
+            integer ``N`` publishes the top ``N`` in each table after ranking.
+            Selecting a weapon shows its leader in the application. Organizers
+            see complete matching standings; signed-in players can see their
+            own standing beyond the public cutoff.
         created_at: Timestamp when the side competition was created.
     """
 

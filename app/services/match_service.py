@@ -123,12 +123,16 @@ class MatchService:
         from app.utils.helpers import get_registrable_config
 
         cfg = get_registrable_config(tournament_obj)
-        max_roster = getattr(cfg, "max_team_size_field", None) if cfg else None
+        field_limit = getattr(cfg, "max_team_size_field", None) if cfg else None
         try:
-            max_roster = int(max_roster) if max_roster is not None else None
-        except Exception:
-            max_roster = None
-        if max_roster and (len(team1_players) > max_roster or len(team2_players) > max_roster):
+            field_limit = int(field_limit) if field_limit is not None else None
+        except (TypeError, ValueError):
+            field_limit = None
+        if (
+            field_limit is not None
+            and field_limit > 0
+            and (len(team1_players) > field_limit or len(team2_players) > field_limit)
+        ):
             return Err(ValidationError("Too many players selected for a team"))
 
         team1_players = _dedup(team1_players)

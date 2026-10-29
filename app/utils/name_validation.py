@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from app.error_values import Null, Option, Some
 
 
-def match_name_char_error(name: str) -> Optional[str]:
+def match_name_char_error(name: str) -> Option[str]:
     """Return an error message if *name* contains characters forbidden in match names.
 
     Match names must not contain ``","`` (used as a separator in CSV columns),
@@ -16,19 +16,20 @@ def match_name_char_error(name: str) -> Optional[str]:
         name: The candidate match name.
 
     Returns:
-        A human-readable error string if the name is invalid, or ``None``
-        if the name passes validation.
+        ``Some`` containing an error message for forbidden punctuation,
+        or ``Null`` when the name passes this check. Callers validate
+        whether a name is required separately.
     """
     if "," in name:
-        return 'Match names cannot contain ",".'
+        return Some('Match names cannot contain ",".')
     if "::" in name:
-        return 'Match names cannot contain "::".'
+        return Some('Match names cannot contain "::".')
     if "/" in name:
-        return 'Match names cannot contain "/".'
-    return None
+        return Some('Match names cannot contain "/".')
+    return Null()
 
 
-def team_pseudonym_char_error(pseudonym: str) -> Optional[str]:
+def team_pseudonym_char_error(pseudonym: str) -> Option[str]:
     """Return an error message if *pseudonym* contains forbidden characters.
 
     Team pseudonyms must not contain ``","`` or ``"::"`` for the same
@@ -38,11 +39,12 @@ def team_pseudonym_char_error(pseudonym: str) -> Optional[str]:
         pseudonym: The candidate team pseudonym.
 
     Returns:
-        A human-readable error string if the pseudonym is invalid, or
-        ``None`` if it passes validation.
+        ``Some`` containing an error message for forbidden punctuation,
+        or ``Null`` when the pseudonym passes this check. Callers validate
+        whether a pseudonym is required separately.
     """
     if "," in pseudonym:
-        return 'Team pseudonyms cannot contain ",".'
+        return Some('Team pseudonyms cannot contain ",".')
     if "::" in pseudonym:
-        return 'Team pseudonyms cannot contain "::".'
-    return None
+        return Some('Team pseudonyms cannot contain "::".')
+    return Null()

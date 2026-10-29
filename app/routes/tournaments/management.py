@@ -10,12 +10,12 @@ from flask import (
 )
 from flask_login import login_required, current_user
 
-from datetime import datetime
 
 from models import (
     Tournament,
     Match,
     Field,
+    ScheduleItem,
     Tag,
     ScriptVariable,
     TeamRegistration,
@@ -34,15 +34,38 @@ from models import (
     PenaltyType,
 )
 from app.services._common import current_user_type
-from app.services.dual_write import set_head_ref_allowlist_from_csv
 from app.models.validators import URL_SLUG_ALLOWED_HINT, is_valid_url_slug
 from app.utils.decorators import require_tournament_organizer
 from app.utils.datetime_helpers import now_utc_naive
+from app.utils.settings_save import SettingsSaveError, save_tournament_settings
+from app.utils.profile_banner_helpers import (
+    BannerUploadError,
+    read_banner_upload,
+    remove_banner,
+    replace_banner,
+)
 
 
 from app.services.permission_service import PermissionService
 
 from . import bp, delete_matches_with_children
+
+
+@bp.route("/tournaments/<tournament_url>/banner-photo", methods=["POST", "DELETE"])
+@login_required
+def tournament_banner_photo(tournament_url):
+    """Replace or remove a banner using the tournament's typed TO permissions."""
+    tournament = Tournament.query.get_or_404(tournament_url)
+    if not PermissionService.is_tournament_organizer_of(tournament, current_user):
+        return jsonify({"error": "Only tournament organizers can change this banner."}), 403
+    try:
+        if request.method == "DELETE":
+            remove_banner(tournament, "tournament", tournament.url)
+            return jsonify({"success": True})
+        path = replace_banner(tournament, "tournament", tournament.url, read_banner_upload())
+        return jsonify({"success": True, "path": path})
+    except BannerUploadError as error:
+        return jsonify({"error": str(error)}), error.status
 
 
 @bp.route("/create-tournament", methods=["POST"])
@@ -212,48 +235,10 @@ def update_tournament_settings(tournament_url):
     if tournament.historical:
         return jsonify({"success": False, "error": "Edit historical tournaments from the records editor."}), 400
 
-    tournament.name = request.form["name"]
-    tournament.location = request.form.get("location", "")
-    tournament.about = request.form.get("about", "")
-    set_head_ref_allowlist_from_csv(tournament, request.form.get("head_refs_allowed_list", ""))
-    tournament.head_refs_allow_reffing_teams = "head_refs_allow_reffing_teams" in request.form
-    tournament.head_refs_allow_anyone = "head_refs_allow_anyone" in request.form
-    tournament.published = "published" in request.form
-    tournament.schedule_published = "schedule_published" in request.form
-    if not tournament.league_id and tournament.registrable_config:
-        rc = tournament.registrable_config
-        rc.team_reg_fee = float(request.form.get("team_reg_fee", 0))
-        rc.player_reg_fee = float(request.form.get("player_reg_fee", 0))
-        rc.terms_link = request.form.get("terms_link", "") or None
-        rc.team_registration_open = "team_registration_open" in request.form
-        rc.player_registration_open = "player_registration_open" in request.form
-        n_max = request.form.get("n_max_teams", "").strip()
-        rc.n_max_teams = int(n_max) if n_max else None
-        roster = request.form.get("max_team_size_roster", "").strip()
-        rc.max_team_size_roster = int(roster) if roster else None
-        field = request.form.get("max_team_size_field", "").strip()
-        rc.max_team_size_field = int(field) if field else None
-        if "require_waiver_signature" not in request.form:
-            rc.waiver_filepath = None
-            rc.waiver_sha256 = None
-
-    if request.form.get("start_date"):
-        tournament.start_date = datetime.strptime(request.form["start_date"], "%Y-%m-%d")
-
-    end_date_val = request.form.get("end_date", "").strip()
-    if not end_date_val:
-        return (
-            jsonify(
-                {
-                    "success": False,
-                    "error": "End date is required.",
-                }
-            ),
-            400,
-        )
-    tournament.end_date = datetime.strptime(end_date_val, "%Y-%m-%d")
-
-    db.session.commit()
+    try:
+        save_tournament_settings(tournament)
+    except SettingsSaveError as error:
+        return jsonify({"success": False, "error": str(error)}), error.status
     return (
         jsonify({"success": True, "message": "Tournament settings updated successfully!"}),
         200,
@@ -283,6 +268,7 @@ def delete_tournament(tournament_url):
     # Order: side comp results & registrations -> side comps; points & match notes -> matches;
     # then penalty types, head refs, registrations, TOs, fields, tags; finally tournament.
 
+    ScheduleItem.query.filter_by(event=tournament_url).delete(synchronize_session=False)
     side_comps = SideComp.query.filter_by(event=tournament_url).all()
     side_comp_ids = [sc.id for sc in side_comps]
     if side_comp_ids:
@@ -510,7 +496,7 @@ def update_field(tournament_url):
     if not field_id:
         return jsonify({"success": False, "error": "Field ID is required"}), 400
 
-    field = Field.query.get_or_404(field_id)
+    field = Field.query.filter_by(id=field_id, event=tournament_url).first_or_404()
     old_field_name = field.name
     new_field_name = request.form["field_name"]
 
@@ -520,6 +506,7 @@ def update_field(tournament_url):
     # Propagate field name change to all matches that reference this field
     name_update_count = 0
     if old_field_name != new_field_name:
+        ScheduleItem.query.filter_by(event=tournament_url, field=old_field_name).update({"field": new_field_name})
         matches_to_update = Match.query.filter_by(event=tournament_url, field=old_field_name).all()
         for match in matches_to_update:
             match.field = new_field_name
@@ -542,7 +529,8 @@ def delete_field(tournament_url):
     if not field_id:
         return jsonify({"success": False, "error": "Field ID is required"}), 400
 
-    field = Field.query.get_or_404(field_id)
+    field = Field.query.filter_by(id=field_id, event=tournament_url).first_or_404()
+    ScheduleItem.query.filter_by(event=tournament_url, field=field.name).update({"field": None})
     db.session.delete(field)
     db.session.commit()
     return jsonify({"success": True, "message": "Field deleted successfully!"}), 200

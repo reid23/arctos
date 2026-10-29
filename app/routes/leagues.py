@@ -10,6 +10,7 @@ Read:
 
 Management:
 - ``/leagues/<league_url>/settings`` (POST)
+- ``/leagues/<league_url>/banner-photo`` (POST, DELETE)
 - ``/leagues/<league_url>/add-to`` (POST), ``/leagues/<league_url>/remove-to`` (POST)
 - ``/leagues/<league_url>/delete`` (POST)
 - ``/leagues/<league_url>/manage`` (GET)
@@ -22,10 +23,12 @@ in their dedicated blueprints, not here.
 from __future__ import annotations
 
 import collections
+from datetime import date, datetime, timezone
+import re
 
 from flask import Blueprint, jsonify, request
 from flask_login import current_user, login_required
-from sqlalchemy import func
+from sqlalchemy import func, or_
 
 from app.domain.enums import (
     MatchStatus,
@@ -39,6 +42,7 @@ from app.serializers.tournament_serializer import (
     tournament_to_dict,
 )
 from app.utils.datetime_helpers import dt_iso
+from app.utils.settings_save import SettingsSaveError, save_league_settings
 from app.serializers.league_serializer import league_to_dict, require_league
 from app.services._common import Scope, current_user_type
 from app.services.permission_service import PermissionService
@@ -51,6 +55,12 @@ from app.services.registration_resolver import (
 )
 from app.services.team_stats_service import compute_team_stats
 from app.utils.user_helpers import is_player, is_team
+from app.utils.profile_banner_helpers import (
+    BannerUploadError,
+    read_banner_upload,
+    remove_banner,
+    replace_banner,
+)
 from models import (
     League,
     Match,
@@ -68,16 +78,109 @@ from models import (
 bp = Blueprint("leagues", __name__, url_prefix="/_api")
 
 
+def _visible_league_rounds():
+    """Query published rounds and drafts belonging to leagues the caller organizes."""
+    visible = Tournament.published == True
+    if current_user.is_authenticated:
+        organized_ids = db.session.query(TO.league_id).filter(
+            TO.user_id == current_user.id,
+            TO.user_type == current_user_type(),
+            TO.league_id.isnot(None),
+        )
+        visible = or_(visible, Tournament.league_id.in_(organized_ids))
+    return Tournament.query.filter(visible)
+
+
+@bp.route("/leagues/<league_url>/banner-photo", methods=["POST", "DELETE"])
+@login_required
+def league_banner_photo(league_url):
+    """Replace or remove a banner using the league's typed TO permissions."""
+    league = League.query.get_or_404(league_url)
+    if not PermissionService.is_league_organizer(league_url, current_user):
+        return jsonify({"error": "Only league organizers can change this banner."}), 403
+    try:
+        if request.method == "DELETE":
+            remove_banner(league, "league", league.url)
+            return jsonify({"success": True})
+        path = replace_banner(league, "league", league.url, read_banner_upload())
+        return jsonify({"success": True, "path": path})
+    except BannerUploadError as error:
+        return jsonify({"error": str(error)}), error.status
+
+
 @bp.route("/leagues", methods=["GET"])
 def leagues_list():
-    """List published leagues for homepage with registration counts and user status."""
-    leagues = League.query.filter(League.published == True).all()
+    """List viewable leagues, visible round metadata, and whole-season lifecycle.
 
-    # Team counts per league (confirmed registrations only)
+    ``today`` accepts the viewer's ISO calendar day; other callers use the
+    current UTC day. A season stays active through every round's final day,
+    including unpublished rounds, without exposing those rounds' details.
+    """
+    today_value = request.args.get("today")
+    if today_value is None:
+        today = datetime.now(timezone.utc).date()
+    else:
+        try:
+            if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", today_value):
+                raise ValueError
+            today = date.fromisoformat(today_value)
+        except ValueError:
+            return jsonify({"error": "today must be a valid calendar date in YYYY-MM-DD format."}), 400
+
+    visible = League.published == True
+    if current_user.is_authenticated:
+        organized_ids = db.session.query(TO.league_id).filter(
+            TO.user_id == current_user.id,
+            TO.user_type == current_user_type(),
+            TO.league_id.isnot(None),
+        )
+        visible = or_(visible, League.url.in_(organized_ids))
+    leagues = League.query.filter(visible).all()
 
     team_counts = {l.url: 0 for l in leagues}
+    event_dates = {l.url: {"start_date": None, "end_date": None, "event_count": 0} for l in leagues}
+    past_leagues = []
     if leagues:
         league_ids = [l.url for l in leagues]
+        # Lifecycle uses every round. Only the league URL is returned, so a
+        # future draft can keep a season active without publishing its date.
+        # Unknown dates prevent the season from being classified as finished.
+        final_day = func.date(func.coalesce(Tournament.end_date, Tournament.start_date))
+        past_leagues = [
+            row.league_id
+            for row in (
+                db.session.query(Tournament.league_id)
+                .filter(Tournament.league_id.in_(league_ids))
+                .group_by(Tournament.league_id)
+                .having(
+                    func.count(Tournament.url) == func.count(final_day),
+                    func.max(final_day) < today.isoformat(),
+                )
+                .all()
+            )
+        ]
+        # Match the events shown on each league page. Organizers can see draft
+        # rounds, so those rounds also contribute to their league's season dates.
+        # An empty league has no inferred end date.
+        ranges = (
+            _visible_league_rounds()
+            .with_entities(
+                Tournament.league_id,
+                func.min(Tournament.start_date),
+                func.max(func.coalesce(Tournament.end_date, Tournament.start_date)),
+                func.count(Tournament.url),
+            )
+            .filter(Tournament.league_id.in_(league_ids))
+            .group_by(Tournament.league_id)
+            .all()
+        )
+        for lid, start_date, end_date, event_count in ranges:
+            event_dates[lid] = {
+                "start_date": dt_iso(start_date),
+                "end_date": dt_iso(end_date),
+                "event_count": int(event_count),
+            }
+        # Team counts per league (confirmed registrations only).
         counts = (
             db.session.query(TeamRegistration.league_id, func.count(TeamRegistration.id))
             .filter(TeamRegistration.status == TeamRegistrationStatus.CONFIRMED)
@@ -122,6 +225,8 @@ def leagues_list():
     return jsonify(
         {
             "leagues": [league_to_dict(l) for l in leagues],
+            "event_dates": event_dates,
+            "past_leagues": past_leagues,
             "team_counts": team_counts,
             "user_reg_status": user_reg_status,
         }
@@ -160,8 +265,9 @@ def league_detail(league_url):
     if err:
         return jsonify({"error": "Not found" if err == 404 else "Forbidden"}), err
 
-    # Tournaments in this league
-    tournaments_in_league = Tournament.query.filter_by(league_id=league_url).order_by(Tournament.start_date).all()
+    tournaments_in_league = (
+        _visible_league_rounds().filter_by(league_id=league_url).order_by(Tournament.start_date).all()
+    )
     events = [tournament_to_dict(t) for t in tournaments_in_league]
 
     # Create a simple object with league_id for resolvers that lack a _for_scope variant
@@ -378,39 +484,10 @@ def league_update_settings(league_url):
     if not PermissionService.is_league_organizer(league_url, current_user):
         return jsonify({"error": "Only league organizers can update settings"}), 403
 
-    data = request.get_json() or {}
-    if "about" in data:
-        league.about = data["about"]
-    rc = league.registrable_config
-    if rc:
-        if "team_reg_fee" in data:
-            rc.team_reg_fee = float(data["team_reg_fee"]) if data["team_reg_fee"] is not None else 0.0
-        if "player_reg_fee" in data:
-            rc.player_reg_fee = float(data["player_reg_fee"]) if data["player_reg_fee"] is not None else 0.0
-        if data.get("require_waiver_signature") is False:
-            rc.waiver_filepath = None
-            rc.waiver_sha256 = None
-        if "team_registration_open" in data:
-            rc.team_registration_open = bool(data["team_registration_open"])
-        if "player_registration_open" in data:
-            rc.player_registration_open = bool(data["player_registration_open"])
-        if "terms_link" in data:
-            rc.terms_link = data["terms_link"] or None
-        if "payment_info" in data:
-            rc.payment_info = data["payment_info"] or None
-        if "n_max_teams" in data:
-            v = data["n_max_teams"]
-            rc.n_max_teams = int(v) if v is not None and (v != "" if isinstance(v, str) else True) else None
-        if "max_team_size_roster" in data:
-            v = data["max_team_size_roster"]
-            rc.max_team_size_roster = int(v) if v is not None and (v != "" if isinstance(v, str) else True) else None
-        if "max_team_size_field" in data:
-            v = data["max_team_size_field"]
-            rc.max_team_size_field = int(v) if v is not None and (v != "" if isinstance(v, str) else True) else None
-    if "published" in data:
-        league.published = bool(data["published"])
-
-    db.session.commit()
+    try:
+        save_league_settings(league)
+    except SettingsSaveError as error:
+        return jsonify({"success": False, "error": str(error)}), error.status
     return jsonify({"success": True})
 
 

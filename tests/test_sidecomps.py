@@ -1639,6 +1639,85 @@ def test_chain_breaking_standings_split_and_top_n(test_db, tournament):
     assert breaks[0]["wins"] == 2
 
 
+def test_standings_top_n_organizers_see_every_row(app, client, tournament):
+    from flask_login import login_user
+
+    from app.routes.sidecomps import standings as standings_view
+    from app.services.sidecomp_service import SideCompService
+
+    with app.app_context():
+        organizer = _make_player("to_user", "TO User")
+        _make_to(tournament.url, organizer.id)
+        outsider = _make_player("fan", "Fan")
+        staff = _make_player("staff_p", "Staff")
+        long_p = _make_player("long_p", "Long")
+        for player in (staff, long_p):
+            _confirm_event_registration(tournament.url, player.id)
+        sc = SideComp(
+            event=tournament.url,
+            name="Duel",
+            type="DUELING",
+            registration_open=True,
+            active=True,
+            only_show_top_n_results=1,
+        )
+        db.session.add(sc)
+        db.session.commit()
+        staff_reg = SideCompService.register_player(sc.id, player_id=staff.id, weapon="LONG").unwrap()
+        long_reg = SideCompService.register_player(sc.id, player_id=long_p.id, weapon="LONG").unwrap()
+        SideCompService.log_result(sc.id, registration_id=staff_reg.id, points=1, ref_user_id="ref").unwrap()
+        SideCompService.log_result(sc.id, registration_id=staff_reg.id, points=1, ref_user_id="ref").unwrap()
+        SideCompService.log_result(sc.id, registration_id=long_reg.id, points=1, ref_user_id="ref").unwrap()
+        comp_id = sc.id
+
+        def rows_for(response):
+            body, status = response
+            assert status == 200
+            return body.get_json()["tables"][0]["rows"]
+
+        with app.test_request_context(f"/_api/sidecomps/{comp_id}/standings"):
+            public_rows = rows_for(standings_view(comp_id))
+        assert [row["wins"] for row in public_rows] == [2]
+
+        with app.test_request_context(f"/_api/sidecomps/{comp_id}/standings"):
+            login_user(outsider)
+            outsider_rows = rows_for(standings_view(comp_id))
+        assert [row["wins"] for row in outsider_rows] == [2]
+
+        login_as(client, organizer)
+
+    organizer_rows = client.get(f"/_api/sidecomps/{comp_id}/standings").get_json()["tables"][0]["rows"]
+    assert [row["wins"] for row in organizer_rows] == [2, 1]
+    assert [row["rank"] for row in organizer_rows] == [1, 2]
+
+
+def test_enter_results_roster_query_filters_by_entry_number(app, client, tournament):
+    from app.services.sidecomp_service import SideCompService
+
+    with app.app_context():
+        viewer = _make_player("viewer", "Viewer")
+        first = _make_player("first", "First")
+        second = _make_player("second", "Second")
+        for player in (first, second):
+            _confirm_event_registration(tournament.url, player.id)
+        sc = SideComp(event=tournament.url, name="Duel", type="DUELING", registration_open=True, active=True)
+        db.session.add(sc)
+        db.session.commit()
+        SideCompService.register_player(sc.id, player_id=first.id, weapon="LONG").unwrap()
+        SideCompService.register_player(sc.id, player_id=second.id, weapon="LONG").unwrap()
+        comp_id = sc.id
+        login_as(client, viewer)
+
+    full = client.get(f"/_api/sidecomps/{comp_id}/enter-results-roster")
+    assert full.status_code == 200
+    assert len(full.get_json()["registrants"]) == 2
+
+    matched = client.get(f"/_api/sidecomps/{comp_id}/enter-results-roster?q=1")
+    assert matched.status_code == 200
+    numbers = [row["entry_number"] for row in matched.get_json()["registrants"]]
+    assert numbers == [1]
+
+
 def test_only_show_top_n_zero_hides_results_page(test_db, tournament):
     sc = SideComp(event=tournament.url, name="Hidden", type="DUELING", only_show_top_n_results=0)
     db.session.add(sc)

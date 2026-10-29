@@ -1,0 +1,927 @@
+/* Full color themes stay on the app wrapper so OBS and offline frames retain
+   their independent colors. Status colors remain semantic across themes.
+   Bright accent fills have separate link colors and contrasting button labels. */
+.arctos-app {
+  color-scheme: light;
+  --ui-icon-filter: none;
+  --ui-on-gradient-soft: #ffffff1a;
+  --ui-on-gradient-border: #ffffff80;
+  --ui-success-fill: #15803d;
+  --ui-info-fill: #0369a1;
+  --ui-danger-fill: #b42318;
+  --ui-warning-fill: #fbbf24;
+  --ui-success: #15803d;
+  --ui-success-rgb: 21, 128, 61;
+  --ui-success-hover: #166534;
+  --ui-success-active: #14532d;
+  --ui-success-text: #166534;
+  --ui-success-soft: #ecf8ee;
+  --ui-success-border: #83b795;
+  --ui-success-contrast: #ffffff;
+  --ui-warning: #fbbf24;
+  --ui-warning-rgb: 251, 191, 36;
+  --ui-warning-hover: #f59e0b;
+  --ui-warning-active: #d97706;
+  --ui-warning-text: #854d0e;
+  --ui-warning-soft: #fffaeb;
+  --ui-warning-border: #cc9c36;
+  --ui-warning-contrast: #362308;
+  --ui-danger: #b42318;
+  --ui-danger-rgb: 180, 35, 24;
+  --ui-danger-hover: #912018;
+  --ui-danger-active: #7a1b16;
+  --ui-danger-text: #991b1b;
+  --ui-danger-soft: #fff0ee;
+  --ui-danger-border: #d58f86;
+  --ui-danger-contrast: #ffffff;
+  --ui-info: #0369a1;
+  --ui-info-rgb: 3, 105, 161;
+  --ui-info-hover: #075985;
+  --ui-info-active: #0c4a6e;
+  --ui-info-text: #075985;
+  --ui-info-soft: #edf8fa;
+  --ui-info-border: #7eafbf;
+  --ui-info-contrast: #ffffff;
+  --ui-bg: #f5efe3;
+  --ui-surface: #fffaf0;
+  --ui-surface-muted: #e9dfcd;
+  --ui-surface-hover: #dfd2bd;
+  --ui-border: #cdbfa5;
+  --ui-control-border: #827158;
+  --ui-text: #1e1d1a;
+  --ui-muted: #615849;
+  --ui-inverse-bg: #1e1d1a;
+  --ui-accent: #a63b36;
+  --ui-accent-hover: #8f302d;
+  --ui-accent-active: #782925;
+  --ui-accent-soft: #f2ded7;
+  --ui-accent-text: #89312d;
+  --ui-accent-contrast: #ffffff;
+  --ui-link: #91332e;
+  --ui-link-hover: #732a25;
+  --ui-gradient-start: #3c2420;
+  --ui-gradient-end: #793b33;
+  --ui-nav-surface: #e9dfcd;
+
+  --ui-nav-text: #1e1d1a;
+  --ui-nav-muted: #615849;
+  --ui-nav-border: #c7b69c;
+
+
+  --ui-text-rgb: 30, 29, 26;
+  --ui-muted-rgb: 97, 88, 73;
+  --ui-surface-rgb: 255, 250, 240;
+  --ui-accent-rgb: 166, 59, 54;
+  --ui-link-rgb: 145, 51, 46;
+  --ui-link-hover-rgb: 115, 42, 37;
+  --ui-accent-border: #91332e;
+  --ui-nav-active-bg: #a63b36;
+  --ui-nav-active-text: #ffffff;
+  --ui-gradient-contrast: #ffffff;
+  --ui-inverse-text: #ffffff;
+  --ui-neutral-fill: #615849;
+  --ui-media-bg: #1e1d1a;
+  --ui-shadow: #1e1d1a18;
+  --ui-shadow-strong: #1e1d1a30;
+
+  --field-green: var(--ui-accent);
+  --turf-teal: var(--ui-gradient-end);
+  --graphite: var(--ui-inverse-bg);
+  --safety-orange: var(--ui-warning);
+  --electric-lime: var(--ui-success);
+  --bs-primary: var(--ui-accent);
+  --bs-primary-rgb: var(--ui-accent-rgb);
+  --bs-secondary: var(--ui-muted);
+  --bs-secondary-rgb: var(--ui-muted-rgb);
+  --bs-body-color: var(--ui-text);
+  --bs-body-color-rgb: var(--ui-text-rgb);
+  --bs-emphasis-color: var(--ui-text);
+  --bs-emphasis-color-rgb: var(--ui-text-rgb);
+  --bs-body-bg: var(--ui-surface);
+  --bs-body-bg-rgb: var(--ui-surface-rgb);
+  --bs-secondary-color: var(--ui-muted);
+  --bs-tertiary-color: var(--ui-muted);
+  --bs-secondary-bg: var(--ui-surface-hover);
+  --bs-tertiary-bg: var(--ui-surface-muted);
+  --bs-border-color: var(--ui-border);
+  --bs-border-color-translucent: var(--ui-border);
+  --bs-border-radius: .625rem;
+  --bs-link-color: var(--ui-link);
+  --bs-link-color-rgb: var(--ui-link-rgb);
+  --bs-link-hover-color: var(--ui-link-hover);
+  --bs-link-hover-color-rgb: var(--ui-link-hover-rgb);
+  --bs-primary-text-emphasis: var(--ui-accent-text);
+  --bs-primary-bg-subtle: var(--ui-accent-soft);
+  --bs-primary-border-subtle: var(--ui-accent);
+  --bs-secondary-text-emphasis: var(--ui-text);
+  --bs-secondary-bg-subtle: var(--ui-surface-muted);
+  --bs-secondary-border-subtle: var(--ui-border);
+  --bs-light-text-emphasis: var(--ui-text);
+  --bs-light-bg-subtle: var(--ui-surface-muted);
+  --bs-light-border-subtle: var(--ui-border);
+  --bs-dark-text-emphasis: var(--ui-text);
+  --bs-dark-bg-subtle: var(--ui-surface-hover);
+  --bs-dark-border-subtle: var(--ui-border);
+  --bs-code-color: var(--ui-accent-text);
+  --bs-success: var(--ui-success);
+  --bs-success-rgb: var(--ui-success-rgb);
+  --bs-success-text-emphasis: var(--ui-success-text);
+  --bs-success-bg-subtle: var(--ui-success-soft);
+  --bs-success-border-subtle: var(--ui-success-border);
+  --bs-warning: var(--ui-warning);
+  --bs-warning-rgb: var(--ui-warning-rgb);
+  --bs-warning-text-emphasis: var(--ui-warning-text);
+  --bs-warning-bg-subtle: var(--ui-warning-soft);
+  --bs-warning-border-subtle: var(--ui-warning-border);
+  --bs-danger: var(--ui-danger);
+  --bs-danger-rgb: var(--ui-danger-rgb);
+  --bs-danger-text-emphasis: var(--ui-danger-text);
+  --bs-danger-bg-subtle: var(--ui-danger-soft);
+  --bs-danger-border-subtle: var(--ui-danger-border);
+  --bs-info: var(--ui-info);
+  --bs-info-rgb: var(--ui-info-rgb);
+  --bs-info-text-emphasis: var(--ui-info-text);
+  --bs-info-bg-subtle: var(--ui-info-soft);
+  --bs-info-border-subtle: var(--ui-info-border);
+  --header-height: calc(76px + env(safe-area-inset-top, 0px));
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--ui-bg);
+  color: var(--bs-body-color);
+  font: 400 1rem/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  -webkit-text-size-adjust: 100%;
+  accent-color: var(--ui-link);
+
+}
+.arctos-app[data-palette="california"] {
+  --ui-bg: #f5efe3;
+  --ui-surface: #fffaf0;
+  --ui-surface-muted: #e9dfcd;
+  --ui-surface-hover: #dfd2bd;
+  --ui-border: #cdbfa5;
+  --ui-control-border: #827158;
+  --ui-text: #1e1d1a;
+  --ui-muted: #615849;
+  --ui-inverse-bg: #1e1d1a;
+  --ui-accent: #a63b36;
+  --ui-accent-hover: #8f302d;
+  --ui-accent-active: #782925;
+  --ui-accent-soft: #f2ded7;
+  --ui-accent-text: #89312d;
+  --ui-accent-contrast: #ffffff;
+  --ui-link: #91332e;
+  --ui-link-hover: #732a25;
+  --ui-gradient-start: #3c2420;
+  --ui-gradient-end: #793b33;
+  --ui-nav-surface: #e9dfcd;
+
+  --ui-nav-text: #1e1d1a;
+  --ui-nav-muted: #615849;
+  --ui-nav-border: #c7b69c;
+
+
+  --ui-text-rgb: 30, 29, 26;
+  --ui-muted-rgb: 97, 88, 73;
+  --ui-surface-rgb: 255, 250, 240;
+  --ui-accent-rgb: 166, 59, 54;
+  --ui-link-rgb: 145, 51, 46;
+  --ui-link-hover-rgb: 115, 42, 37;
+  --ui-accent-border: #91332e;
+  --ui-nav-active-bg: #a63b36;
+  --ui-nav-active-text: #ffffff;
+  --ui-gradient-contrast: #ffffff;
+  --ui-inverse-text: #ffffff;
+  --ui-neutral-fill: #615849;
+  --ui-media-bg: #1e1d1a;
+  --ui-shadow: #1e1d1a18;
+  --ui-shadow-strong: #1e1d1a30;
+
+}
+.arctos-app[data-palette="neutral"] {
+  --ui-bg: #f8f6f1;
+  --ui-surface: #fffdf8;
+  --ui-surface-muted: #e8e1d6;
+  --ui-surface-hover: #ded5c7;
+  --ui-border: #cfc5b6;
+  --ui-control-border: #7c7368;
+  --ui-text: #37322c;
+  --ui-muted: #605b54;
+  --ui-inverse-bg: #242629;
+  --ui-accent: #b96b3a;
+  --ui-accent-hover: #cb8050;
+  --ui-accent-active: #d69263;
+  --ui-accent-soft: #f0e0d1;
+  --ui-accent-text: #884523;
+  --ui-accent-contrast: #171512;
+  --ui-link: #884523;
+  --ui-link-hover: #70391d;
+  --ui-gradient-start: #242629;
+  --ui-gradient-end: #607176;
+  --ui-nav-surface: #e1e7e5;
+
+  --ui-nav-text: #242629;
+  --ui-nav-muted: #4f5f63;
+  --ui-nav-border: #b9c7c5;
+
+
+  --ui-text-rgb: 55, 50, 44;
+  --ui-muted-rgb: 96, 91, 84;
+  --ui-surface-rgb: 255, 253, 248;
+  --ui-accent-rgb: 185, 107, 58;
+  --ui-link-rgb: 136, 69, 35;
+  --ui-link-hover-rgb: 112, 57, 29;
+  --ui-accent-border: #884523;
+  --ui-nav-active-bg: #607176;
+  --ui-nav-active-text: #ffffff;
+  --ui-gradient-contrast: #ffffff;
+  --ui-inverse-text: #ffffff;
+  --ui-neutral-fill: #605b54;
+  --ui-media-bg: #242629;
+  --ui-shadow: #37322c18;
+  --ui-shadow-strong: #37322c30;
+
+}
+/* Classic Monokai keeps interface chrome neutral and reserves bright hues for
+   meaningful content. Light is a companion adaptation of the dark palette.
+   Source: https://github.com/microsoft/vscode/blob/main/extensions/theme-monokai/themes/monokai-color-theme.json */
+.arctos-app[data-palette="monokai"] {
+  --ui-bg: #faf8f2;
+  --ui-surface: #fffdf7;
+  --ui-surface-muted: #eeece4;
+  --ui-surface-hover: #e3e0d6;
+  --ui-border: #d9d5cb;
+  --ui-control-border: #7c786c;
+  --ui-text: #292923;
+  --ui-muted: #625f53;
+  --ui-inverse-bg: #1e1f1c;
+  --ui-accent: #625f53;
+  --ui-accent-hover: #514f45;
+  --ui-accent-active: #454239;
+  --ui-accent-soft: #e7e4db;
+  --ui-accent-text: #47463d;
+  --ui-accent-contrast: #ffffff;
+  --ui-link: #036573;
+  --ui-link-hover: #034e5a;
+  --ui-gradient-start: #1e1f1c;
+  --ui-gradient-end: #414339;
+  --ui-nav-surface: #f0eee7;
+  --ui-nav-text: #292923;
+  --ui-nav-muted: #625f53;
+  --ui-nav-border: #d9d5cb;
+  --ui-text-rgb: 41, 41, 35;
+  --ui-muted-rgb: 98, 95, 83;
+  --ui-surface-rgb: 255, 253, 247;
+  --ui-accent-rgb: 98, 95, 83;
+  --ui-link-rgb: 3, 101, 115;
+  --ui-link-hover-rgb: 3, 78, 90;
+  --ui-accent-border: #625f53;
+  --ui-nav-active-bg: #dedad0;
+  --ui-nav-active-text: #292923;
+  --ui-gradient-contrast: #f8f8f2;
+  --ui-inverse-text: #ffffff;
+  --ui-neutral-fill: #625f53;
+  --ui-media-bg: #1e1f1c;
+  --ui-shadow: #29292312;
+  --ui-shadow-strong: #29292328;
+  --ui-success: #4a6515;
+  --ui-success-rgb: 74, 101, 21;
+  --ui-success-hover: #3e5512;
+  --ui-success-active: #33450f;
+  --ui-success-text: #4a6515;
+  --ui-success-soft: #eef4da;
+  --ui-success-border: #a6b777;
+  --ui-success-contrast: #ffffff;
+  --ui-success-fill: #4a6515;
+  --ui-warning: #e6db74;
+  --ui-warning-rgb: 230, 219, 116;
+  --ui-warning-hover: #dbcd59;
+  --ui-warning-active: #cbbd46;
+  --ui-warning-text: #785d0c;
+  --ui-warning-soft: #fbf5d5;
+  --ui-warning-border: #b7a151;
+  --ui-warning-contrast: #292923;
+  --ui-warning-fill: #e6db74;
+  --ui-danger: #b52855;
+  --ui-danger-rgb: 181, 40, 85;
+  --ui-danger-hover: #9b2048;
+  --ui-danger-active: #801b3b;
+  --ui-danger-text: #a51f4a;
+  --ui-danger-soft: #fae8ed;
+  --ui-danger-border: #d495a8;
+  --ui-danger-contrast: #ffffff;
+  --ui-danger-fill: #b52855;
+  --ui-info: #036573;
+  --ui-info-rgb: 3, 101, 115;
+  --ui-info-hover: #034e5a;
+  --ui-info-active: #033f49;
+  --ui-info-text: #036573;
+  --ui-info-soft: #e2f4f5;
+  --ui-info-border: #80b1b7;
+  --ui-info-contrast: #ffffff;
+  --ui-info-fill: #036573;
+}
+.arctos-app[data-bs-theme="dark"] {
+  color-scheme: dark;
+  --ui-icon-filter: brightness(0) invert(1);
+  --ui-success: #4ade80;
+  --ui-success-rgb: 74, 222, 128;
+  --ui-success-hover: #86efac;
+  --ui-success-active: #bbf7d0;
+  --ui-success-text: #86efac;
+  --ui-success-soft: #153326;
+  --ui-success-border: #328957;
+  --ui-success-contrast: #062713;
+  --ui-warning: #fbbf24;
+  --ui-warning-rgb: 251, 191, 36;
+  --ui-warning-hover: #fcd34d;
+  --ui-warning-active: #fde68a;
+  --ui-warning-text: #fcd34d;
+  --ui-warning-soft: #392d16;
+  --ui-warning-border: #a77a22;
+  --ui-warning-contrast: #362308;
+  --ui-danger: #fca5a5;
+  --ui-danger-rgb: 252, 165, 165;
+  --ui-danger-hover: #fecaca;
+  --ui-danger-active: #fee2e2;
+  --ui-danger-text: #fca5a5;
+  --ui-danger-soft: #3b2024;
+  --ui-danger-border: #a6464d;
+  --ui-danger-contrast: #3b1111;
+  --ui-info: #7dd3fc;
+  --ui-info-rgb: 125, 211, 252;
+  --ui-info-hover: #bae6fd;
+  --ui-info-active: #e0f2fe;
+  --ui-info-text: #7dd3fc;
+  --ui-info-soft: #143042;
+  --ui-info-border: #337d9a;
+  --ui-info-contrast: #082c40;
+  --ui-bg: #1e1d1a;
+  --ui-surface: #292722;
+  --ui-surface-muted: #343127;
+  --ui-surface-hover: #403b30;
+  --ui-border: #605846;
+  --ui-control-border: #998c74;
+  --ui-text: #f5efe3;
+  --ui-muted: #c2b7a2;
+  --ui-inverse-bg: #151411;
+  --ui-accent: #df9289;
+  --ui-accent-hover: #efaaa1;
+  --ui-accent-active: #f7c0b6;
+  --ui-accent-soft: #482c28;
+  --ui-accent-text: #f7c0b6;
+  --ui-accent-contrast: #291b19;
+  --ui-link: #efaaa1;
+  --ui-link-hover: #f7c0b6;
+  --ui-gradient-start: #2f211e;
+  --ui-gradient-end: #6c4038;
+  --ui-nav-surface: #352823;
+
+  --ui-nav-text: #f5efe3;
+  --ui-nav-muted: #cdb9aa;
+  --ui-nav-border: #75594c;
+
+
+  --ui-text-rgb: 245, 239, 227;
+  --ui-muted-rgb: 194, 183, 162;
+  --ui-surface-rgb: 41, 39, 34;
+  --ui-accent-rgb: 223, 146, 137;
+  --ui-link-rgb: 239, 170, 161;
+  --ui-link-hover-rgb: 247, 192, 182;
+  --ui-accent-border: #efaaa1;
+  --ui-nav-active-bg: #df9289;
+  --ui-nav-active-text: #291b19;
+  --ui-gradient-contrast: #ffffff;
+  --ui-inverse-text: #ffffff;
+  --ui-neutral-fill: #615849;
+  --ui-media-bg: #151411;
+  --ui-shadow: #00000040;
+  --ui-shadow-strong: #00000070;
+
+}
+.arctos-app[data-bs-theme="dark"][data-palette="california"] {
+  --ui-bg: #1e1d1a;
+  --ui-surface: #292722;
+  --ui-surface-muted: #343127;
+  --ui-surface-hover: #403b30;
+  --ui-border: #605846;
+  --ui-control-border: #998c74;
+  --ui-text: #f5efe3;
+  --ui-muted: #c2b7a2;
+  --ui-inverse-bg: #151411;
+  --ui-accent: #df9289;
+  --ui-accent-hover: #efaaa1;
+  --ui-accent-active: #f7c0b6;
+  --ui-accent-soft: #482c28;
+  --ui-accent-text: #f7c0b6;
+  --ui-accent-contrast: #291b19;
+  --ui-link: #efaaa1;
+  --ui-link-hover: #f7c0b6;
+  --ui-gradient-start: #2f211e;
+  --ui-gradient-end: #6c4038;
+  --ui-nav-surface: #352823;
+
+  --ui-nav-text: #f5efe3;
+  --ui-nav-muted: #cdb9aa;
+  --ui-nav-border: #75594c;
+
+
+  --ui-text-rgb: 245, 239, 227;
+  --ui-muted-rgb: 194, 183, 162;
+  --ui-surface-rgb: 41, 39, 34;
+  --ui-accent-rgb: 223, 146, 137;
+  --ui-link-rgb: 239, 170, 161;
+  --ui-link-hover-rgb: 247, 192, 182;
+  --ui-accent-border: #efaaa1;
+  --ui-nav-active-bg: #df9289;
+  --ui-nav-active-text: #291b19;
+  --ui-gradient-contrast: #ffffff;
+  --ui-inverse-text: #ffffff;
+  --ui-neutral-fill: #615849;
+  --ui-media-bg: #151411;
+  --ui-shadow: #00000040;
+  --ui-shadow-strong: #00000070;
+
+}
+.arctos-app[data-bs-theme="dark"][data-palette="neutral"] {
+  --ui-bg: #242629;
+  --ui-surface: #2e3032;
+  --ui-surface-muted: #37383a;
+  --ui-surface-hover: #424345;
+  --ui-border: #696862;
+  --ui-control-border: #99948b;
+  --ui-text: #f8f6f1;
+  --ui-muted: #c8c0b4;
+  --ui-inverse-bg: #161719;
+  --ui-accent: #dfa779;
+  --ui-accent-hover: #edbd95;
+  --ui-accent-active: #f5d0ae;
+  --ui-accent-soft: #49382e;
+  --ui-accent-text: #f5d0ae;
+  --ui-accent-contrast: #37322c;
+  --ui-link: #edbd95;
+  --ui-link-hover: #f5d0ae;
+  --ui-gradient-start: #242629;
+  --ui-gradient-end: #475c63;
+  --ui-nav-surface: #2d3b3f;
+
+  --ui-nav-text: #f8f6f1;
+  --ui-nav-muted: #bccbd0;
+  --ui-nav-border: #607176;
+
+
+  --ui-text-rgb: 248, 246, 241;
+  --ui-muted-rgb: 200, 192, 180;
+  --ui-surface-rgb: 46, 48, 50;
+  --ui-accent-rgb: 223, 167, 121;
+  --ui-link-rgb: 237, 189, 149;
+  --ui-link-hover-rgb: 245, 208, 174;
+  --ui-accent-border: #edbd95;
+  --ui-nav-active-bg: #b0c3c9;
+  --ui-nav-active-text: #253338;
+  --ui-gradient-contrast: #ffffff;
+  --ui-inverse-text: #ffffff;
+  --ui-neutral-fill: #605b54;
+  --ui-media-bg: #161719;
+  --ui-shadow: #00000040;
+  --ui-shadow-strong: #00000070;
+
+}
+.arctos-app[data-bs-theme="dark"][data-palette="monokai"] {
+  --ui-bg: #272822;
+  --ui-surface: #2f3029;
+  --ui-surface-muted: #3e3d32;
+  --ui-surface-hover: #414339;
+  --ui-border: #464741;
+  --ui-control-border: #99947c;
+  --ui-text: #f8f8f2;
+  --ui-muted: #c2c2bf;
+  --ui-inverse-bg: #1e1f1c;
+  --ui-accent: #99947c;
+  --ui-accent-hover: #aaa48c;
+  --ui-accent-active: #bdb59d;
+  --ui-accent-soft: #414339;
+  --ui-accent-text: #f8f8f2;
+  --ui-accent-contrast: #171814;
+  /* Buttons need darker fills than progress, selection, and drag indicators. */
+  --ui-primary-bg: #75715e;
+  --ui-primary-hover-bg: #686552;
+  --ui-primary-active-bg: #5c5948;
+  --ui-primary-color: #f8f8f2;
+  --ui-link: #66d9ef;
+  --ui-link-hover: #a1e8f5;
+  --ui-gradient-start: #1e1f1c;
+  --ui-gradient-end: #414339;
+  --ui-nav-surface: #1e1f1c;
+  --ui-nav-text: #f8f8f2;
+  --ui-nav-muted: #c2c2bf;
+  --ui-nav-border: #414339;
+  --ui-text-rgb: 248, 248, 242;
+  --ui-muted-rgb: 194, 194, 191;
+  --ui-surface-rgb: 47, 48, 41;
+  --ui-accent-rgb: 153, 148, 124;
+  --ui-link-rgb: 102, 217, 239;
+  --ui-link-hover-rgb: 161, 232, 245;
+  --ui-accent-border: #99947c;
+  --ui-nav-active-bg: #414339;
+  --ui-nav-active-text: #f8f8f2;
+  --ui-gradient-contrast: #f8f8f2;
+  --ui-inverse-text: #f8f8f2;
+  --ui-neutral-fill: #75715e;
+  --ui-media-bg: #1e1f1c;
+  --ui-shadow: #00000030;
+  --ui-shadow-strong: #00000060;
+  --ui-success: #a6e22e;
+  --ui-success-rgb: 166, 226, 46;
+  --ui-success-hover: #bbea65;
+  --ui-success-active: #d0f19b;
+  --ui-success-text: #a6e22e;
+  --ui-success-soft: #303b21;
+  --ui-success-border: #6f8c33;
+  --ui-success-contrast: #1e1f1c;
+  --ui-success-fill: #4a6515;
+  --ui-warning: #e6db74;
+  --ui-warning-rgb: 230, 219, 116;
+  --ui-warning-hover: #eee69b;
+  --ui-warning-active: #f5efbf;
+  --ui-warning-text: #e6db74;
+  --ui-warning-soft: #3b371e;
+  --ui-warning-border: #968b43;
+  --ui-warning-contrast: #292923;
+  --ui-warning-fill: #e6db74;
+  --ui-danger: #f92672;
+  --ui-danger-rgb: 249, 38, 114;
+  --ui-danger-hover: #ff5791;
+  --ui-danger-active: #ff83ad;
+  --ui-danger-text: #ff9ab9;
+  --ui-danger-soft: #442631;
+  --ui-danger-border: #ad4e6e;
+  --ui-danger-contrast: #171814;
+  --ui-danger-fill: #b52855;
+  --ui-info: #66d9ef;
+  --ui-info-rgb: 102, 217, 239;
+  --ui-info-hover: #8fe3f3;
+  --ui-info-active: #b2edf7;
+  --ui-info-text: #66d9ef;
+  --ui-info-soft: #233c40;
+  --ui-info-border: #488c99;
+  --ui-info-contrast: #171814;
+  --ui-info-fill: #036573;
+}
+.arctos-app *, .arctos-app *::before, .arctos-app *::after { box-sizing: border-box; }
+.arctos-app :focus-visible { outline: 3px solid var(--ui-link); outline-offset: 3px; }
+.arctos-app[data-palette="monokai"] :is(:focus-visible, .schedule-timeline-event:focus-within) { outline-color: var(--ui-link); }
+.arctos-app [id] { scroll-margin-top: calc(var(--header-height) + 16px); }
+.arctos-app h1, .arctos-app h2, .arctos-app h3, .arctos-app h4, .arctos-app h5, .arctos-app h6 {
+  color: inherit; font-weight: 650; line-height: 1.3; letter-spacing: -.025em; overflow-wrap: anywhere;
+}
+.arctos-app h1 { font-size: clamp(1.55rem, 3vw, 2rem); margin-bottom: .75rem; }
+.arctos-app h2 { font-size: 1.35rem; }
+.arctos-app h3 { font-size: 1.2rem; }
+.arctos-app h4, .arctos-app h5 { font-size: 1.075rem; }
+.arctos-app .lead { color: var(--bs-secondary-color); font-size: 1rem; line-height: 1.7; }
+.arctos-app a { text-underline-offset: .2em; }
+.arctos-app .text-muted, .arctos-app .muted { color: var(--bs-secondary-color) !important; }
+.arctos-app .error { color: var(--ui-danger-text); }
+.arctos-app .container-wide { width: 100%; max-width: 1440px; margin-inline: auto; padding-left: max(24px, env(safe-area-inset-left, 0px)); padding-right: max(24px, env(safe-area-inset-right, 0px)); }
+.arctos-app .app-main { flex: 1; padding-block: 32px 56px; min-width: 0; }
+.arctos-app .row > *, .arctos-app .flex-grow-1 { min-width: 0; }
+.arctos-app .skip-link { position: fixed; top: -100px; left: max(16px, env(safe-area-inset-left, 0px)); max-width: calc(100% - max(16px, env(safe-area-inset-left, 0px)) - max(16px, env(safe-area-inset-right, 0px))); z-index: 2000; padding: 12px 20px; background: var(--ui-surface); color: var(--ui-accent-text); border-radius: 8px; }
+.arctos-app .skip-link:focus { top: max(8px, env(safe-area-inset-top, 0px)); }
+/* Navigation: a stable, visible row on phones instead of hidden essentials. */
+.arctos-app .app-header { position: sticky; top: 0; z-index: 1030; background: var(--ui-nav-surface); border-bottom: 1px solid var(--ui-nav-border); padding-top: env(safe-area-inset-top); }
+.arctos-app .app-header-inner { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 20px; max-width: 1440px; min-height: 76px; margin-inline: auto; padding-left: max(24px, env(safe-area-inset-left, 0px)); padding-right: max(24px, env(safe-area-inset-right, 0px)); }
+.arctos-app .app-brand { display: inline-flex; align-items: center; gap: 10px; width: fit-content; color: var(--ui-nav-text); text-decoration: none; font-size: 1.25rem; font-weight: 700; letter-spacing: -.035em; }
+.arctos-app .brand-mark { height: 34px; width: auto; flex-shrink: 0; display: block; }
+.arctos-app .app-nav { display: flex; gap: 3px; align-items: center; min-width: 0; }
+.arctos-app .app-nav-link { display: inline-flex; justify-content: center; align-items: center; gap: 8px; min-height: 44px; padding: 8px 12px; border-radius: 8px; color: var(--ui-nav-muted); text-decoration: none; font-size: .875rem; font-weight: 550; white-space: nowrap; }
+.arctos-app .app-nav-link:hover:not(.active) { background: var(--ui-surface-hover); color: var(--ui-text); }
+.arctos-app .app-nav-link.active { background: var(--ui-nav-active-bg); color: var(--ui-nav-active-text); }
+.arctos-app .app-brand:focus-visible, .arctos-app .app-nav-link:focus-visible, .arctos-app .account-trigger:focus-visible { outline-color: var(--ui-nav-text); }
+.arctos-app .app-header-actions { display: flex; justify-content: flex-end; gap: 8px; align-items: center; }
+.arctos-app .app-icon-button { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; flex-shrink: 0; border-radius: 8px; border: 1px solid transparent; background: transparent; color: var(--ui-text); text-decoration: none; }
+.arctos-app .app-icon-button:hover { background: var(--ui-surface-hover); }
+.arctos-app .account-menu { position: relative; }
+.arctos-app .account-dropdown { position: absolute; z-index: 2; top: calc(100% + 12px); right: 0; width: min(310px, calc(100vw - 32px)); max-height: calc(100vh - 100px); max-height: calc(100dvh - 100px); overflow-y: auto; overscroll-behavior: contain; padding: 8px; background: var(--ui-surface); border: 1px solid var(--bs-border-color); border-radius: 12px; box-shadow: 0 12px 40px var(--ui-shadow-strong); }
+.arctos-app .account-identity { display: flex; flex-direction: column; gap: 2px; padding: 12px; border-bottom: 1px solid var(--bs-border-color); margin-bottom: 8px; overflow-wrap: anywhere; }
+.arctos-app .account-identity span { font-size: .8rem; }
+.arctos-app .account-dismiss { position: fixed; inset: 0; background: transparent; border: 0; z-index: 1; cursor: default; }
+.arctos-app .account-trigger { position: relative; z-index: 3; color: var(--ui-nav-text); }
+.arctos-app .account-avatar { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; }
+.arctos-app .account-trigger:hover, .arctos-app .account-trigger[aria-expanded="true"] { background: var(--ui-nav-active-bg); color: var(--ui-nav-active-text); }
+@media (max-width: 575.98px) {
+  .arctos-app .app-header-actions { gap: 4px; }
+  .arctos-app .app-header-actions .app-login { padding-inline: 10px; white-space: nowrap; flex-shrink: 0; }
+}
+/* Cards and controls are shared by discovery, registration and operations. */
+.arctos-app .card { --bs-card-border-color: var(--bs-border-color); --bs-card-border-radius: 12px; --bs-card-cap-bg: var(--ui-surface-muted); box-shadow: 0 2px 3px var(--ui-shadow); overflow-wrap: anywhere; }
+.arctos-app .card-body { padding: 24px; }
+.arctos-app .card-header { padding: 18px 24px; border-bottom-color: var(--bs-border-color); }
+.arctos-app .card-footer { padding: 16px 24px; background: var(--ui-surface-muted); border-top-color: var(--bs-border-color); }
+.arctos-app .card-title { line-height: 1.4; }
+/* Repeated records share one parent surface. Opt in per section so editors and
+   unrelated groups keep their own boundaries. */
+.arctos-app .data-section > .card-header { padding: 12px 16px; }
+.arctos-app .data-section > .card-body { padding: 0; }
+.arctos-app .data-section .table-responsive { border: 0; border-radius: 0; background: transparent; }
+.arctos-app .data-section > .card-body:first-child > .table-responsive:first-child { border-top-left-radius: 11px; border-top-right-radius: 11px; }
+.arctos-app .data-section > .card-body > .table-responsive:last-child { border-radius: 0 0 11px 11px; }
+.arctos-app .data-section .table { margin: 0; }
+.arctos-app .data-section .table tbody tr:last-child > td { border-bottom: 0; }
+.arctos-app .data-section .table:where(:not(.management-table)) > :not(caption) > * > * { padding: 8px 12px; }
+.arctos-app .data-section > .card-body > p { margin: 0; padding: 12px 16px; }
+.arctos-app .data-section > .card-body > .alert { margin: 12px 16px; }
+.arctos-app .data-section .list-group-flush > .list-group-item { padding: 10px 16px; }
+.arctos-app .data-section .list-group-flush { margin: 0; }
+.arctos-app .data-section .list-group-flush:last-child { border-radius: 0 0 11px 11px; }
+.arctos-app .data-section .data-section-summary { color: var(--ui-muted); font-size: .875rem; border-bottom: 1px solid var(--ui-border); }
+/* Native disclosures keep secondary records and edits available on demand. */
+.arctos-app .section-disclosure { display: block; }
+.arctos-app .section-disclosure > summary.card-header { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-height: 52px; padding: 12px 16px; cursor: pointer; list-style: none; }
+.arctos-app .section-disclosure > summary::-webkit-details-marker { display: none; }
+.arctos-app .section-disclosure > summary::before { content: ""; width: 8px; height: 8px; flex: 0 0 8px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; margin-right: 4px; transform: rotate(-45deg); }
+.arctos-app .section-disclosure[open] > summary::before { transform: rotate(45deg); }
+.arctos-app .section-disclosure > summary h2 { flex: 1; min-width: 0; font-size: 1rem; }
+.arctos-app .section-disclosure:not([open]) > summary { border-bottom: 0; border-radius: 11px; }
+.arctos-app .section-disclosure > summary:focus-visible { outline-offset: 3px; }
+.arctos-app .list-group-item.data-list-row { flex-wrap: wrap; padding: 10px 16px; gap: 8px 12px; }
+.arctos-app .data-list-row > div:first-child { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
+.arctos-app .btn {
+  --bs-btn-border-radius: 8px; --bs-btn-font-weight: 600;
+  min-height: 44px; padding: 9px 16px; font-size: .875rem;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  line-height: 1.4; white-space: normal; touch-action: manipulation;
+}
+.arctos-app .btn-sm { min-height: 40px; padding: 7px 12px; font-size: .8125rem; }
+.arctos-app .btn-lg { min-height: 48px; padding: 12px 20px; font-size: 1rem; }
+.arctos-app .btn-primary {
+  --bs-btn-color: var(--ui-primary-color, var(--ui-accent-contrast)); --bs-btn-bg: var(--ui-primary-bg, var(--ui-accent)); --bs-btn-border-color: var(--ui-accent-border);
+  --bs-btn-hover-color: var(--ui-primary-color, var(--ui-accent-contrast)); --bs-btn-hover-bg: var(--ui-primary-hover-bg, var(--ui-accent-hover)); --bs-btn-hover-border-color: var(--ui-accent-border);
+  --bs-btn-active-color: var(--ui-primary-color, var(--ui-accent-contrast)); --bs-btn-active-bg: var(--ui-primary-active-bg, var(--ui-accent-active)); --bs-btn-active-border-color: var(--ui-accent-border);
+  --bs-btn-disabled-color: var(--ui-primary-color, var(--ui-accent-contrast)); --bs-btn-disabled-bg: var(--ui-primary-bg, var(--ui-accent)); --bs-btn-disabled-border-color: var(--ui-accent-border);
+  --bs-btn-focus-shadow-rgb: var(--ui-accent-rgb);
+}
+.arctos-app .btn-outline-primary {
+  --bs-btn-color: var(--ui-accent-text); --bs-btn-border-color: var(--ui-accent-border);
+  --bs-btn-hover-color: var(--ui-accent-text); --bs-btn-hover-bg: var(--ui-accent-soft); --bs-btn-hover-border-color: var(--ui-accent-border);
+  --bs-btn-active-color: var(--ui-primary-color, var(--ui-accent-contrast)); --bs-btn-active-bg: var(--ui-primary-bg, var(--ui-accent)); --bs-btn-active-border-color: var(--ui-accent-border);
+  --bs-btn-disabled-color: var(--ui-accent-text); --bs-btn-disabled-border-color: var(--ui-accent-border);
+}
+.arctos-app .btn-success {
+  --bs-btn-color: var(--ui-success-contrast); --bs-btn-bg: var(--ui-success); --bs-btn-border-color: var(--ui-success);
+  --bs-btn-hover-color: var(--ui-success-contrast); --bs-btn-hover-bg: var(--ui-success-hover); --bs-btn-hover-border-color: var(--ui-success-hover);
+  --bs-btn-active-color: var(--ui-success-contrast); --bs-btn-active-bg: var(--ui-success-active); --bs-btn-active-border-color: var(--ui-success-active);
+  --bs-btn-disabled-color: var(--ui-success-contrast); --bs-btn-disabled-bg: var(--ui-success); --bs-btn-disabled-border-color: var(--ui-success);
+  --bs-btn-focus-shadow-rgb: var(--ui-success-rgb);
+}
+.arctos-app .btn-outline-success {
+  --bs-btn-color: var(--ui-success-text); --bs-btn-border-color: var(--ui-success);
+  --bs-btn-hover-color: var(--ui-success-text); --bs-btn-hover-bg: var(--ui-success-soft); --bs-btn-hover-border-color: var(--ui-success);
+  --bs-btn-active-color: var(--ui-success-contrast); --bs-btn-active-bg: var(--ui-success); --bs-btn-active-border-color: var(--ui-success);
+  --bs-btn-disabled-color: var(--ui-success-text); --bs-btn-disabled-border-color: var(--ui-success);
+}
+.arctos-app .btn-danger {
+  --bs-btn-color: var(--ui-danger-contrast); --bs-btn-bg: var(--ui-danger); --bs-btn-border-color: var(--ui-danger);
+  --bs-btn-hover-color: var(--ui-danger-contrast); --bs-btn-hover-bg: var(--ui-danger-hover); --bs-btn-hover-border-color: var(--ui-danger-hover);
+  --bs-btn-active-color: var(--ui-danger-contrast); --bs-btn-active-bg: var(--ui-danger-active); --bs-btn-active-border-color: var(--ui-danger-active);
+  --bs-btn-disabled-color: var(--ui-danger-contrast); --bs-btn-disabled-bg: var(--ui-danger); --bs-btn-disabled-border-color: var(--ui-danger);
+  --bs-btn-focus-shadow-rgb: var(--ui-danger-rgb);
+}
+.arctos-app .btn-outline-danger {
+  --bs-btn-color: var(--ui-danger-text); --bs-btn-border-color: var(--ui-danger);
+  --bs-btn-hover-color: var(--ui-danger-text); --bs-btn-hover-bg: var(--ui-danger-soft); --bs-btn-hover-border-color: var(--ui-danger);
+  --bs-btn-active-color: var(--ui-danger-contrast); --bs-btn-active-bg: var(--ui-danger); --bs-btn-active-border-color: var(--ui-danger);
+  --bs-btn-disabled-color: var(--ui-danger-text); --bs-btn-disabled-border-color: var(--ui-danger);
+}
+.arctos-app .btn-warning {
+  --bs-btn-color: var(--ui-warning-contrast); --bs-btn-bg: var(--ui-warning); --bs-btn-border-color: var(--ui-warning);
+  --bs-btn-hover-color: var(--ui-warning-contrast); --bs-btn-hover-bg: var(--ui-warning-hover); --bs-btn-hover-border-color: var(--ui-warning-hover);
+  --bs-btn-active-color: var(--ui-warning-contrast); --bs-btn-active-bg: var(--ui-warning-active); --bs-btn-active-border-color: var(--ui-warning-active);
+  --bs-btn-disabled-color: var(--ui-warning-contrast); --bs-btn-disabled-bg: var(--ui-warning); --bs-btn-disabled-border-color: var(--ui-warning);
+  --bs-btn-focus-shadow-rgb: var(--ui-warning-rgb);
+}
+.arctos-app .btn-outline-warning {
+  --bs-btn-color: var(--ui-warning-text); --bs-btn-border-color: var(--ui-warning);
+  --bs-btn-hover-color: var(--ui-warning-text); --bs-btn-hover-bg: var(--ui-warning-soft); --bs-btn-hover-border-color: var(--ui-warning);
+  --bs-btn-active-color: var(--ui-warning-contrast); --bs-btn-active-bg: var(--ui-warning); --bs-btn-active-border-color: var(--ui-warning);
+  --bs-btn-disabled-color: var(--ui-warning-text); --bs-btn-disabled-border-color: var(--ui-warning);
+}
+.arctos-app .btn-info {
+  --bs-btn-color: var(--ui-info-contrast); --bs-btn-bg: var(--ui-info); --bs-btn-border-color: var(--ui-info);
+  --bs-btn-hover-color: var(--ui-info-contrast); --bs-btn-hover-bg: var(--ui-info-hover); --bs-btn-hover-border-color: var(--ui-info-hover);
+  --bs-btn-active-color: var(--ui-info-contrast); --bs-btn-active-bg: var(--ui-info-active); --bs-btn-active-border-color: var(--ui-info-active);
+  --bs-btn-disabled-color: var(--ui-info-contrast); --bs-btn-disabled-bg: var(--ui-info); --bs-btn-disabled-border-color: var(--ui-info);
+  --bs-btn-focus-shadow-rgb: var(--ui-info-rgb);
+}
+.arctos-app[data-palette="monokai"] :is(.btn-warning, .btn-outline-warning) {
+  --bs-btn-border-color: var(--ui-warning-text);
+  --bs-btn-hover-border-color: var(--ui-warning-text);
+  --bs-btn-active-border-color: var(--ui-warning-text);
+}
+.arctos-app[data-palette="monokai"] :is(.btn-danger, .btn-outline-danger) {
+  --bs-btn-border-color: var(--ui-danger-text);
+  --bs-btn-hover-border-color: var(--ui-danger-text);
+  --bs-btn-active-border-color: var(--ui-danger-text);
+}
+.arctos-app .btn-outline-info {
+  --bs-btn-color: var(--ui-info-text); --bs-btn-border-color: var(--ui-info);
+  --bs-btn-hover-color: var(--ui-info-text); --bs-btn-hover-bg: var(--ui-info-soft); --bs-btn-hover-border-color: var(--ui-info);
+  --bs-btn-active-color: var(--ui-info-contrast); --bs-btn-active-bg: var(--ui-info); --bs-btn-active-border-color: var(--ui-info);
+  --bs-btn-disabled-color: var(--ui-info-text); --bs-btn-disabled-border-color: var(--ui-info);
+}
+.arctos-app .btn-outline-secondary, .arctos-app .btn-outline-dark, .arctos-app .btn-light {
+  --bs-btn-color: var(--ui-text); --bs-btn-bg: var(--ui-surface); --bs-btn-border-color: var(--ui-control-border);
+  --bs-btn-hover-color: var(--ui-text); --bs-btn-hover-bg: var(--ui-surface-hover); --bs-btn-hover-border-color: var(--ui-control-border);
+  --bs-btn-active-bg: var(--ui-surface-hover); --bs-btn-active-color: var(--ui-text); --bs-btn-active-border-color: var(--ui-control-border);
+  --bs-btn-disabled-color: var(--ui-muted); --bs-btn-disabled-bg: var(--ui-surface-muted); --bs-btn-disabled-border-color: var(--ui-border);
+}
+.arctos-app .btn-link { color: var(--ui-link); }
+.arctos-app .btn-link:hover { color: var(--ui-link-hover); }
+.arctos-app .text-primary { color: var(--ui-link) !important; }
+.arctos-app .btn-close { min-width: 44px; min-height: 44px; padding: 0; background-position: center; flex-shrink: 0; }
+.arctos-app .form-label { font-size: .9375rem; font-weight: 600; margin-bottom: 7px; }
+.arctos-app .form-control, .arctos-app .form-select { min-height: 44px; border-color: var(--ui-control-border); border-radius: 8px; padding: 10px 12px; background-color: var(--ui-surface); color: var(--ui-text); }
+.arctos-app .form-select { padding-right: 2.5rem; }
+.arctos-app .form-control:focus, .arctos-app .form-select:focus { background-color: var(--ui-surface); border-color: var(--ui-link); box-shadow: 0 0 0 3px var(--ui-shadow); }
+.arctos-app .form-control:disabled, .arctos-app .form-select:disabled { background-color: var(--ui-surface-muted); }
+.arctos-app .form-control::placeholder { color: var(--ui-muted); }
+.arctos-app .form-text { color: var(--ui-muted); line-height: 1.6; font-size: .8125rem; }
+.arctos-app textarea.form-control { min-height: 100px; }
+.arctos-app .form-check { min-height: 32px; padding-top: 4px; padding-bottom: 4px; }
+.arctos-app .form-check-input { border-color: var(--ui-control-border); width: 1.125em; height: 1.125em; margin-top: .25em; }
+.arctos-app .form-check-input:checked { background-color: var(--ui-link); border-color: var(--ui-link); }
+/* Checked controls use the high-contrast link hue; dark mode needs dark marks. */
+.arctos-app[data-bs-theme="dark"] .form-check-input:checked[type="checkbox"] { --bs-form-check-bg-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3e%3cpath fill='none' stroke='%2311161c' stroke-linecap='round' stroke-linejoin='round' stroke-width='3' d='m6 10 3 3 6-6'/%3e%3c/svg%3e"); }
+.arctos-app[data-bs-theme="dark"] .form-check-input:checked[type="radio"] { --bs-form-check-bg-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='-4 -4 8 8'%3e%3ccircle r='2' fill='%2311161c'/%3e%3c/svg%3e"); }
+.arctos-app[data-bs-theme="dark"] .form-switch .form-check-input:checked { --bs-form-switch-bg: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='-4 -4 8 8'%3e%3ccircle r='3' fill='%2311161c'/%3e%3c/svg%3e"); }
+.arctos-app .form-switch .form-check-input { width: 2em; }
+.arctos-app .form-check-label { cursor: pointer; }
+.arctos-app .input-group-text { border-color: var(--ui-control-border); color: var(--ui-muted); background: var(--ui-surface-muted); }
+/* Text + color communicate status; badges remain readable in outdoor light. */
+.arctos-app .badge { font-weight: 600; font-size: .75rem; line-height: 1.4; padding: .3em .65em; border-radius: 6px; white-space: normal; }
+.arctos-app .badge.bg-success { background: var(--ui-success-soft) !important; color: var(--ui-success-text) !important; }
+.arctos-app .badge.bg-warning { background: var(--ui-warning-soft) !important; color: var(--ui-warning-text) !important; }
+.arctos-app .badge.bg-danger { background: var(--ui-danger-soft) !important; color: var(--ui-danger-text) !important; }
+.arctos-app .badge.bg-info { background: var(--ui-info-soft) !important; color: var(--ui-info-text) !important; }
+.arctos-app .badge.bg-primary { background: var(--ui-accent-soft) !important; color: var(--ui-accent-text) !important; }
+.arctos-app .badge.bg-secondary { background: var(--ui-surface-hover) !important; color: var(--ui-text) !important; }
+.arctos-app .alert { border-radius: 10px; border-width: 1px; padding: 16px 20px; overflow-wrap: anywhere; }
+.arctos-app .alert-success { --bs-alert-color: var(--ui-success-text); --bs-alert-bg: var(--ui-success-soft); --bs-alert-border-color: var(--ui-success-border); }
+.arctos-app .alert-warning { --bs-alert-color: var(--ui-warning-text); --bs-alert-bg: var(--ui-warning-soft); --bs-alert-border-color: var(--ui-warning-border); }
+.arctos-app .alert-danger { --bs-alert-color: var(--ui-danger-text); --bs-alert-bg: var(--ui-danger-soft); --bs-alert-border-color: var(--ui-danger-border); }
+.arctos-app .alert-info { --bs-alert-color: var(--ui-info-text); --bs-alert-bg: var(--ui-info-soft); --bs-alert-border-color: var(--ui-info-border); }
+.arctos-app .nav-tabs { gap: 4px; flex-wrap: nowrap; overflow-x: auto; border-bottom-color: var(--ui-border); padding-bottom: 4px; scrollbar-width: thin; }
+.arctos-app .nav-tabs .nav-link { min-height: 44px; border-radius: 8px; white-space: nowrap; color: var(--ui-muted); font-weight: 600; font-size: .875rem; padding: 10px 16px; border-color: transparent; }
+.arctos-app .nav-tabs .nav-link.active { color: var(--ui-accent-text); background: var(--ui-accent-soft); border-color: var(--ui-link); }
+.arctos-app .nav-tabs .nav-item { flex-shrink: 0; }
+.arctos-app .table { --bs-table-bg: var(--ui-surface); --bs-table-color: var(--ui-text); --bs-table-striped-color: var(--ui-text); --bs-table-hover-color: var(--ui-text); --bs-table-active-color: var(--ui-text); --bs-table-active-bg: var(--ui-surface-hover); --bs-table-border-color: var(--ui-border); --bs-table-striped-bg: var(--ui-surface-muted); --bs-table-hover-bg: var(--ui-surface-hover); font-size: .875rem; vertical-align: middle; overflow-wrap: normal; }
+.arctos-app .table > :not(caption) > * > * { padding: 10px 12px; }
+.arctos-app .table th { font-size: .8125rem; font-weight: 650; color: var(--ui-muted); background: var(--ui-surface-muted); white-space: nowrap; }
+/* Keep short values intact; give names and notes room to wrap naturally. */
+.arctos-app .table-copy, .arctos-app .table .table-copy { white-space: normal; overflow-wrap: anywhere; word-break: normal; }
+.arctos-app .table :where(td.table-copy:not([colspan])) { min-width: 10rem; }
+.arctos-app .table td.table-identity { min-width: 12rem; }
+.arctos-app .table-nowrap, .arctos-app .table-number { white-space: nowrap; overflow-wrap: normal; word-break: normal; }
+.arctos-app .table-number { font-variant-numeric: tabular-nums; }
+.arctos-app .table :is(th, td).table-number { text-align: right; }
+.arctos-app .table .badge { white-space: nowrap; overflow-wrap: normal; }
+.arctos-app .table-jersey { display: inline-grid; grid-template-columns: minmax(0, 1fr) max-content; align-items: center; gap: .75rem; width: 8.5rem; max-width: 100%; }
+.arctos-app .table-jersey > .table-copy { grid-column: 1; min-width: 0; }
+.arctos-app .table-jersey > .table-nowrap { grid-column: 2; justify-self: end; font-variant-numeric: tabular-nums; }
+.arctos-app .sidecomp-management-table td:nth-child(2) { min-width: 12rem; }
+.arctos-app .footage-table td:first-child { min-width: 10rem; }
+.arctos-app .table-responsive { border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-surface); overscroll-behavior-x: contain; }
+.arctos-app .table-responsive > .table { margin-bottom: 0; }
+.arctos-app .table-responsive:focus-visible { outline: 2px solid var(--ui-link); outline-offset: -2px; }
+.arctos-app .dropdown-menu { z-index: 1050; border-radius: 10px; border-color: var(--bs-border-color); box-shadow: 0 6px 24px var(--ui-shadow); }
+.arctos-app .dropdown-item { min-height: 44px; padding: 10px 12px; border-radius: 7px; white-space: normal; }
+.arctos-app .dropdown-item:hover, .arctos-app .dropdown-item:focus { background: var(--ui-surface-hover); }
+.arctos-app .list-group-item { --bs-list-group-active-bg: var(--ui-accent); --bs-list-group-active-color: var(--ui-accent-contrast); --bs-list-group-active-border-color: var(--ui-link); border-color: var(--bs-border-color); padding: 14px 18px; }
+.arctos-app .page-link { min-height: 44px; min-width: 44px; display: grid; place-items: center; color: var(--ui-link); border-color: var(--ui-border); }
+.arctos-app .active > .page-link { color: var(--ui-accent-contrast); background: var(--ui-accent); border-color: var(--ui-link); }
+.arctos-app .pagination { flex-wrap: wrap; row-gap: 8px; }
+.arctos-app .loading-state { padding: 64px 24px; text-align: center; color: var(--ui-muted); }
+.arctos-app .modal-dialog { margin-block: max(16px, env(safe-area-inset-top)); }
+.arctos-app .modal-content { border-radius: 14px; border-color: var(--ui-border); box-shadow: 0 24px 80px var(--ui-shadow-strong); max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); overflow-y: auto; }
+.arctos-app .modal-header, .arctos-app .modal-footer { padding: 16px 24px; gap: 12px; border-color: var(--bs-border-color); }
+.arctos-app .modal-body { padding: 24px; }
+.arctos-app .modal-footer { flex-wrap: wrap; }
+/* Existing Bootstrap utility classes use the same app surfaces and status hues. */
+.arctos-app .bg-white, .arctos-app .text-bg-light { background-color: var(--ui-surface) !important; }
+.arctos-app .bg-light { background-color: var(--ui-surface-muted) !important; }
+.arctos-app .text-dark, .arctos-app .text-black, .arctos-app .text-bg-light { color: var(--ui-text) !important; }
+.arctos-app .text-success { color: var(--ui-success-text) !important; }
+.arctos-app .text-warning { color: var(--ui-warning-text) !important; }
+.arctos-app .text-danger { color: var(--ui-danger-text) !important; }
+.arctos-app .text-info { color: var(--ui-info-text) !important; }
+.arctos-app .text-bg-secondary { background-color: var(--ui-surface-hover) !important; color: var(--ui-text) !important; }
+.arctos-app .bg-secondary:not(.badge) { background-color: var(--ui-neutral-fill) !important; color: var(--ui-inverse-text) !important; }
+.arctos-app .text-bg-primary { background-color: var(--ui-accent) !important; color: var(--ui-accent-contrast) !important; }
+.arctos-app .bg-dark, .arctos-app .text-bg-dark { background-color: var(--ui-inverse-bg) !important; color: var(--ui-inverse-text) !important; }
+/* Solid status utility backgrounds retain contrast for legacy white icon labels. */
+.arctos-app .bg-primary:not(.badge) { background-color: var(--ui-gradient-start) !important; color: var(--ui-gradient-contrast) !important; }
+.arctos-app .bg-primary:not(.badge).text-dark, .arctos-app .bg-primary:not(.badge).text-black { color: var(--ui-gradient-contrast) !important; }
+.arctos-app .bg-success:not(.badge) { background-color: var(--ui-success-fill) !important; color: var(--ui-inverse-text) !important; }
+.arctos-app .bg-success:not(.badge).text-dark, .arctos-app .bg-success:not(.badge).text-black, .arctos-app .bg-success:not(.badge) .text-dark, .arctos-app .bg-success:not(.badge) .text-black { color: var(--ui-inverse-text) !important; }
+.arctos-app .bg-danger:not(.badge) { background-color: var(--ui-danger-fill) !important; color: var(--ui-inverse-text) !important; }
+.arctos-app .bg-danger:not(.badge).text-dark, .arctos-app .bg-danger:not(.badge).text-black, .arctos-app .bg-danger:not(.badge) .text-dark, .arctos-app .bg-danger:not(.badge) .text-black { color: var(--ui-inverse-text) !important; }
+.arctos-app .bg-info:not(.badge) { background-color: var(--ui-info-fill) !important; color: var(--ui-inverse-text) !important; }
+.arctos-app .bg-info:not(.badge).text-dark, .arctos-app .bg-info:not(.badge).text-black, .arctos-app .bg-info:not(.badge) .text-dark, .arctos-app .bg-info:not(.badge) .text-black { color: var(--ui-inverse-text) !important; }
+.arctos-app .bg-warning:not(.badge) { background-color: var(--ui-warning-fill) !important; color: var(--ui-warning-contrast) !important; }
+.arctos-app .bg-warning:not(.badge).text-dark, .arctos-app .bg-warning:not(.badge).text-black, .arctos-app .bg-warning:not(.badge) .text-dark, .arctos-app .bg-warning:not(.badge) .text-black { color: var(--ui-warning-contrast) !important; }
+.arctos-app .table-primary { --bs-table-bg: var(--ui-accent-soft); --bs-table-color: var(--ui-accent-text); --bs-table-striped-bg: var(--ui-accent-soft); --bs-table-striped-color: var(--ui-accent-text); --bs-table-hover-bg: var(--ui-accent-soft); --bs-table-hover-color: var(--ui-accent-text); }
+.arctos-app .table-secondary { --bs-table-bg: var(--ui-surface-hover); --bs-table-color: var(--ui-text); --bs-table-striped-bg: var(--ui-surface-hover); --bs-table-striped-color: var(--ui-text); --bs-table-hover-bg: var(--ui-surface-hover); --bs-table-hover-color: var(--ui-text); }
+.arctos-app .table-light { --bs-table-bg: var(--ui-surface-muted); --bs-table-color: var(--ui-text); --bs-table-striped-bg: var(--ui-surface-hover); --bs-table-hover-bg: var(--ui-surface-hover); }
+.arctos-app .table-dark { --bs-table-bg: var(--ui-inverse-bg); --bs-table-color: var(--ui-inverse-text); --bs-table-striped-color: var(--ui-inverse-text); --bs-table-hover-color: var(--ui-inverse-text); --bs-table-striped-bg: var(--ui-inverse-bg); --bs-table-hover-bg: var(--ui-inverse-bg); }
+.arctos-app .text-bg-success { background-color: var(--ui-success-soft) !important; color: var(--ui-success-text) !important; }
+.arctos-app .table-success { --bs-table-bg: var(--ui-success-soft); --bs-table-color: var(--ui-success-text); --bs-table-striped-bg: var(--ui-success-soft); --bs-table-striped-color: var(--ui-success-text); --bs-table-hover-bg: var(--ui-success-soft); --bs-table-hover-color: var(--ui-success-text); }
+.arctos-app .text-bg-warning { background-color: var(--ui-warning-soft) !important; color: var(--ui-warning-text) !important; }
+.arctos-app .table-warning { --bs-table-bg: var(--ui-warning-soft); --bs-table-color: var(--ui-warning-text); --bs-table-striped-bg: var(--ui-warning-soft); --bs-table-striped-color: var(--ui-warning-text); --bs-table-hover-bg: var(--ui-warning-soft); --bs-table-hover-color: var(--ui-warning-text); }
+.arctos-app .text-bg-danger { background-color: var(--ui-danger-soft) !important; color: var(--ui-danger-text) !important; }
+.arctos-app .table-danger { --bs-table-bg: var(--ui-danger-soft); --bs-table-color: var(--ui-danger-text); --bs-table-striped-bg: var(--ui-danger-soft); --bs-table-striped-color: var(--ui-danger-text); --bs-table-hover-bg: var(--ui-danger-soft); --bs-table-hover-color: var(--ui-danger-text); }
+.arctos-app .text-bg-info { background-color: var(--ui-info-soft) !important; color: var(--ui-info-text) !important; }
+.arctos-app .table-info { --bs-table-bg: var(--ui-info-soft); --bs-table-color: var(--ui-info-text); --bs-table-striped-bg: var(--ui-info-soft); --bs-table-striped-color: var(--ui-info-text); --bs-table-hover-bg: var(--ui-info-soft); --bs-table-hover-color: var(--ui-info-text); }
+/* Authentication and creation use the same comfortable reading width. */
+.arctos-app .auth-page, .arctos-app .form-page { margin-inline: auto; }
+.arctos-app .auth-column { width: 100%; max-width: 520px; }
+.arctos-app .form-column { width: 100%; max-width: 760px; }
+.arctos-app .auth-card { overflow: hidden; }
+.arctos-app .auth-card .card-header { background: var(--ui-surface); padding-top: 28px; text-align: center; }
+.arctos-app .auth-switch-link { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; padding-inline: 4px; white-space: nowrap; }
+.arctos-app .account-type-picker { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px; }
+.arctos-app .account-type-option { border: 1px solid var(--ui-control-border); border-radius: 10px; background: var(--ui-surface); padding: 16px; color: var(--ui-text); text-decoration: none; display: flex; flex-direction: column; text-align: left; gap: 6px; }
+.arctos-app .account-type-option.is-selected, .arctos-app .account-type-option:hover { background: var(--ui-accent-soft); border-color: var(--ui-link); color: var(--ui-accent-text); }
+.arctos-app .account-type-option small { color: var(--ui-muted); line-height: 1.6; }
+/* Documentation stays legible, including long code samples and tables. */
+.arctos-app .markdown-content { line-height: 1.8; overflow-wrap: anywhere; }
+.arctos-app .markdown-content h1, .arctos-app .markdown-content h2, .arctos-app .markdown-content h3 { margin-top: 1.5em; margin-bottom: .6em; }
+.arctos-app .markdown-content p, .arctos-app .markdown-content ul, .arctos-app .markdown-content ol { margin-bottom: 1em; }
+.arctos-app .markdown-content img { max-width: 100%; height: auto; }
+.arctos-app .markdown-content blockquote { border-left: 3px solid var(--ui-accent); padding-left: 20px; color: var(--ui-muted); }
+.arctos-app .markdown-content code { background: var(--ui-surface-muted); padding: .15em .35em; border-radius: 4px; color: var(--ui-accent-text); }
+.arctos-app .markdown-content pre { padding: 20px; overflow-x: auto; background: var(--ui-surface-muted); border-radius: 10px; }
+.arctos-app .markdown-content pre code { padding: 0; }
+.arctos-app .markdown-content table { display: block; overflow-x: auto; border-collapse: collapse; }
+.arctos-app .markdown-content th, .arctos-app .markdown-content td { border: 1px solid var(--ui-border); padding: 10px 14px; }
+.arctos-app .markdown-content .admonition { border: 1px solid var(--ui-info-border); background: var(--ui-info-soft); border-radius: 10px; padding: 16px; margin-block: 20px; }
+.arctos-app .markdown-content .admonition-title { font-weight: 700; }
+.arctos-app .markdown-content .warning, .arctos-app .markdown-content .caution, .arctos-app .markdown-content .attention { background: var(--ui-warning-soft); border-color: var(--ui-warning-border); }
+.arctos-app .markdown-content .danger { background: var(--ui-danger-soft); border-color: var(--ui-danger-border); }
+.arctos-app .app-footer { background: var(--ui-surface-muted); border-top: 1px solid var(--ui-border); color: var(--ui-muted); padding: 28px 0 max(24px, env(safe-area-inset-bottom)); font-size: .8125rem; }
+.arctos-app .footer-top, .arctos-app .footer-bottom { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; }
+.arctos-app .footer-links { display: flex; flex-wrap: wrap; gap: 4px 18px; }
+.arctos-app .footer-links a { display: inline-flex; align-items: center; min-height: 44px; color: var(--ui-muted); text-decoration: none; }
+.arctos-app .footer-links a:hover { text-decoration: underline; }
+.arctos-app .footer-bottom { border-top: 1px solid var(--ui-border); padding-top: 20px; margin-top: 20px; gap: 8px 24px; }
+.arctos-app .footer-bottom p { margin: 0; }
+@media (max-width: 1100px) {
+  .arctos-app .app-header-inner { gap: 12px; }
+  .arctos-app .app-nav-link { padding-inline: 9px; }
+}
+@media (max-width: 991.98px) {
+  .arctos-app { --header-height: calc(120px + env(safe-area-inset-top, 0px)); }
+  .arctos-app .app-header-inner { grid-template-columns: 1fr auto; gap: 0 16px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  .arctos-app .app-brand, .arctos-app .app-header-actions { min-height: 64px; }
+  .arctos-app .app-nav { grid-row: 2; grid-column: 1 / -1; padding-bottom: 8px; overflow-x: auto; scrollbar-width: none; }
+  .arctos-app .app-nav::-webkit-scrollbar { display: none; }
+  .arctos-app .app-nav-link { flex: 1; padding-inline: 12px; }
+}
+@media (max-width: 575.98px) {
+  .arctos-app .container-wide { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  .arctos-app .app-main { padding-block: 24px 36px; }
+  .arctos-app .app-header-inner { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  .arctos-app .app-nav-link { gap: 5px; padding-inline: 8px; font-size: .78rem; }
+  .arctos-app .card-body { padding: 20px; }
+  .arctos-app .card-header, .arctos-app .card-footer { padding: 16px 20px; }
+  .arctos-app .btn-sm { min-height: 44px; }
+  .arctos-app .form-control, .arctos-app .form-select { font-size: 16px; }
+  .arctos-app .form-check-label { padding-block: 5px; }
+  .arctos-app .table td, .arctos-app .table th { padding: 10px; }
+  .arctos-app .modal-dialog { margin: 8px; }
+  .arctos-app .modal-content { max-height: calc(100vh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); max-height: calc(100dvh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
+  .arctos-app .modal-body, .arctos-app .modal-header, .arctos-app .modal-footer { padding: 16px; }
+  .arctos-app .modal-footer > .btn { flex: 1; }
+  .arctos-app .footer-top, .arctos-app .footer-bottom { align-items: flex-start; flex-direction: column; }
+  .arctos-app .footer-links { gap: 0 20px; }
+}
+/* Touch devices retain readable editable text in landscape as well as portrait.
+   Low specificity preserves intentional larger controls, such as the live count. */
+@media (any-pointer: coarse) {
+  .arctos-app :is(input, textarea).form-control,
+  .arctos-app select.form-select,
+  .arctos-app :where(input:not([type="button"], [type="submit"], [type="reset"], [type="image"], [type="hidden"], [type="checkbox"], [type="radio"], [type="range"], [type="color"]), textarea, select) { font-size: max(16px, 1em); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .arctos-app *, .arctos-app *::before, .arctos-app *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}
+
+.arctos-app .btn-check:focus-visible + .account-type-option { outline: 3px solid var(--ui-link); outline-offset: 3px; }
+.arctos-app .arctos-event-search input { padding-left: 2.5rem; }
+
+/* Keep every primary destination visible at phone widths. */
+@media (max-width: 575.98px) {
+  .arctos-app { --header-height: calc(124px + env(safe-area-inset-top, 0px)); }
+  .arctos-app .app-nav-link { flex: 1 1 0; flex-direction: column; gap: 3px; min-width: 0; min-height: 50px; padding: 6px 2px; font-size: .75rem; }
+  .arctos-app .app-nav-link i { font-size: .875rem; }
+}

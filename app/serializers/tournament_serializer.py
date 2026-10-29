@@ -52,6 +52,7 @@ def tournament_to_dict(t) -> dict:
     out = {
         "url": t.url,
         "name": t.name,
+        "banner_photo": t.banner_photo,
         "start_date": start,
         "end_date": end,
         "location": t.location,

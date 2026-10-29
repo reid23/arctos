@@ -1,6 +1,6 @@
 use crate::Route;
 use crate::api;
-use crate::components::{TeamSelectionField, TeamTokenInput};
+use crate::components::{TeamSelectionField, ToolPageHeader};
 use crate::types::{
     HistoricalMatch, HistoricalMatchInput, HistoricalPoint, HistoricalRecordsResponse,
     HistoricalTeam, MatchSetupData, TeamOption,
@@ -533,32 +533,15 @@ pub fn HistoricalRecords(url: String) -> Element {
         };
     };
     let tournament = data.tournament.clone();
-    let dates = match tournament.end_date.as_deref().map(date_only) {
-        Some(end) if end != date_only(&tournament.start_date) => {
-            format!("{} - {}", date_only(&tournament.start_date), end)
-        }
-        _ => date_only(&tournament.start_date).to_string(),
-    };
-    let location = tournament.location.clone().unwrap_or_default();
     let url_for_publish = url.clone();
 
     rsx! {
         style { {TEAM_TOKEN_CSS} }
-        div { class: "d-flex flex-wrap align-items-start justify-content-between gap-2 mb-2",
-            div {
-                h1 { class: "mb-1", "{tournament.name}" }
-                div { class: "text-muted",
-                    span { class: "badge bg-secondary me-2",
-                        i { class: "fas fa-history me-1" }
-                        "Historical"
-                    }
-                    if !location.is_empty() {
-                        "{location} • "
-                    }
-                    "{dates}"
-                }
-            }
-            div { class: "d-flex align-items-center gap-3",
+        ToolPageHeader {
+            title: "Records".to_string(),
+            description: Some("Enter the matches and scores. Teams and players see invitations, and this event on their profiles, only after you publish.".to_string()),
+        }
+        div { class: "d-flex flex-wrap align-items-center gap-3 mb-3",
                 div { class: "form-check form-switch mb-0",
                     title: "Teams and players see invitations, and this tournament on their profiles, only after you publish.",
                     input {
@@ -596,17 +579,11 @@ pub fn HistoricalRecords(url: String) -> Element {
                     label { class: "form-check-label", r#for: "historical-published",
                         if tournament.published { "Published" } else { "Not published" }
                     }
-                    div { class: "form-text",
-                        "Teams and players see invitations, and this tournament on their profiles, only after you publish."
-                    }
                 }
-                Link { to: Route::TournamentHome { url: url.clone() }, class: "btn btn-sm btn-outline-secondary", "View tournament" }
             }
-        }
         if let Some(error) = publish_error() {
-            div { class: "alert alert-danger py-2", "{error}" }
+            div { class: "alert alert-danger py-2", role: "alert", "{error}" }
         }
-        DetailsCard { url: url.clone(), records }
         div { class: "row g-4",
             div { class: "col-lg-8",
                 MatchEntryCard { url: url.clone(), records, draft, editing }
@@ -619,110 +596,6 @@ pub fn HistoricalRecords(url: String) -> Element {
     }
 }
 
-#[component]
-fn DetailsCard(url: String, records: Records) -> Element {
-    let mut records = records;
-    let mut expanded = use_signal(|| false);
-    let mut name = use_signal(String::new);
-    let mut location = use_signal(String::new);
-    let mut start_date = use_signal(String::new);
-    let mut end_date = use_signal(String::new);
-    let mut about = use_signal(String::new);
-    let mut error = use_signal(|| None::<String>);
-    let mut saving = use_signal(|| false);
-
-    let Some(data) = records() else {
-        return rsx! {};
-    };
-    let tournament = data.tournament;
-    let published = tournament.published;
-
-    rsx! {
-        div { class: "card mb-4",
-            div { class: "card-header d-flex justify-content-between align-items-center",
-                h5 { class: "mb-0", "Details" }
-                if !expanded() {
-                    button {
-                        class: "btn btn-sm btn-outline-secondary",
-                        onclick: move |_| {
-                            name.set(tournament.name.clone());
-                            location.set(tournament.location.clone().unwrap_or_default());
-                            start_date.set(date_only(&tournament.start_date).to_string());
-                            end_date.set(tournament.end_date.as_deref().map(date_only).unwrap_or("").to_string());
-                            about.set(tournament.about.clone().unwrap_or_default());
-                            error.set(None);
-                            expanded.set(true);
-                        },
-                        i { class: "fas fa-pen me-1" }
-                        "Edit details"
-                    }
-                }
-            }
-            if expanded() {
-                div { class: "card-body",
-                    if let Some(message) = error() {
-                        div { class: "alert alert-danger py-2", "{message}" }
-                    }
-                    div { class: "row g-3",
-                        div { class: "col-md-6",
-                            label { class: "form-label", r#for: "details-name", "Name" }
-                            input { class: "form-control", id: "details-name", value: "{name}", oninput: move |ev| name.set(ev.value()) }
-                        }
-                        div { class: "col-md-6",
-                            label { class: "form-label", r#for: "details-location", "Location" }
-                            input { class: "form-control", id: "details-location", value: "{location}", oninput: move |ev| location.set(ev.value()) }
-                        }
-                        div { class: "col-md-6",
-                            label { class: "form-label", r#for: "details-start", "Start date" }
-                            input { class: "form-control", r#type: "date", id: "details-start", value: "{start_date}", oninput: move |ev| start_date.set(ev.value()) }
-                        }
-                        div { class: "col-md-6",
-                            label { class: "form-label", r#for: "details-end", "End date" }
-                            input { class: "form-control", r#type: "date", id: "details-end", min: "{start_date}", value: "{end_date}", oninput: move |ev| end_date.set(ev.value()) }
-                        }
-                        div { class: "col-12",
-                            label { class: "form-label", r#for: "details-about", "About" }
-                            textarea {
-                                class: "form-control",
-                                id: "details-about",
-                                rows: 4,
-                                placeholder: "Format, notable moments, links to footage (Markdown)",
-                                value: "{about}",
-                                oninput: move |ev| about.set(ev.value()),
-                            }
-                        }
-                    }
-                    div { class: "d-flex gap-2 mt-3",
-                        button {
-                            class: "btn btn-primary",
-                            disabled: saving(),
-                            onclick: move |_| {
-                                let url = url.clone();
-                                saving.set(true);
-                                spawn(async move {
-                                    let result = api::historical_update_details(
-                                        &url, name().trim(), location().trim(), &start_date(), &end_date(), &about(), published,
-                                    )
-                                    .await;
-                                    match result {
-                                        Ok(response) => {
-                                            records.set(Some(response));
-                                            expanded.set(false);
-                                        }
-                                        Err(message) => error.set(Some(message)),
-                                    }
-                                    saving.set(false);
-                                });
-                            },
-                            "Save details"
-                        }
-                        button { class: "btn btn-outline-secondary", onclick: move |_| expanded.set(false), "Cancel" }
-                    }
-                }
-            }
-        }
-    }
-}
 
 #[component]
 fn MatchEntryCard(
@@ -828,7 +701,7 @@ fn MatchEntryCard(
 
     rsx! {
         div {
-            class: if editing_name.is_some() { "card mb-4 border-primary" } else { "card mb-4" },
+            class: "edit-section",
             onkeydown: move |ev: Event<KeyboardData>| {
                 let modifiers = ev.modifiers();
                 let submit_modifier = modifiers.contains(Modifiers::SHIFT)
@@ -846,7 +719,7 @@ fn MatchEntryCard(
                     save.call(());
                 }
             },
-            div { class: "card-header d-flex justify-content-between align-items-center",
+            div { class: "edit-section-heading d-flex justify-content-between align-items-center",
                 h5 { class: "mb-0",
                     if let Some(ref name) = editing_name {
                         i { class: "fas fa-pen me-2 text-primary" }
@@ -857,7 +730,7 @@ fn MatchEntryCard(
                 }
                 span { class: "small text-muted d-none d-md-inline", "Shift+Enter saves" }
             }
-            div { class: "card-body",
+            div { class: "edit-section-body",
                 if let Some(message) = error() {
                     div { class: "alert alert-danger py-2", "{message}" }
                 }
@@ -908,10 +781,8 @@ fn MatchEntryCard(
                     }
                 }
                 div { class: "mb-2",
-                    label { class: "form-label", "Referees "
-                        span { class: "text-muted small", "(optional)" }
-                    }
-                    TeamTokenInput {
+                    TeamSelectionField {
+                        label: "Referees".to_string(),
                         team_options: options.clone(),
                         tags: vec![],
                         matches: targets.clone(),
@@ -919,6 +790,8 @@ fn MatchEntryCard(
                         on_change: move |value: String| draft.write().referees = value,
                         multiple: true,
                         placeholder: "Teams or match results".to_string(),
+                        help_text: Some("Optional.".to_string()),
+                        wrapper_class: Some("mb-0".to_string()),
                     }
                 }
                 div { class: "mb-3",
@@ -1086,8 +959,8 @@ fn MatchListCard(
     let total = data.matches.len();
 
     rsx! {
-        div { class: "card",
-            div { class: "card-header d-flex flex-wrap justify-content-between align-items-center gap-2",
+        div { class: "edit-section",
+            div { class: "edit-section-heading d-flex flex-wrap justify-content-between align-items-center gap-2",
                 h5 { class: "mb-0", "Matches ({total})" }
                 if total > 0 {
                     input {
@@ -1103,7 +976,7 @@ fn MatchListCard(
                 div { class: "alert alert-danger m-3 mb-0 py-2", "{message}" }
             }
             if total == 0 {
-                div { class: "card-body text-muted", "Matches you save appear here, newest first." }
+                div { class: "edit-section-body text-muted", "Matches you save appear here, newest first." }
             } else {
                 div { class: "table-responsive",
                     table { class: "table table-hover align-middle mb-0",
@@ -1261,14 +1134,14 @@ fn TeamsCard(url: String, records: Records) -> Element {
     let unclaimed = data.teams.iter().filter(|team| team.placeholder).count();
 
     rsx! {
-        div { class: "card",
-            div { class: "card-header",
+        div { class: "edit-section",
+            div { class: "edit-section-heading",
                 h5 { class: "mb-0", "Teams ({data.teams.len()})" }
                 if unclaimed > 0 {
                     div { class: "small text-muted", "{unclaimed} unclaimed" }
                 }
             }
-            div { class: "card-body pb-2",
+            div { class: "edit-section-body pb-2",
                 if let Some(message) = error() {
                     div { class: "alert alert-danger py-2", "{message}" }
                 }
@@ -1439,12 +1312,12 @@ fn TeamRow(
                         }
                         div { class: "small d-flex flex-wrap align-items-center gap-1",
                             if !team.placeholder {
-                                span { class: "badge bg-success", "Claimed" }
+                                span { class: "badge arctos-badge-success", "Claimed" }
                                 if let Some(account_name) = claimed_under_other_name {
                                     span { class: "text-muted", "by {account_name}" }
                                 }
                             } else if let Some(invitation) = team.claim_invitation.clone() {
-                                span { class: "badge bg-warning text-dark", title: "Waiting for {invitation.team_name} to accept",
+                                span { class: "badge arctos-badge-warning", title: "Waiting for {invitation.team_name} to accept",
                                     "Invited: {invitation.team_name}"
                                 }
                                 button {
@@ -1462,7 +1335,7 @@ fn TeamRow(
                                     "cancel"
                                 }
                             } else {
-                                span { class: "badge bg-light text-dark border", "Unclaimed" }
+                                span { class: "badge arctos-badge-neutral", "Unclaimed" }
                             }
                             span { class: "text-muted", "{team.match_count} matches • {team.roster_size} players" }
                         }

@@ -1,10 +1,23 @@
 # User Documentation
 
-or, "i type forever and still don't produce something that feels complete"
+## Start here
+
+- **Find an event or league:** browse [Events](/) or [Leagues](/leagues), then open its schedule, teams, or results.
+- **Join an event:** open the event and choose **Register**. A league event uses one registration for the league. If you joined a team, that team must approve your place on its roster.
+- **Manage your team’s roster:** sign in with the team account, open the event or league, and choose **Manage roster**.
+- **Run a match:** open its schedule entry and follow [Running Games](#running-games). Your account needs permission to head referee that match.
+- **Set up an event:** use **Organize** on [Events](/), then follow [Tournament Settings](#tournament-settings) and [Match Schedule Setup](#match-schedule-setup).
+- **Run a side event:** see [Running a Side Comp](#running-a-side-comp).
+- **Play the stone beat:** open [Stones](/stones); see [Stones](#stones) for synchronization and calibration.
+
+Leagues stay **Active** while any event is current or upcoming, including events
+the organizer has not published yet. A league moves to **Past** after its final
+event's end date has passed in your local calendar. Event dates and counts show
+only the events you have access to; league organizers can also see drafts.
 
 ## Table of Contents
 
-Just Me Yapping
+About Arctos
 
  - [FAQ](#faq)
  - [Ownership (Arctos not a CAJA project)](#ownership-is-arctos-a-caja-project)
@@ -12,7 +25,7 @@ Just Me Yapping
  - [Design Philosophy](#design-philosophy)
  - [Bugs, Feature Requests, and Contributing](#bugs-feature-requests-and-contributing)
 
-High Level Overview
+Overview
 
  - [Functionality Overview](#functionality-overview)
     - [Before the Tournament](#before-the-tournament)
@@ -32,23 +45,25 @@ For Head Refs
  - [Force Start Games](#force-start-games)
 
 
-For TOs
+For tournament organizers
 
  - [Tournament Settings](#tournament-settings)
     - [Basic Information](#basic-information)
     - [Head Ref Options](#head-ref-options)
     - [Visibility and Access Control](#visibility-and-access-control)
  - [Match Schedule Setup](#match-schedule-setup)
+    - [Activities and Side Competitions](#activities-and-side-competitions)
     - [Tags and References: Specifying Teams](#tags-and-references-specifying-teams)
     - [Static Scheduling](#static-scheduling)
     - [Dynamic Matches](#dynamic-matches)
     - [Breaks](#breaks)
     - [Joins](#joins)
     - [Ribbon Games](#ribbon-games)
-	- [Skip Conditions](#skip-conditions)
+    - [Results and Standings](#results-and-standings)
+    - [Skip Conditions](#skip-conditions)
  - [Side Comps](#side-comps)
  - [OBS Scoreboard Integration](#obs-scoreboard-integration)
- - [Recording Matches](#recording-matches)
+ - [Match Footage](#match-footage)
 
 For Developers
 
@@ -62,9 +77,7 @@ For Developers
 **I want to test this out for my tournament, but I don't want to
 create a bunch of fake teams on the official site. What can i do?**
   
-  - Contact me! I have a dev server where I stage changes before they
-    go live; i can give you access and you can do whatever you want
-    there without affecting the real data.
+  - Use the local demo described in the [setup guide](https://github.com/reid23/arctos#running-the-app-locally). It creates sample accounts and events in a separate database. Ask your site administrator about a test instance if you cannot run Arctos locally.
 
 **Can I register two teams for a tournament under one team account?**
   
@@ -300,33 +313,22 @@ Here's, briefly, how it works.
 
 ## Stones
 
-A central feature of Arctos is the stones player. It plays stones in
-sync with the server's system clock, on every even multiple of 1500
-milliseconds in unix time. This is useful because modern digital
-devices have very good clocks, so once we compute the offset between
-our clock and the server's clock, clients know exactly when stones are
-played, without needing any expensive low-latency network shenanigans.
+Open [Stones](/stones) to play the beat. **Start** begins playback and the local
+counter; **Pause** keeps the count, and **Reset** stops playback and returns it
+to zero. **Mute sound** silences playback while the counter continues. Choose
+a sound and use **Preview** to hear one clip without starting the counter.
+A custom MP3 must be shorter than one stone (1.5 seconds).
 
-When head refs run games, we use this to synchronize the stone counter
-on their device with the actual stones being played on the field, so
-their device counts stones precisely just based on when they start and
-stop the point locally, regardless of the server ping time.
+Arctos schedules beats on a shared 1.5-second clock grid. Devices estimate
+their offset from the server, so counters and playback use the same timing
+reference. Actual audible timing also depends on the device, speaker, Bluetooth
+delay, and distance from the listener; synchronized clocks cannot remove these
+delays by themselves.
 
-This also means that every device on the stones player page will play
-stones at precisely the same time, no matter what. No more massive
-audio cables or worrying about synchronizing the stones manually! Just
-play from two separate devices and it'll be in sync.
-
-!!! warning 
-    Unfortunately the speed of sound is finite. If you're
-    running into problems where things aren't quite synced, try
-    putting the devices in question right next to each other and see
-    if the issue persists. Unfortunately there's nothing I can do
-    about this issue :\(
-	
-If you use a bluetooth speaker, you'll need to do a quick calibration
-to compensate for the bluetooth delay. This tends to be somewhere on
-the order of 200ms.
+Use **Calibrate manually** to adjust audio and clock timing. **Cancel** restores
+the timing settings from before the walkthrough; completing it keeps the new
+settings. Compare speakers next to each other when checking synchronization.
+Advanced synchronization controls show connection quality and allow a resync.
 
 ## Account Types
 
@@ -361,45 +363,42 @@ Penalties are visible to:
 
 ## Phone Number
 
-This is just to say that while there is a box for players to enter
-their phone numbers, it doesn't currently do anything. Eventually,
-there will be an option for opt-in match/schedule notifications, but I
-have not implemented this yet.
-
+A player can store a phone number in Edit profile. It is not shown on the public
+profile. Arctos does not currently send match or schedule notifications to it.
 
 ## Logging Injuries
 
-When you log injuries on your profile, all it does is add a little bit
-of text under your name on refs' screens when they start matches, so
-they can be more aware of your injuries. **Please note that head refs
-see injuries even if you set them to private!** Public notes are shown
-to *everyone*; private notes are shown only to you and head refs.
+Add injuries from your profile's Injuries section. New injuries are private by
+default. Public injuries appear on your profile; private injuries remain visible
+to you and to authorized referees during match setup at events where you are
+registered. Only active injuries appear in that match-setup information.
 
----
-
+Mark an injury healed when it no longer applies. See the
+[data accessibility guide](data-accessibility-guide.md#injuries) for visibility
+rules.
 
 ## Running Games
 
-Running games is mostly self explanatory. If there's no option for you
-to start a match that you think you should be able to start, check
-that:
+Open the match from the schedule. If **Start match** is unavailable, open its
+explanation to check dependencies, field/team conflicts, and referee permission.
+A team account cannot act as the head referee; use your player account.
 
-  - you're logged in
-  - the teams are all ready (even refs), not involved in other games
-    or still references to other games' winners and losers
-  - everything before this match on the schedule on this field has
-    been marked completed
+1. Choose the players taking part, within the event's roster limits. Review
+   active injuries and relevant notes, and add any match-level instructions.
+2. Start the match after the pre-game meeting. This records its start time and
+   updates dependent schedule entries.
+3. Use **Start point** on the start of play and end the point when it is called.
+   Record the winning team, or leave the point without a winner if nobody scored.
+4. Use **Notes** for match/point notes and penalties. **Correct count** opens an
+   explicit stone-count draft; review it and save or cancel the correction.
+5. Open **Review result** when play is complete. Select the match winner and
+   obtain the required captain signatures before confirming finalization.
 
-For the actual workflow to run games, a textual description is even
-more unhelpful than it is dry. Instead, i've made this [nice big
-diagram showing how to do it](../static/run_match_pipeline.png). it's a
-bit large to display here well, but if you click the link, you can
-zoom in however much you want.
+Wait for each write to finish. If a correction has an uncertain outcome, use its
+status-check action before retrying. This avoids applying a second change while
+the first request may already have reached the server.
 
-![](../static/run_match_pipeline.png)
-
-[^2]: static matches may not be skipped because if it is skipped, it's impossible to know when the next match should be, since the static match doesn't care what came before it.
-
+[^2]: Static matches do not use skip conditions: their scheduled start does not depend on a predecessor.
 
 ## Force Start Games
 
@@ -432,15 +431,14 @@ change the teams involved. Only TOs may make further edits.
 
 ### Basic Information
 
-This is pretty self explanatory so I only have a few notes:
+Open **Organizer tools → Settings** to edit event information and registration rules:
 
   - The start date is not optional. You must enter something.
-  - to hide the registration fee callouts on the event page and
+  - To hide the registration fee callouts on the event page and
     registration forms, just set the value to zero.
   - When entering other TOs, you must enter their exact username for
     it to work.
-  - The max team size on field and roster **are** actually enforced; don't
-    just choose random numbers.
+  - Roster and on-field player limits are enforced during registration and match setup.
 
 ### Head Ref Options
 
@@ -479,8 +477,9 @@ that type cannot be deleted!
 
 ## Match Schedule Setup
 
-From the schedule page, TOs can enter *edit mode*, which allows you to
-set up the schedule.
+Open **Organizer tools → Edit schedule** to create or edit matches, fields,
+tags, and script variables. The public Schedule view does not expose editing
+controls.
 
 All matches have (among other things) the following information:
 
@@ -491,13 +490,13 @@ All matches have (among other things) the following information:
 
 ### Tags and References: Specifying Teams
 
-Each match as two teams playing in it as well as any number of teams
+Each match has two teams playing in it as well as any number of teams
 assigned to ref. Let's take a brief aside on how to specify teams. You
 have three options:
 
   1. explicit team name: just type their name (autocomplete will help
      you). They must be registered in the tournament.
-  2. tag: after adding a tag in the sidebar, you can use it as a team.
+  2. tag: after adding a tag with **Tags**, you can use it as a team.
   3. reference: you can enter the winner or loser of another match,
      and Arctos will update these when the relevant results become
      available.
@@ -513,10 +512,9 @@ trials/finals seeding at Fog of War 2025 - teams for day 2 were set to
 tags like "seed 1", "seed 2", etc., and after day 1, we compiled the
 results, completed the rankings, and updated the tags accordingly.
 
-This is meant to be a very generic tool because of the whole
-[unonpinionated design](#design-philosophy) theme--I'm not trying to
-tell you how you should do rankings, so you can just do it however
-you'd like.
+Tags let you apply the seeding rules for your event. The Results tab
+also provides calculated standings, described below; it does not set
+tags or advance teams through a bracket.
 
 
 ### Static Scheduling
@@ -582,8 +580,10 @@ Break matches represent dynamically scheduled breaks in the
 tournament. They just reserve time (ie, for a lunch break) on a field
 in a way that can be pulled forward if matches finish early.
 
-If you want a non-dynamic break, just use static matches before and
-after the break, and leave the break empty.
+Choose **Static break** for a break with a fixed start time. Breaks and joins
+control match timing and appear in the field view, not the team view. For a
+lunch announcement that everyone should see, add an [activity](#activities-and-side-competitions)
+as well as any breaks needed to pause matches.
 
 ### Joins
 
@@ -605,6 +605,20 @@ matches, practice games, or matches that don't affect standings. When
 creating or editing a match, you can check the "Ribbon Game" checkbox
 to mark it as such.
 
+### Results and Standings
+
+Tournament and league results rank teams by match win percentage,
+then point win percentage (points won divided by total points played).
+Teams tied on both share a rank, with the next place skipped: 1, 1, 3.
+Teams without a decided match remain unranked. If a team has no
+recorded points, its point win percentage is treated as zero.
+
+Gold, silver, and bronze trophies mark ranks 1, 2, and 3. These are
+calculated standings, not organizer-assigned final bracket placements.
+Selecting **Include ribbon games** recalculates the standings with
+those matches included. Sorting a column changes the display order,
+not the ranks. Expand a team to see its matches.
+
 ### Skip Conditions
 
 Between tags and references, very nearly any tournament structure can
@@ -619,82 +633,98 @@ called Arctos Schedule Script (ASS).
 
 You can see the full ASS docs [here](arctos-schedule-script.md).
 
-### Exporting and Importing Schedule Files
+### Activities and Side Competitions
 
-On the match setup page, under Utilities, there are "Export Schedule"
-and "Import Schedule" buttons. These allow you to export .toml files
-containing your schedule! You can upload this later to get your
-current schedule back, or even upload it to future tournaments you
-make.
+Open **Add** in the schedule editor and choose **Activity or announcement** for
+announcements, check-in, awards, or other activities. The same menu includes
+matches, breaks, joins, and **Side competition**. On a computer, clicking an
+empty part of the timeline fills in the start time; dragging selects a time
+range. Choose the entry type, then review and save its details.
 
-this file includes:
+For an activity, enter a name, start and end time, and any description or
+location players need. You can choose a field as its location, but the activity
+still appears throughout the schedule. Each entry can span up to 31 days.
 
- - match types, times, and teams (as tags or references)
- - tags
- - fields
+Choose a side competition to schedule one that already exists, or create a new
+competition from the same form. You can also schedule a competition from its
+own page. Its schedule entry uses the competition's current name and description.
+Players can tap the entry to read the details or open the competition.
 
-this file *does not include*:
+**By team** shows every activity and scheduled side competition alongside the
+selected team's matches. Activities are visible even before a team is selected;
+they are not filtered by side competition entries. **By field** shows all
+activities alongside that field's matches. In the editor's **All fields** view,
+each field displays the same activity. Select any copy to edit the one saved
+entry. The table shows each activity once.
 
- - match results
- - match statuses
- - tag updates
- - true start/end times
- - points
- - etc
+Activity times stay fixed when matches run early or late. They do not delay
+matches, reserve a field, or check for overlaps with matches. **Push back day…**
+leaves activity times unchanged. Use a [break](#breaks) in the match schedule
+when following matches must wait. Activities follow the event's schedule
+publication setting and can be used before any matches or fields have been added.
 
-In addition, when you upload this, it will reset all the dependency
-updates and tag updates, so you'll have to click "update all
-dependencies" again and update all your tags again to the correct
-teams.
+### Exporting and Importing Schedules
 
----
+The schedule editor offers **Export TOML** and **Import TOML**. An export contains
+schedule definitions: fields, tags, script variables, match types, planned times,
+team/referee references, and activities. It is not a backup of scores, points,
+or footage.
+
+An import is authoritative for the destination schedule. Fields, tags, variables,
+and matches omitted from the file can be removed. Export the current schedule
+and back up important event data before replacing it. Review import warnings and
+resolved team/tag references before using the result. Do not treat an exported
+schedule as a complete event backup.
+
+The `schedule_items` collection contains activities. Importing that collection
+replaces the event's activities; `schedule_items = []` clears them. Files without
+`schedule_items` leave existing activities in place. A linked side competition
+must belong to the destination event.
 
 ## Side Comps
 
-Side comps are currently implemented in a very rudimentary state. They
-are currently able to run chain pits and bear pits, and just track the
-number of wins each player has.
+Side competitions track individual entries and results within an event. Players
+receive an entry number and choose from the pompfen enabled by the organizer.
+A player's profile preferences do not select a weapon for a competition.
 
-When players register for a side comp, they are given a number as
-their ID, and they must choose a pompf to play. The available pompfen
-are the normal weapons plus skull or unarmed (for extensibility to
-qwik competitions in the future). TOs have the option to
-enable/disable any of the pompf choices when configuring the side
-comp.
+Players registered for the event can join its side competitions while
+registration is open, including players awaiting team approval. Pending team
+members appear as unattached until the team approves them. Organizers can also
+manage entries through the side competition's tools.
 
-Any player registered for the tournament can register for its side
-comps, including players whose team hasn't approved their request
-yet. Until the team approves them, they compete in side comps as
-unattached (shown as a merc).
+Organizers control registration, active scoring, enabled weapons, loss tracking,
+and results display. Logged-in users can record results while a
+competition is active and not finalized. Results record their submitter;
+organizers review validity and resolve flags before finalizing.
 
-TOs have three other settings: 
-1. registration open (can people register)
-2. active (can people submit results)
-3. number of results to make public
+The **Public result limit** starts at three. It controls the **All weapons**
+view; selecting a weapon shows its top player. Blank publishes every matching
+player, and zero hides results. Organizers can view complete standings when
+results are enabled. Finalizing preserves these settings.
 
-If the side comp is active, anyone who is logged in can submit results
-to the side comp. After the side comp is over, TOs may look through
-the results manually and invalidate any as they see fit. the user who
-submitted each score is recorded.
+Results appear in one table. Chain Pits (**Chain/breaking**) have **Chains** and
+**Breaks** tabs. Bear Pits use **Dueling**. The **Weapon** dropdown includes only
+weapons with valid results, including losses. Each row shows the player's rank,
+identity, and scores. Ranks apply to the selected weapon or group.
 
-While the side comp is in progress, the results page will update live
-with (unofficial) results. It nominally will show everyone, unless the
-TOs have restricted the view to only some top $n$ players.
+Select **Wins** or **Win %** to change the ranking. Live updates retain the
+selection; a weapon without valid results resets to **All weapons**.
+
+Signed-in players see their own rank and scores above the table in **Your result**,
+including entries below the public limit. This card uses the default overall or
+group ranking and stays visible while filtering. Their rows carry a **You** label.
 
 ### Running a Side Comp
 
-During the side comp, refs are presented with a screen where they can
-enter player's ID numbers and increment or decrement their score. A
-history of recent actions is shown so that refs can see, for example,
-how many points in a row the last person has scored. Refs may click on
-entries in this history bar to flag them for review later.
+Open **Enter results**, enter the player's entry number, and record the result.
+The loss control is available only when losses are tracked for that entry.
+A loss is a result, not a way to undo an accidental win. Use **Undo** to remove
+the latest entry from the current scoring history, or flag an entry for organizer
+review.
 
-The philosophy here is that we should just get all the data and fix it
-later. if the ref adds an extra point on accident, they can just
-remove a point and it's fine. but anything more complicated than that
-is probably going to be more complicated and controversial than I want
-to deal with right now, so we can just have the TOs figure it out
-according to whatever rules they'd like.
+Recent entries remain visible while scoring. Organizers use **Manage results**
+to review entries and finalize the competition. Public standings update as
+results change while results are enabled.
 
 ## OBS Scoreboard Integration
 
@@ -725,3 +755,10 @@ The scoreboard displays:
 The scoreboard automatically polls for updates and refreshes when
 match state changes. For stones matches, the countdown updates in
 real-time using the same synchronization system as the match pages.
+
+
+## Match Footage
+
+When a match has footage available, open the match page to view it. Use the camera selector to choose a recording and the point selector to jump to a point.
+
+Event organizers can open **Organizer tools → Footage** to find recordings by match, field, camera, status, uploader, or timestamp. **Open** lets you review the linked recording. **Delete** asks for confirmation before removing the footage entry; removal cannot be undone.

@@ -165,6 +165,23 @@ class PermissionService:
         return PermissionService.is_tournament_organizer(tournament_url, user)
 
     @staticmethod
+    def can_view_schedule(tournament, user) -> bool:
+        """Apply the schedule-publication gate for an already viewable tournament.
+
+        Published schedules are public, including empty schedules. Organizers
+        and players with general head-ref permission can preview unpublished
+        schedules; permission for a particular match alone is insufficient.
+        Callers must also enforce the existing tournament-visibility gate.
+        """
+        if tournament.schedule_published:
+            return True
+        if user is None or not getattr(user, "is_authenticated", False):
+            return False
+        if PermissionService.is_tournament_organizer_of(tournament, user):
+            return True
+        return PermissionService.can_head_ref_match(tournament.url, user, match=None)
+
+    @staticmethod
     def can_head_ref_match(tournament_url: str, user, match=None) -> bool:
         """Return whether *user* may head-ref *match* in this tournament.
 

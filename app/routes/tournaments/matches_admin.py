@@ -12,6 +12,7 @@ from flask import jsonify, request
 from flask_login import current_user, login_required
 from sqlalchemy.orm.attributes import flag_modified
 
+from app.error_values import Some
 from app.domain.enums import (
     STRUCTURAL_SCHEDULE_TYPES,
     MatchStatus,
@@ -42,6 +43,7 @@ from app.utils.scheduling import (
 )
 from models import (
     Field,
+    ScheduleItem,
     Match,
     ScriptVariable,
     Tag,
@@ -508,6 +510,7 @@ def update_field_api(tournament_url, field_id):
     field.name = new_field_name
 
     if old_field_name != new_field_name:
+        ScheduleItem.query.filter_by(event=tournament_url, field=old_field_name).update({"field": new_field_name})
         matches_to_update = Match.query.filter_by(event=tournament_url, field=old_field_name).all()
         for match in matches_to_update:
             match.field = new_field_name
@@ -529,9 +532,9 @@ def create_match_api(tournament_url):
     name = data.get("name")
     if not name:
         return jsonify({"error": "Match name is required"}), 400
-    mn_err = match_name_char_error(name.strip())
-    if mn_err:
-        return jsonify({"error": mn_err}), 400
+    match match_name_char_error(name.strip()):
+        case Some(error):
+            return jsonify({"error": error}), 400
 
     # Parse schedule type and field for name-uniqueness scope (BREAK/JOIN are unique per field)
     schedule_type_str = data.get("schedule_type")
@@ -968,9 +971,9 @@ def create_break_group_api(tournament_url):
     name = (data.get("name") or "").strip()
     if not name:
         return jsonify({"error": "Name is required"}), 400
-    mn_err = match_name_char_error(name)
-    if mn_err:
-        return jsonify({"error": mn_err}), 400
+    match match_name_char_error(name):
+        case Some(error):
+            return jsonify({"error": error}), 400
 
     try:
         schedule_type = ScheduleType(data.get("schedule_type") or "BREAK")
@@ -1292,6 +1295,7 @@ def delete_field_api(tournament_url, field_id):
     if Match.query.filter_by(event=tournament_url, field=field.name).first():
         return jsonify({"error": "Cannot delete field with matches"}), 400
 
+    ScheduleItem.query.filter_by(event=tournament_url, field=field.name).update({"field": None})
     db.session.delete(field)
     db.session.commit()
     return jsonify({"success": True})

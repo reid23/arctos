@@ -1,45 +1,39 @@
-"""
-Errors as values.
+"""Represent expected failures and absent values explicitly.
 
-for a function that may fail, return Result[type_if_ok, type_if_error].
-Result objects must be one of two subtypes: Ok[type_if_ok], or Err[type_if_err].
-All Result subclasses implement:
-- .unwrap(), which throws an exception if this Result is an Err, or otherwise returns the ok value
-- .expect(msg), which is .unwrap but with a custom error message
-- .is_ok() and .is_err() which just check and return bools
-- .unwrap_err() and .expect_err() which are .unwrap and .expect except the err/ok behavior is flipped
+``Result[T, E]`` contains ``Ok(value)`` or ``Err(error)``. ``Option[T]``
+contains ``Some(value)`` or ``Null()``. Use ``option(value)`` at boundaries
+where Python libraries return ``None`` for absence. Values such as ``0``,
+``False``, empty strings, and empty collections remain present values.
 
-Then there's the .Q() method. This is a shorthand for the common pattern:
-```
-def my_fun_function() -> Result[T, E]:
+Handle variants with pattern matching, transform their values with ``map``
+or ``map_err``, and chain operations with ``and_then``. Check presence or
+success with ``is_some()``, ``is_null()``, ``is_ok()``, or ``is_err()``.
+Converting an Option or Result to a boolean raises ``TypeError``.
 
-    ... # code here
+Use ``unwrap`` and ``expect`` only to assert an invariant: the absent or
+error variant must indicate a programming error. The same rule applies to
+``unwrap_err`` and ``expect_err``. Handle expected absence and failures
+with pattern matching, a fallback, or propagation instead.
 
-    res = function_that_may_fail()
-    actual_result = None
-    match res:
-        case Ok(val):
-            actual_result = val
-        case Err(_):
-            return res # return the error value
+Inside an ``@allow_Q`` function, ``.Q()`` extracts a present or successful
+value and returns early for ``Null`` or ``Err``. Use Option propagation
+only in functions returning Option, and Result propagation only in
+functions returning Result with a compatible error type. Convert an
+Option with ``ok_or`` or ``ok_or_else`` before propagating into a Result::
 
-    ... # function continues
+    @allow_Q
+    def require_count(raw_count: int | None) -> Result[int, str]:
+        count = option(raw_count).ok_or("Count is required").Q()
+        return Ok(count)
 
-```
-Where we simply propogate the error back up the call stack.
-
-
-This file also implements Option, which is like C++ Optional.
-Values of the type Option[T] can either be Some[T] or Null.
-You can then .unwrap an Option[T], which will raise an exception if
-the Option was Null, and return the raw value of type T otherwise.
-.Q() operates the same way as with a Result: if Null().Q() is called,
-return Null(). Otherwise unwrap.
+Python type checkers preserve the decorated function's signature, but
+cannot verify the return values carried by propagation exceptions. Use
+``and_then`` when each step's return type needs static checking.
 """
 
 from abc import ABC, abstractmethod
-from typing import Callable, ParamSpec, TypeVar
 from functools import wraps
+from typing import Any, Callable, NoReturn, overload
 
 
 def option[T](val: T | None) -> "Option[T]":
@@ -64,6 +58,22 @@ class Result[T, E](ABC):
     ``match``-statement destructuring (``Ok(val)`` / ``Err(val)``).
     """
 
+    def __bool__(self) -> bool:
+        """Require an explicit check of the result variant."""
+        raise TypeError("Result has no truth value; use is_ok(), is_err(), or pattern matching")
+
+    @abstractmethod
+    def map[U](self, f: Callable[[T], U]) -> "Result[U, E]":
+        """Transform an Ok value with *f*, leaving an Err value unchanged."""
+
+    @abstractmethod
+    def map_err[F](self, f: Callable[[E], F]) -> "Result[T, F]":
+        """Transform an Err value with *f*, leaving an Ok value unchanged."""
+
+    @abstractmethod
+    def and_then[U](self, f: Callable[[T], "Result[U, E]"]) -> "Result[U, E]":
+        """Call *f* for Ok and return its result; propagate Err without calling *f*."""
+
     @abstractmethod
     def is_ok(self) -> bool:
         """Return ``True`` if this result is an :class:`Ok` variant."""
@@ -74,7 +84,7 @@ class Result[T, E](ABC):
 
     @abstractmethod
     def expect(self, msg: str) -> T:
-        """Unwrap the success value, raising with *msg* if this is an error.
+        """Assert success and return the value, raising if the invariant fails.
 
         Args:
             msg: Message for the ``ValueError`` raised on an :class:`Err`.
@@ -88,7 +98,7 @@ class Result[T, E](ABC):
 
     @abstractmethod
     def expect_err(self, msg: str) -> E:
-        """Unwrap the error value, raising with *msg* if this is a success.
+        """Assert an error and return it, raising if the invariant fails.
 
         Args:
             msg: Message for the ``ValueError`` raised on an :class:`Ok`.
@@ -102,7 +112,7 @@ class Result[T, E](ABC):
 
     @abstractmethod
     def unwrap(self) -> T:
-        """Unwrap the success value, raising if this is an error.
+        """Assert success and return the value, raising if the invariant fails.
 
         Returns:
             The contained success value.
@@ -113,7 +123,7 @@ class Result[T, E](ABC):
 
     @abstractmethod
     def unwrap_err(self) -> E:
-        """Unwrap the error value, raising if this is a success.
+        """Assert an error and return it, raising if the invariant fails.
 
         Returns:
             The contained error value.
@@ -172,9 +182,21 @@ class Option[T](ABC):
     ``std::optional`` in C++ or ``Option`` in Rust/Haskell.
     """
 
+    def __bool__(self) -> bool:
+        """Require an explicit check of the option variant."""
+        raise TypeError("Option has no truth value; use is_some(), is_null(), or pattern matching")
+
+    @abstractmethod
+    def map[U](self, f: Callable[[T], U]) -> "Option[U]":
+        """Transform a Some value with *f*; preserve Null without calling *f*."""
+
+    @abstractmethod
+    def and_then[U](self, f: Callable[[T], "Option[U]"]) -> "Option[U]":
+        """Call *f* for Some and return its option; propagate Null without calling *f*."""
+
     @abstractmethod
     def unwrap(self) -> T:
-        """Return the contained value, raising if this is :class:`Null`.
+        """Assert presence and return the value, raising if the invariant fails.
 
         Returns:
             The contained value.
@@ -196,7 +218,7 @@ class Option[T](ABC):
 
     @abstractmethod
     def expect(self, msg: str) -> T:
-        """Return the contained value, raising with *msg* if this is :class:`Null`.
+        """Assert presence and return the value, raising if the invariant fails.
 
         Args:
             msg: Message for the ``ValueError`` raised on :class:`Null`.
@@ -275,6 +297,14 @@ class Some[T](Option[T]):
         """
         self.val = val
 
+    def map[U](self, f: Callable[[T], U]) -> Option[U]:
+        """Return Some containing the transformed value, including None."""
+        return Some(f(self.val))
+
+    def and_then[U](self, f: Callable[[T], Option[U]]) -> Option[U]:
+        """Return the option produced by *f*."""
+        return f(self.val)
+
     def unwrap(self) -> T:
         """Return the contained value."""
         return self.val
@@ -311,6 +341,14 @@ class Some[T](Option[T]):
 class Null[T](Option[T]):
     """An :class:`Option` variant that represents the absence of a value."""
 
+    def map[U](self, f: Callable[[T], U]) -> Option[U]:
+        """Return Null without calling *f*."""
+        return Null()
+
+    def and_then[U](self, f: Callable[[T], Option[U]]) -> Option[U]:
+        """Return Null without calling *f*."""
+        return Null()
+
     def unwrap(self) -> T:
         """Raise ``ValueError`` — no value is present.
 
@@ -342,13 +380,13 @@ class Null[T](Option[T]):
         """Always returns ``True``."""
         return True
 
-    def Q(self) -> T:
+    def Q(self) -> NoReturn:
         """Propagate this ``Null`` via :class:`PropagationError`.
 
         Raises:
             PropagationError: Always; caught by :func:`allow_Q`.
         """
-        raise PropagationError(Null())
+        raise PropagationError(self)
 
     def ok_or[E](self, err: E) -> "Result[T, E]":
         """Return ``Err(err)``."""
@@ -375,6 +413,18 @@ class Ok[T, E](Result[T, E]):
             val: The success value to hold.
         """
         self.val = val
+
+    def map[U](self, f: Callable[[T], U]) -> Result[U, E]:
+        """Return Ok containing the transformed success value."""
+        return Ok(f(self.val))
+
+    def map_err[F](self, f: Callable[[E], F]) -> Result[T, F]:
+        """Preserve the success value without calling *f*."""
+        return Ok(self.val)
+
+    def and_then[U](self, f: Callable[[T], Result[U, E]]) -> Result[U, E]:
+        """Return the result produced by *f*."""
+        return f(self.val)
 
     def is_ok(self) -> bool:
         """Always returns ``True``."""
@@ -445,6 +495,18 @@ class Err[T, E](Result[T, E]):
         """
         self.val = err
 
+    def map[U](self, f: Callable[[T], U]) -> Result[U, E]:
+        """Preserve the error value without calling *f*."""
+        return Err(self.val)
+
+    def map_err[F](self, f: Callable[[E], F]) -> Result[T, F]:
+        """Return Err containing the transformed error value."""
+        return Err(f(self.val))
+
+    def and_then[U](self, f: Callable[[T], Result[U, E]]) -> Result[U, E]:
+        """Propagate the error value without calling *f*."""
+        return Err(self.val)
+
     def is_ok(self) -> bool:
         """Always returns ``False``."""
         return False
@@ -506,13 +568,13 @@ class Err[T, E](Result[T, E]):
         """Return the contained error value (ignores *default*)."""
         return self.val
 
-    def Q(self):
+    def Q(self) -> NoReturn:
         """Propagate this error via :class:`PropagationError`.
 
         Raises:
             PropagationError: Always; caught by :func:`allow_Q`.
         """
-        raise PropagationError(Err(self.val))
+        raise PropagationError(self)
 
 
 class PropagationError(Exception):
@@ -526,7 +588,7 @@ class PropagationError(Exception):
         val: The :class:`Err` or :class:`Null` value being propagated.
     """
 
-    def __init__(self, val: "Result | Option") -> None:
+    def __init__(self, val: Err[Any, Any] | Null[Any]) -> None:
         """Initialise with the error/null value to propagate.
 
         Args:
@@ -536,14 +598,17 @@ class PropagationError(Exception):
         super().__init__("if you're seeing this it means you forgot the @allow_Q decorator")
 
 
-P = ParamSpec("P")
-T = TypeVar("T")
-E = TypeVar("E")
-U = TypeVar("U")
-R = TypeVar("R", bound=Option[T] | Result[T, E])
+@overload
+def allow_Q[**P, T, E](f: Callable[P, Result[T, E]]) -> Callable[P, Result[T, E]]: ...
 
 
-def allow_Q(f: Callable[P, R]) -> Callable[P, R]:
+@overload
+def allow_Q[**P, T](f: Callable[P, Option[T]]) -> Callable[P, Option[T]]: ...
+
+
+def allow_Q[**P](
+    f: Callable[P, Result[Any, Any] | Option[Any]],
+) -> Callable[P, Result[Any, Any] | Option[Any]]:
     """Decorator that enables the ``.Q()`` short-circuit operator inside *f*.
 
     Wraps *f* so that any :class:`PropagationError` raised by a ``.Q()``
@@ -552,12 +617,14 @@ def allow_Q(f: Callable[P, R]) -> Callable[P, R]:
     operator semantics.
 
     Args:
-        f: The function to wrap.  Its return type must be a :class:`Result` or
-           :class:`Option` subtype so that propagated errors are type-safe.
+        f: The function to wrap. Its return annotation must be Result or
+           Option. Each Q call must propagate that same family; Result
+           errors must also match the function's declared error type.
 
     Returns:
-        A wrapped callable with identical signature that transparently handles
-        ``.Q()`` propagation.
+        A wrapped callable that preserves the parameter and return types.
+        The caller must ensure propagated values match that return type;
+        Python type checkers cannot verify exception-based propagation.
 
     Example::
 
@@ -568,7 +635,7 @@ def allow_Q(f: Callable[P, R]) -> Callable[P, R]:
     """
 
     @wraps(f)
-    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> Result[Any, Any] | Option[Any]:
         try:
             return f(*args, **kwargs)
         except PropagationError as e:

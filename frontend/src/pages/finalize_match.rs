@@ -1,12 +1,26 @@
 use crate::api;
 use crate::Route;
 use dioxus::prelude::*;
+#[cfg(target_arch = "wasm32")]
+use js_sys;
 use std::cell::RefCell;
 use std::rc::Rc;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast as _;
-#[cfg(target_arch = "wasm32")]
-use js_sys;
+
+fn finalization_prerequisites(
+    winner_selected: bool,
+    team1_signed: bool,
+    team2_signed: bool,
+    team1: &str,
+    team2: &str,
+) -> Vec<String> {
+    let mut requirements = Vec::new();
+    if !winner_selected { requirements.push("Select the match winner.".into()); }
+    if !team1_signed { requirements.push(format!("Collect the {team1} captain’s signature.")); }
+    if !team2_signed { requirements.push(format!("Collect the {team2} captain’s signature.")); }
+    requirements
+}
 
 #[component]
 pub fn FinalizeMatch(url: String, match_id: String) -> Element {
@@ -16,13 +30,18 @@ pub fn FinalizeMatch(url: String, match_id: String) -> Element {
         let u = url_for_data.clone();
         let id = match_id_for_data.clone();
         async move {
-            api::finalize_match_data(&u, &id).await.map_err(|e| e.to_string())
+            api::finalize_match_data(&u, &id)
+                .await
+                .map_err(|e| e.to_string())
         }
     });
     let val = data.value();
     let mut match_winner = use_signal(|| None::<String>);
     let mut final_notes = use_signal(String::new);
     let mut submit_error = use_signal(|| None::<String>);
+    let mut submitting = use_signal(|| false);
+    let mut team1_signed = use_signal(|| false);
+    let mut team2_signed = use_signal(|| false);
     let team1_canvas_id = "team1_signature_canvas";
     let team2_canvas_id = "team2_signature_canvas";
     let navigator = use_navigator();
@@ -42,10 +61,14 @@ pub fn FinalizeMatch(url: String, match_id: String) -> Element {
     });
 
     match data_snapshot {
-        Some(Ok(d)) => rsx! {
+        Some(Ok(d)) => {
+            let prerequisites = finalization_prerequisites(match_winner().is_some(), team1_signed(), team2_signed(), &d.match_info.team1_name, &d.match_info.team2_name);
+            let can_submit = prerequisites.is_empty();
+            rsx! {
+            style { {include_str!("live_match_actions.css")} }
             div { class: "row",
                 div { class: "col-12",
-                    h1 { "Finalize Match" }
+                    h1 { "Finalize match" }
                     nav { aria_label: "breadcrumb",
                         ol { class: "breadcrumb",
                             li { class: "breadcrumb-item",
@@ -57,14 +80,20 @@ pub fn FinalizeMatch(url: String, match_id: String) -> Element {
                                 }
                             }
                             li { class: "breadcrumb-item",
-                                Link {
-                                    to: Route::Schedule {
-                                        url: schedule_url.clone(),
-                                        view: String::new(),
-                                        team: String::new(),
-                                        field: String::new(),
-                                    },
-                                    "Schedule"
+                                if d.can_view_schedule {
+                                    Link {
+                                        to: Route::Schedule {
+                                            url: schedule_url.clone(),
+                                            view: String::new(),
+                                            team: String::new(),
+                                            field: String::new(),
+                                        },
+                                        if d.tournament.schedule_published { "Schedule" } else { "Preview schedule" }
+                                    }
+                                } else {
+                                    span { class: "text-muted",
+                                        if d.tournament.schedule_published { "Schedule unavailable" } else { "Schedule not posted" }
+                                    }
                                 }
                             }
                             li { class: "breadcrumb-item active", "Finalize Match" }
@@ -74,66 +103,58 @@ pub fn FinalizeMatch(url: String, match_id: String) -> Element {
             }
 
             div { class: "row",
-                div { class: "col-md-8",
-                    div { class: "card",
-                        div { class: "card-header",
-                            h5 { class: "mb-0", "Points Summary" }
-                        }
-                        div { class: "card-body",
-                            div { class: "table-responsive",
-                                table { class: "table table-sm",
-                                    thead {
-                                        tr {
-                                            th { "Set" }
-                                            th { "Point" }
-                                            th { "Winner" }
-                                            th { "🪨" }
-                                            th { "Rerun?" }
-                                            th { "Notes" }
-                                        }
+                div { class: "col-lg-9 operator-finalize",
+                    section { class: "finalize-points-section", aria_labelledby: "finalize-points-heading",
+                        h2 { id: "finalize-points-heading", class: "h5", "Points" }
+                        div { class: "table-responsive finalize-points-scroll", role: "region", aria_labelledby: "finalize-points-heading", tabindex: "0",
+                            table { class: "table table-sm finalize-points-table",
+                                thead {
+                                    tr {
+                                        th { scope: "col", class: "table-number", "Set" }
+                                        th { scope: "col", class: "table-number", "Point" }
+                                        th { scope: "col", "Winner" }
+                                        th { scope: "col", class: "table-number", "Stones" }
+                                        th { scope: "col", "Rerun" }
                                     }
-                                    tbody {
-                                        for (idx , point) in d.points.iter().enumerate() {
-                                            {
-                                                let stones = d.stones_elapsed_map.get(&point.uuid).copied().unwrap_or(0);
-                                                let notes = d.point_notes_map.get(&point.uuid).cloned().unwrap_or_default();
-                                                rsx! {
-                                                    tr { key: "{point.uuid}",
-                                                        td { "{point.set_number.unwrap_or(1)}" }
-                                                        td { "{idx + 1}" }
-                                                        td {
-                                                            if point.winner.as_deref() == Some("TEAM1") {
-                                                                "{d.match_info.team1_name}"
-                                                            } else if point.winner.as_deref() == Some("TEAM2") {
-                                                                "{d.match_info.team2_name}"
-                                                            } else {
-                                                                "None"
-                                                            }
+                                }
+                                tbody {
+                                    for (idx, point) in d.points.iter().enumerate() {
+                                        {
+                                            let stones = d.stones_elapsed_map.get(&point.uuid).copied().unwrap_or(0);
+                                            let notes = d.point_notes_map.get(&point.uuid).cloned().unwrap_or_default();
+                                            rsx! {
+                                                tr { key: "{point.uuid}",
+                                                    td { class: "table-number", "{point.set_number.unwrap_or(1)}" }
+                                                    td { class: "table-number", "{idx + 1}" }
+                                                    td { class: "finalize-point-winner",
+                                                        if point.winner.as_deref() == Some("TEAM1") {
+                                                            "{d.match_info.team1_name}"
+                                                        } else if point.winner.as_deref() == Some("TEAM2") {
+                                                            "{d.match_info.team2_name}"
+                                                        } else {
+                                                            "None"
                                                         }
-                                                        td { "{stones}" }
-                                                        td {
-                                                            if point.rerolled {
-                                                                span { class: "badge bg-warning", "Rerun" }
-                                                            } else {
-                                                                span { class: "badge bg-success", "Valid" }
-                                                            }
-                                                        }
-                                                        td {
-                                                            if notes.is_empty() {
-                                                                span { class: "text-muted", "—" }
-                                                            } else {
-                                                                for note in notes.iter() {
-                                                                    {
-                                                                        let target_display = note
-                                                                            .player_display
-                                                                            .clone()
-                                                                            .or(note.player_name.clone())
-                                                                            .or(note.target.clone())
-                                                                            .unwrap_or_else(|| "Match".to_string());
-                                                                        rsx! {
-                                                                            div { class: "small text-muted border-start border-3 ps-2 mb-1",
-                                                                                "{target_display}: {note.text.clone().unwrap_or_default()}"
-                                                                            }
+                                                    }
+                                                    td { class: "table-number", "{stones}" }
+                                                    td {
+                                                        if point.rerolled { "Yes" } else { "No" }
+                                                    }
+                                                }
+                                                if !notes.is_empty() {
+                                                    tr { key: "notes-{point.uuid}", class: "finalize-point-notes",
+                                                        td { colspan: "5",
+                                                            span { class: "visually-hidden", "Notes for point {idx + 1}: " }
+                                                            for note in notes.iter() {
+                                                                {
+                                                                    let target_display = note
+                                                                        .player_display
+                                                                        .clone()
+                                                                        .or(note.player_name.clone())
+                                                                        .or(note.target.clone())
+                                                                        .unwrap_or_else(|| "Match".to_string());
+                                                                    rsx! {
+                                                                        p { class: "small text-muted mb-1",
+                                                                            "{target_display}: {note.text.clone().unwrap_or_default()}"
                                                                         }
                                                                     }
                                                                 }
@@ -149,11 +170,9 @@ pub fn FinalizeMatch(url: String, match_id: String) -> Element {
                         }
                     }
 
-                    div { class: "card mt-3",
-                        div { class: "card-header",
-                            h5 { class: "mb-0", "Score by Set" }
-                        }
-                        div { class: "card-body",
+                    section { class: "finalize-score-section mt-3", aria_labelledby: "finalize-score-heading",
+                        h2 { id: "finalize-score-heading", class: "h5", "Score by set" }
+                        div {
                             if d.points.is_empty() {
                                 div { class: "text-muted text-center", "No points yet" }
                             } else {
@@ -205,14 +224,15 @@ pub fn FinalizeMatch(url: String, match_id: String) -> Element {
                         }
                     }
 
-                    div { class: "card mt-4",
-                        div { class: "card-header",
-                            h5 { class: "mb-0", "Match Results" }
+                    div { class: "edit-section mt-4",
+                        div { class: "edit-section-heading",
+                            h2 { class: "h5 mb-0", "Match Results" }
                         }
-                        div { class: "card-body",
+                        div { class: "edit-section-body",
                             form {
                                 onsubmit: move |ev| {
                                     ev.prevent_default();
+                                    if submitting() { return; }
                                     submit_error.set(None);
                                     let winner = match_winner().clone();
                                     if winner.is_none() {
@@ -235,6 +255,7 @@ pub fn FinalizeMatch(url: String, match_id: String) -> Element {
                                     let team1_sig = canvas_data_url(team1_canvas_id);
                                     let team2_sig = canvas_data_url(team2_canvas_id);
                                     let nav = navigator.clone();
+                                    submitting.set(true);
                                     spawn(async move {
                                         let req = crate::types::FinalizeMatchRequest {
                                             match_id,
@@ -243,87 +264,91 @@ pub fn FinalizeMatch(url: String, match_id: String) -> Element {
                                             team1_signature: team1_sig,
                                             team2_signature: team2_sig,
                                         };
-                                        if api::finalize_match(&u, &req).await.is_ok() {
-                                            let _ = nav.push(format!("/{}/schedule", u));
+                                        match api::finalize_match(&u, &req).await {
+                                            Ok(response) if response.ok => { let _ = nav.push(format!("/{}/schedule", u)); }
+                                            Ok(_) => submit_error.set(Some("The match was not finalized. Review the details and try again.".to_string())),
+                                            Err(error) => submit_error.set(Some(format!("The match could not be finalized. {error}"))),
                                         }
+                                        submitting.set(false);
                                     });
                                 },
+                                fieldset { class: "live-match-fields", disabled: submitting(),
                                 div { class: "mb-4",
-                                    h6 { class: "form-label", "Match Winner" }
-                                    div { class: "row",
-                                        div { class: "col-md-6",
-                                            div { class: "form-check form-check-inline",
+                                    h6 { class: "form-label", id: "match-winner-label", "Match winner" }
+                                    div { class: "live-winner-options", role: "radiogroup", aria_labelledby: "match-winner-label",
+                                            label { class: "live-winner-choice", r#for: "winner-team1",
                                                 input {
                                                     class: "form-check-input",
                                                     r#type: "radio",
                                                     name: "match_winner",
                                                     id: "winner-team1",
                                                     value: "TEAM1",
+                                                    checked: match_winner().as_deref() == Some("TEAM1"),
                                                     onchange: move |_| match_winner.set(Some("TEAM1".to_string())),
                                                 }
-                                                label {
-                                                    class: "form-check-label",
-                                                    r#for: "winner-team1",
-                                                    strong { "{d.match_info.team1_name}" }
-                                                }
+                                                strong { "{d.match_info.team1_name}" }
                                             }
-                                        }
-                                        div { class: "col-md-6",
-                                            div { class: "form-check form-check-inline",
+                                            label { class: "live-winner-choice", r#for: "winner-team2",
                                                 input {
                                                     class: "form-check-input",
                                                     r#type: "radio",
                                                     name: "match_winner",
                                                     id: "winner-team2",
                                                     value: "TEAM2",
+                                                    checked: match_winner().as_deref() == Some("TEAM2"),
                                                     onchange: move |_| match_winner.set(Some("TEAM2".to_string())),
                                                 }
-                                                label {
-                                                    class: "form-check-label",
-                                                    r#for: "winner-team2",
-                                                    strong { "{d.match_info.team2_name}" }
-                                                }
+                                                strong { "{d.match_info.team2_name}" }
                                             }
-                                        }
                                     }
                                 }
 
                                 div { class: "row mb-4",
-                                    div { class: "col-md-6",
+                                    div { class: "col-md-6 live-signature-block",
                                         h6 { "{d.match_info.team1_name} Captain Signature" }
                                         div {
-                                            class: "border p-3",
-                                            style: "height: 150px;",
+                                            class: "operator-signature-pad border p-3",
+                                            style: "height: 170px;",
                                             canvas {
                                                 id: "{team1_canvas_id}",
-                                                style: "width: 100%; height: 100%;",
+                                                "data-disabled": "{submitting()}",
+                                                style: "width: 100%; height: 100%; touch-action: none;",
+                                                aria_label: "{d.match_info.team1_name} captain signature: draw with your finger or pointer",
+                                                onpointerup: move |_| team1_signed.set(canvas_signed(team1_canvas_id)),
+                                                onpointerleave: move |_| team1_signed.set(canvas_signed(team1_canvas_id)),
                                             }
                                         }
                                         div { class: "mt-2",
                                             button {
                                                 r#type: "button",
                                                 class: "btn btn-sm btn-outline-secondary",
-                                                onclick: move |_| clear_canvas_by_id(team1_canvas_id),
-                                                "Clear"
+                                                aria_label: "Clear {d.match_info.team1_name} captain signature",
+                                                onclick: move |_| { clear_canvas_by_id(team1_canvas_id); team1_signed.set(false); },
+                                                "Clear signature"
                                             }
                                         }
                                     }
-                                    div { class: "col-md-6",
+                                    div { class: "col-md-6 live-signature-block",
                                         h6 { "{d.match_info.team2_name} Captain Signature" }
                                         div {
-                                            class: "border p-3",
-                                            style: "height: 150px;",
+                                            class: "operator-signature-pad border p-3",
+                                            style: "height: 170px;",
                                             canvas {
                                                 id: "{team2_canvas_id}",
-                                                style: "width: 100%; height: 100%;",
+                                                "data-disabled": "{submitting()}",
+                                                style: "width: 100%; height: 100%; touch-action: none;",
+                                                aria_label: "{d.match_info.team2_name} captain signature: draw with your finger or pointer",
+                                                onpointerup: move |_| team2_signed.set(canvas_signed(team2_canvas_id)),
+                                                onpointerleave: move |_| team2_signed.set(canvas_signed(team2_canvas_id)),
                                             }
                                         }
                                         div { class: "mt-2",
                                             button {
                                                 r#type: "button",
                                                 class: "btn btn-sm btn-outline-secondary",
-                                                onclick: move |_| clear_canvas_by_id(team2_canvas_id),
-                                                "Clear"
+                                                aria_label: "Clear {d.match_info.team2_name} captain signature",
+                                                onclick: move |_| { clear_canvas_by_id(team2_canvas_id); team2_signed.set(false); },
+                                                "Clear signature"
                                             }
                                         }
                                     }
@@ -346,20 +371,34 @@ pub fn FinalizeMatch(url: String, match_id: String) -> Element {
                                 }
 
                                 if let Some(ref err) = submit_error() {
-                                    div { class: "alert alert-warning mb-3", "{err}" }
+                                    div { class: "alert alert-danger mb-3", role: "alert", "{err}" }
                                 }
-                                div { class: "d-grid",
+                                if !can_submit {
+                                    ul { id: "finalize-prerequisites", class: "live-match-prerequisites", role: "status",
+                                        for requirement in prerequisites { li { "{requirement}" } }
+                                    }
+                                } else {
+                                    p { id: "finalize-prerequisites", class: "small text-muted", "Both captains have signed. Confirm to save the final match result." }
+                                }
+                                div { class: "live-match-actions",
                                     button {
                                         r#type: "submit",
                                         class: "btn btn-primary",
-                                        "Finalize Match"
+                                        aria_describedby: "finalize-prerequisites",
+                                        disabled: submitting() || !can_submit,
+                                        if submitting() { "Finalizing match…" } else { "Confirm and finalize match" }
                                     }
+                                    if !submitting() {
+                                        Link { to: Route::RunMatch { url: url.clone(), match_id: match_id.clone() }, class: "btn btn-outline-secondary", "Back to scoring" }
+                                    }
+                                }
                                 }
                             }
                         }
                     }
                 }
             }
+        }
         },
         Some(Err(e)) => rsx! {
             p { class: "text-danger", "{e}" }
@@ -412,12 +451,18 @@ fn setup_signature_canvas_by_id(canvas_id: &str) {
     let ctx_move = ctx.clone();
     let canvas_move = canvas.clone();
     let on_mousedown = Closure::<dyn FnMut(_)>::new(move |e: web_sys::MouseEvent| {
+        if canvas_move.get_attribute("data-disabled").as_deref() == Some("true") {
+            *drawing_move.borrow_mut() = false;
+            return;
+        }
         *drawing_move.borrow_mut() = true;
         let _ = canvas_move.set_attribute("data-signed", "true");
         let rect = canvas_move.get_bounding_client_rect();
         ctx_move.begin_path();
-        ctx_move
-            .move_to(e.client_x() as f64 - rect.left(), e.client_y() as f64 - rect.top());
+        ctx_move.move_to(
+            e.client_x() as f64 - rect.left(),
+            e.client_y() as f64 - rect.top(),
+        );
     });
     canvas
         .add_event_listener_with_callback("mousedown", on_mousedown.as_ref().unchecked_ref())
@@ -428,6 +473,10 @@ fn setup_signature_canvas_by_id(canvas_id: &str) {
     let ctx_move = ctx.clone();
     let canvas_move = canvas.clone();
     let on_mousemove = Closure::<dyn FnMut(_)>::new(move |e: web_sys::MouseEvent| {
+        if canvas_move.get_attribute("data-disabled").as_deref() == Some("true") {
+            *drawing_move.borrow_mut() = false;
+            return;
+        }
         if !*drawing_move.borrow() {
             return;
         }
@@ -459,6 +508,10 @@ fn setup_signature_canvas_by_id(canvas_id: &str) {
     let ctx_move = ctx.clone();
     let canvas_move = canvas.clone();
     let on_touchstart = Closure::<dyn FnMut(_)>::new(move |e: web_sys::TouchEvent| {
+        if canvas_move.get_attribute("data-disabled").as_deref() == Some("true") {
+            *drawing_move.borrow_mut() = false;
+            return;
+        }
         e.prevent_default();
         if let Some(touch) = e.touches().get(0) {
             *drawing_move.borrow_mut() = true;
@@ -480,6 +533,10 @@ fn setup_signature_canvas_by_id(canvas_id: &str) {
     let ctx_move = ctx.clone();
     let canvas_move = canvas.clone();
     let on_touchmove = Closure::<dyn FnMut(_)>::new(move |e: web_sys::TouchEvent| {
+        if canvas_move.get_attribute("data-disabled").as_deref() == Some("true") {
+            *drawing_move.borrow_mut() = false;
+            return;
+        }
         e.prevent_default();
         if !*drawing_move.borrow() {
             return;
@@ -547,17 +604,35 @@ fn canvas_data_url(canvas_id: &str) -> Option<String> {
     canvas.to_data_url().ok()
 }
 
-fn both_canvases_signed(team1_id: &str, team2_id: &str) -> bool {
+fn canvas_signed(id: &str) -> bool {
     let doc = match web_sys::window().and_then(|w| w.document()) {
         Some(d) => d,
         None => return false,
     };
-    let signed = |id: &str| -> bool {
-        doc.get_element_by_id(id)
-            .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
-            .and_then(|el| el.get_attribute("data-signed"))
-            .as_deref()
-            == Some("true")
-    };
-    signed(team1_id) && signed(team2_id)
+    doc.get_element_by_id(id)
+        .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
+        .and_then(|el| el.get_attribute("data-signed"))
+        .as_deref()
+        == Some("true")
+}
+
+fn both_canvases_signed(team1_id: &str, team2_id: &str) -> bool {
+    canvas_signed(team1_id) && canvas_signed(team2_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::finalization_prerequisites;
+
+    #[test]
+    fn result_requires_winner_and_each_named_captain() {
+        assert_eq!(finalization_prerequisites(false, false, false, "Cedar", "River"), [
+            "Select the match winner.",
+            "Collect the Cedar captain’s signature.",
+            "Collect the River captain’s signature.",
+        ]);
+        assert_eq!(finalization_prerequisites(true, true, false, "Cedar", "River"), ["Collect the River captain’s signature."]);
+        assert!(finalization_prerequisites(true, true, true, "Cedar", "River").is_empty());
+        assert_eq!(finalization_prerequisites(true, false, true, "Cedar", "River"), ["Collect the Cedar captain’s signature."]);
+    }
 }

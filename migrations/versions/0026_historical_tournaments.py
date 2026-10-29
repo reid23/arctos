@@ -15,8 +15,8 @@ Historical rosters also use a new ``INVITED`` player registration status.
 ``player_registrations.status`` is a plain string column with no CHECK
 constraint, so the new value needs no schema change.
 
-Revision ID: 0023_historical_tournaments
-Revises: 0022_oauth_provider
+Revision ID: 0026_historical_tournaments
+Revises: generic_schedule_items
 Create Date: 2026-10-20
 """
 
@@ -28,8 +28,8 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision: str = "0023_historical_tournaments"
-down_revision: Union[str, Sequence[str], None] = "0022_oauth_provider"
+revision: str = "0026_historical_tournaments"
+down_revision: Union[str, Sequence[str], None] = "generic_schedule_items"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

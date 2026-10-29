@@ -1,134 +1,172 @@
-# `frontend/` - the Dioxus SPA
+# Rust frontend
 
-A single-page application written in Rust using
-[Dioxus](https://dioxuslabs.com/) and compiled to WebAssembly. nginx
-serves the built bundle at `/`; the SPA calls the Flask backend at
-`/_api/...`.
+Arctos is a [Dioxus](https://dioxuslabs.com/) single-page application compiled to
+WebAssembly. The browser calls the Flask API under `/_api/`. In production,
+nginx serves the frontend and proxies API requests; see the
+[deployment guide](../docs/DEPLOY.md).
 
-## Layout
+## Run locally
 
-The crate is a standard Dioxus + WASM project (`Cargo.toml`,
-`Dioxus.toml`, `rust-toolchain.toml`, `index.html` shell). All
-application code lives under `src/`:
-
-- `main.rs` - router definition and bootstrap.
-- `api.rs` - reqwest-based wrapper for every `/_api/` endpoint.
-- `types.rs` - serde structs mirroring API responses.
-- `pages/` - one file per route (mirrors the SPA's URL structure).
-- `components/` - shared widget library.
-- `time_format.rs`, `stones_filter.rs` - smaller cross-cutting modules;
-  see each file's top comment.
-
-## Running
-
-In dev:
+From the repository root:
 
 ```bash
-cd frontend
-dx serve
+uv sync --group test
+just setup-frontend
+just demo
 ```
 
-`dx serve` runs the SPA on `http://127.0.0.1:8080` with hot reload. By
-default it talks to the Flask backend on `http://127.0.0.1:5006` (see
-`api.rs::base_url`); set `ARCTOS_CORS_DEV=1` and start Flask on `5006`
-so credentialed cross-origin requests work.
+In another terminal, run `just frontend`, then open `http://127.0.0.1:8080`.
+Use `just dev` instead of `just demo` for your configured local database.
+The [root README](../README.md#running-the-app-locally) explains demo accounts,
+snapshot copies, migrations, and phone access.
 
-For production:
+`Dioxus.toml` proxies `/_api/`, `/api/`, and `/static/` to Flask on port 5006.
+Keep the browser and API on this shared origin for normal development.
+`ARCTOS_API_BASE` is an optional **build-time** override for an intentionally
+separate backend; it also requires compatible CORS and cookie settings.
+
+For a production bundle:
 
 ```bash
 cd frontend
 dx bundle --release
 ```
 
-Output ends up in `dist/`. Copy `dist/` to wherever your reverse proxy
-serves the SPA from.
+Deploy the output path reported by Dioxus. The project does not need a Node
+build or a CSS/font CDN. Bundled dependencies and licenses are in
+[`assets/vendor/`](assets/vendor/README.md).
 
-## Routing
+## Code map
 
-Routes are declared in [`src/main.rs`](src/main.rs) as a single
-`Route` enum with `#[route("...")]` attributes. A representative slice:
+| File or directory | Responsibility |
+| --- | --- |
+| `src/main.rs` | Route declarations and application startup |
+| `src/api.rs` | HTTP requests, credentials, and response errors |
+| `src/types.rs` | Shared API response and request types |
+| `src/auth.rs` | Shared account loading and retry state |
+| `src/pages/` | Route views and their styles |
+| `src/components/` | Reusable controls, headers, tables, dialogs, and image editors |
+| `src/theme.css` | Semantic colors, Bootstrap mappings, navigation, and common controls |
+| `src/appearance.rs` | Theme/mode preferences and browser listeners |
+| `src/viewport.rs` | Measured header and available viewport height |
+| `src/time_format.rs` | Display formatting for dates and timestamps |
+| `src/time_sync.rs`, `src/pages/stones.rs` | Clock synchronization and playback counter logic |
 
-```rust
-#[route("/")]                          Index {}
-#[route("/login")]                     Login {}
-#[route("/leagues/:league_url")]       LeagueHome { league_url: String }
-#[route("/:url")]                      TournamentHome { url: String }
-#[route("/:url/schedule")]             Schedule { url: String }
-#[route("/:url/manage")]               Manage { url: String }
-#[route("/:url/run-match")]            RunMatch { url: String }
-#[route("/:url/finalize-match")]       FinalizeMatch { url: String }
+## Routes and data
+
+Use the `Route` enum in `src/main.rs` as the source of truth. Some routes have
+query variants for filters or sections; preserve those parameters and browser
+Back/Forward behavior when adding navigation. Event sections use real links,
+with `aria-current="page"` on the current destination.
+
+League events register through their league. A direct event registration URL
+redirects to the league registration page before displaying a form. The
+backend's `can_view_schedule` flag controls schedule access. The tab remains
+named **Schedule**; it is disabled without access, and authorized organizers
+can open an unpublished schedule. Editing is a separate route.
+
+Pages use functions in `src/api.rs` rather than constructing requests directly.
+The wrapper includes session credentials. Update the matching Rust type when a
+backend response changes. Keep authentication failure distinct from a temporary
+account-service failure: `auth::use_account()` exposes that distinction and
+Layout provides the shared retry notice.
+
+## UI conventions
+
+The normal app wrapper owns the theme through `data-palette` and
+`data-bs-theme`. California Jugger, Neutral, and Monokai each support Light, Dark,
+and System mode. Preferences are local to the browser and synchronize across
+its tabs. OBS and fixed-size output routes keep their own presentation.
+
+Use semantic color variables rather than hardcoded brand colors:
+
+- `--ui-bg`, `--ui-surface`, and `--ui-border` for containers.
+- `--ui-text` and `--ui-muted` for copy.
+- `--ui-link` for links and focus indicators.
+- `--ui-accent` with `--ui-accent-contrast` for filled actions and selected states.
+- `--ui-primary-*` overrides for primary buttons when they need a different fill
+  from other indicators, as in Monokai Dark.
+- Status tokens for success, warning, and error states.
+
+Keep primary actions visible, give icon buttons accessible names, and use
+44px touch targets. Use ordinary links for navigation and buttons for actions.
+More and Organize are disclosures with normal link tab order; Appearance is a
+settings dialog. Only the top-level Events, Leagues, Players, Teams, and Stones
+introductions can be collapsed. The current page's Appearance setting restores
+its introduction. Detail headers remain visible.
+
+Use flat `edit-section` groups for forms and native `details` for secondary
+settings. Label each input and associate hints/errors with it. Keep drafts
+mounted during saves and errors. Explain disabled actions near the control,
+and distinguish a validation error from a failed service request.
+
+Historical records use native tables with visible column headings and a named,
+focusable scroll container on narrow screens. Compact dates, numbers, and
+status cells use the shared table classes; long names and notes must still wrap.
+Do not apply global no-wrap rules to every cell.
+
+Use `components::Modal` for blocking dialogs. Supply a unique ID and visible
+labelled heading, an appropriate initial focus target, and a return-focus target
+when the opener can disappear. Pending writes must guard their handlers and
+set `dismissible: false`. Use `dismiss_on_backdrop: false` when a background tap
+should not dismiss an editor. Docked schedule editors and anchored menus are
+separate patterns, not dialogs.
+
+`viewport.rs` measures the normal header and unzoomed visual viewport, with
+listener cleanup on unmount. CSS fallbacks and safe-area insets keep dialogs
+scrollable in short space. Do not disable browser zoom. Actual virtual keyboard
+and Safari behavior still require device checks.
+
+## Profiles and images
+
+Profiles show a 3:1 cover, overlapping avatar, identity, and URL-based sections.
+Changing sections keeps mounted injury drafts and roster expansion state;
+server permissions determine which records are available. Past-event counts
+represent confirmed registration history in published events, not verified
+attendance.
+
+Profile editing stages text, avatar, and cover changes locally. Save sends one
+multipart request; failed saves retain the draft. Preview renders Markdown
+through the shared backend sanitizer and shows escaped text while formatting is
+unavailable. Player phone numbers are excluded from the public preview.
+
+Image editors support drag/tap positioning, arrow keys, Zoom, and Reset position.
+Reset centers the pan without changing zoom. Profile images save with the
+profile; tournament and league banner controls save independently in Settings.
+The settings form waits for a pending image edit to be saved or cancelled.
+
+The server validates still JPEG, PNG, and WebP uploads, limits file size and
+pixel dimensions, and removes metadata. Files live under `static/uploads`;
+models store relative paths. See [migration and storage notes](../migrations/README.md#profile-and-event-banners)
+before deploying against an existing database.
+
+## Specialist tools
+
+Keep bracket and schedule geometry in their dedicated modules/stylesheets.
+Do not alter saved coordinates or dependency semantics for a visual change.
+The Stones counter uses the synchronized 1.5-second beat grid. Pause retains
+its count, Reset stops playback and clears it, and a sound preview does not
+advance it. Calibration cancellation restores the saved timing snapshot.
+
+`manage_footage.rs` lists, filters, opens, and removes footage records.
+The match page plays linked footage and seeks to recorded points. Upload/link
+endpoints are implemented in `app/routes/tournaments/footage.py`; do not assume
+that every API capability has a management-page button.
+
+## Checks and troubleshooting
+
+Run `just frontend-test` for host-side Rust tests. Check the browser target with:
+
+```bash
+cd frontend
+cargo check --locked --target wasm32-unknown-unknown
 ```
 
-Note the order - the catch-all `/:url` for tournaments comes after all
-the more specific paths. Adding a new top-level page means adding a
-new route entry and a matching file in `src/pages/`.
+See [TESTING.md](../TESTING.md#mobile-browser-verification) for browser checks
+and device coverage limits. Choose checks for the changed behavior instead of
+repeating every browser suite after a cosmetic edit.
 
-## Talking to the backend
-
-[`src/api.rs`](src/api.rs) wraps `reqwest` with credentials and base
-URL handling. There's one public `pub async fn` per backend endpoint
-(e.g. `login`, `tournaments`, `start_match`, `finalize_match`,
-`update_tournament_settings`, ...). Pages call them directly:
-
-```rust
-use crate::api;
-
-let user = api::login(&username, &password).await?;
-let detail = api::tournament_detail(&tournament_url).await?;
-```
-
-Every call goes through the `with_credentials` wrapper, which on
-`wasm32` calls `fetch_credentials_include()` so the session cookie is
-sent.
-
-Two important details:
-
-- **Base URL.** In `cfg!(debug_assertions)` builds the SPA hard-codes
-  `http://127.0.0.1:5006`. In release builds it reads
-  `window.location.origin` so it talks to the same host that served
-  the SPA.
-- **Credentials.** Without `fetch_credentials_include()`, all `/_api/`
-  calls would 401.
-
-## Types
-
-`src/types.rs` holds serde structs that mirror Flask's JSON responses.
-When you add or change a backend response shape, update the matching
-struct here. Shapes only used in one page can live in that page's file.
-
-## Footage
-
-Tournament organizers attach match footage via the Manage Footage page
-(`src/pages/manage_footage.rs`) and the backend footage API
-(`app/routes/tournaments/footage.py`): either a YouTube link or a chunked
-file upload that the server pushes to YouTube. Jump-to-point uses
-`camera_timepoints` on the match page iframe player.
-
-## Conventions
-
-- One file per page in `src/pages/` (matches the route enum).
-- Reusable widgets go in `src/components/`.
-- API calls go through `src/api.rs`, not direct `reqwest` calls in pages.
-- Format with `cargo fmt` before committing.
-- The Rust toolchain is pinned in `rust-toolchain.toml` (channel `stable`).
-
-## Testing
-
-Backend: `just test` / `just coverage-check`.
-
-Frontend: Pure Rust unit tests (time sync, filters, display helpers,
-…) run on the host target with the `just frontend-test` recipe.
-
-Browser/wasm stuff still has to be done manually with `dx serve`.
-
-## When the SPA can't reach the backend
-
-Common gotchas:
-
-1. **CORS.** Set `ARCTOS_CORS_DEV=1` in `.env` *and* restart Flask. The
-   browser console will show a CORS error before the request lands.
-2. **Cookies blocked.** With `SameSite=None` the browser requires
-   `Secure`; some browsers refuse `Secure` cookies over plain HTTP from
-   non-localhost origins. Run on `127.0.0.1` / `localhost` in dev.
-3. **Wrong base URL.** If the SPA is hitting a stale port, rebuild -
-   the URL is baked in at compile time for dev builds.
+If requests fail, confirm Flask is listening on `127.0.0.1:5006` and that the
+browser requests `/_api/tournaments` through the frontend origin. Restart
+`dx serve` after proxy changes. For the normal proxy, leave `ARCTOS_CORS_DEV`
+unset or `0`; an HTTP LAN address cannot use secure cross-origin cookies.

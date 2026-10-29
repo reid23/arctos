@@ -1,4 +1,5 @@
 use crate::api;
+use crate::components::ToolPageHeader;
 use crate::types::HistoricalRosterResponse;
 use crate::Route;
 use dioxus::prelude::*;
@@ -82,22 +83,15 @@ pub fn HistoricalRoster(url: String, team_id: String) -> Element {
     let invited_count = data.players.len() - confirmed_count;
 
     rsx! {
-        div { class: "row",
-            div { class: "col-12",
-                h1 { "{data.team_name} Roster" }
-                nav { aria_label: "breadcrumb",
-                    ol { class: "breadcrumb",
-                        li { class: "breadcrumb-item", Link { to: Route::TournamentHome { url: url.clone() }, "{data.tournament.name}" } }
-                        li { class: "breadcrumb-item active", "{data.team_name} Roster" }
-                    }
-                }
-            }
+        ToolPageHeader {
+            title: format!("{} roster", data.team_name),
+            description: Some(format!("{confirmed_count} confirmed{}", if invited_count > 0 { format!(", {invited_count} invited") } else { String::new() })),
         }
         div { class: "row g-4",
             div { class: "col-lg-5",
-                div { class: "card",
-                    div { class: "card-header", h5 { class: "mb-0", "Invite a player" } }
-                    div { class: "card-body",
+                div { class: "edit-section",
+                    div { class: "edit-section-heading", h2 { class: "h5 mb-0", "Invite a player" } }
+                    div { class: "edit-section-body",
                         p { class: "small text-muted",
                             "Players appear on the roster once they accept the invitation from their Arctos home page."
                         }
@@ -168,18 +162,18 @@ pub fn HistoricalRoster(url: String, team_id: String) -> Element {
                 }
             }
             div { class: "col-lg-7",
-                div { class: "card",
-                    div { class: "card-header d-flex justify-content-between align-items-center",
-                        h5 { class: "mb-0", "Roster ({confirmed_count})" }
+                div { class: "edit-section",
+                    div { class: "edit-section-heading d-flex justify-content-between align-items-center",
+                        h2 { class: "h5 mb-0", "Roster ({confirmed_count})" }
                         if invited_count > 0 {
                             span { class: "small text-muted", "{invited_count} invited" }
                         }
                     }
                     if data.players.is_empty() {
-                        div { class: "card-body text-muted", "No players yet." }
+                        div { class: "edit-section-body text-muted", "No players yet." }
                     } else {
                         div { class: "table-responsive",
-                            table { class: "table table-striped align-middle mb-0",
+                            table { class: "table roster-table align-middle mb-0",
                                 thead {
                                     tr {
                                         th { "Player" }
@@ -208,31 +202,29 @@ pub fn HistoricalRoster(url: String, team_id: String) -> Element {
                                             };
                                             rsx! {
                                                 tr { key: "{player.player_id}",
-                                                    td {
-                                                        div { class: "d-flex align-items-center",
-                                                            div { class: "flex-shrink-0 me-2",
-                                                                if let Some(photo) = &player.profile_photo {
-                                                                    img { src: "{backend}/static/{photo}", alt: "", class: "rounded-circle", style: "width: 32px; height: 32px; object-fit: cover;" }
-                                                                } else {
-                                                                    div { class: "d-flex align-items-center justify-content-center bg-secondary rounded-circle", style: "width: 32px; height: 32px;",
-                                                                        i { class: "fas fa-user text-white" }
-                                                                    }
+                                                    td { class: "table-copy", "data-label": "Player",
+                                                        div { class: "roster-identity",
+                                                            if let Some(photo) = &player.profile_photo {
+                                                                img { src: "{backend}/static/{photo}", alt: "", class: "event-roster-avatar" }
+                                                            } else {
+                                                                span { class: "event-roster-avatar event-roster-avatar-placeholder", aria_hidden: "true",
+                                                                    i { class: "fas fa-user" }
                                                                 }
                                                             }
-                                                            Link { to: Route::PlayerProfilePage { id: player.player_id.clone() }, "{player.player_name}" }
+                                                            Link { to: Route::PlayerProfilePage { id: player.player_id.clone() }, class: "roster-name", "{player.player_name}" }
                                                         }
                                                     }
-                                                    td { "{jersey}" }
-                                                    td {
+                                                    td { class: "table-nowrap", "data-label": "Jersey", "{jersey}" }
+                                                    td { class: "table-nowrap", "data-label": "Status",
                                                         if player.status == "CONFIRMED" {
-                                                            span { class: "badge bg-success", "Confirmed" }
+                                                            span { class: "badge arctos-badge-success", "Confirmed" }
                                                         } else if player.status == "REQUESTED" {
-                                                            span { class: "badge bg-info text-dark", "Requested" }
+                                                            span { class: "badge arctos-badge-warning", "Requested" }
                                                         } else {
-                                                            span { class: "badge bg-warning text-dark", "Invited" }
+                                                            span { class: "badge arctos-badge-neutral", "Invited" }
                                                         }
                                                     }
-                                                    td { class: "text-end",
+                                                    td { class: "text-end table-nowrap", "data-label": "Actions",
                                                         if player.status == "REQUESTED" {
                                                             button {
                                                                 class: "btn btn-sm btn-success me-1",

@@ -55,6 +55,90 @@ def test_start_match_post_starts_match(app, client, tournament, head_ref_player,
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize("field_limit", [None, 0])
+def test_start_match_ignores_unset_team_size_limits(
+    app, client, tournament, head_ref_player, seeded_teams, field_limit
+):
+    """An unset or zero on-field cap does not reject a lineup."""
+    with app.app_context():
+        t = db.session.merge(tournament)
+        ref = db.session.merge(head_ref_player)
+        cfg = t.registrable_config
+        cfg.max_team_size_field = field_limit
+        cfg.max_team_size_roster = field_limit
+        for index in range(8):
+            db.session.add(Player(id=f"lineup{index}", name=f"Lineup {index}", pw_hash="h"))
+        m = Match(
+            name="Unlimited",
+            event=t.url,
+            schedule_type="SAFE",
+            set_type="SETS",
+            status=MatchStatus.READY_TO_START,
+            nominal_length=60,
+            field="Field 1",
+            team1="team1",
+            team2="team2",
+        )
+        db.session.add(m)
+        db.session.commit()
+        tournament_url = t.url
+        match_id = m.uuid
+        login_as(client, ref)
+
+    resp = client.post(
+        f"/_api/{tournament_url}/start-match",
+        data={
+            "match_id": match_id,
+            "team1_players": ",".join(f"lineup{index}" for index in range(8)),
+            "team2_players": "",
+        },
+    )
+    assert resp.status_code == 200, resp.get_json()
+
+    with app.app_context():
+        started = Match.query.get(match_id)
+        assert started.status == MatchStatus.IN_PROGRESS
+        assert get_match_player_ids(started, WinnerSide.TEAM1) == [f"lineup{index}" for index in range(8)]
+
+
+@pytest.mark.integration
+def test_start_match_enforces_positive_field_size(app, client, tournament, head_ref_player, seeded_teams):
+    with app.app_context():
+        t = db.session.merge(tournament)
+        ref = db.session.merge(head_ref_player)
+        t.registrable_config.max_team_size_field = 2
+        for index in range(3):
+            db.session.add(Player(id=f"capped{index}", name=f"Capped {index}", pw_hash="h"))
+        m = Match(
+            name="Capped",
+            event=t.url,
+            schedule_type="SAFE",
+            set_type="SETS",
+            status=MatchStatus.READY_TO_START,
+            nominal_length=60,
+            field="Field 1",
+            team1="team1",
+            team2="team2",
+        )
+        db.session.add(m)
+        db.session.commit()
+        tournament_url = t.url
+        match_id = m.uuid
+        login_as(client, ref)
+
+    resp = client.post(
+        f"/_api/{tournament_url}/start-match",
+        data={
+            "match_id": match_id,
+            "team1_players": "capped0,capped1,capped2",
+            "team2_players": "",
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "Too many players selected for a team"
+
+
+@pytest.mark.integration
 def test_start_match_post_rejects_overlap(app, client, tournament, head_ref_player):
     """start-match rejects a request when a player appears on both rosters."""
     with app.app_context():

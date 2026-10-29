@@ -970,6 +970,7 @@ def update_stones(tournament_url):
         current_user.id,
         match_id=match_id,
         stones_remaining=stones_remaining,
+        correction=payload.get("correction"),
     )
     return json_from_result(res, ok_to_payload=lambda d: d)
 

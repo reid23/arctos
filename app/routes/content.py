@@ -22,7 +22,6 @@ content routes keeps the URL surface stable.
 
 from __future__ import annotations
 
-import hashlib
 import os
 import re
 import time
@@ -38,7 +37,8 @@ from app.utils.decorators import check_tournament_organizer
 from app.serializers.league_serializer import require_league
 from app.services.permission_service import PermissionService
 from app.utils.helpers import get_registrable_config
-from models import Tournament, db
+from app.utils.settings_save import SettingsSaveError, persist_settings, read_waiver
+from models import Tournament
 
 bp = Blueprint("content", __name__, url_prefix="/_api")
 
@@ -190,37 +190,12 @@ def tournament_upload_waiver(tournament_url):
     if not cfg:
         return jsonify({"error": "Registration is not configured for this event"}), 400
 
-    f = request.files.get("waiver")
-    if not f or not f.filename:
-        return jsonify({"error": "No file (field name 'waiver')"}), 400
-
-    data = f.read()
-    if not data:
-        return jsonify({"error": "Empty file"}), 400
-
-    sha256_hex = hashlib.sha256(data).hexdigest()
-
-    orig = f.filename or "waiver.pdf"
-    base_name = os.path.basename(orig)
-    safe_slug = re.sub(r"[^a-zA-Z0-9._-]+", "_", base_name)[:120] or "waiver.pdf"
-
-    upload_dir = os.path.join(current_app.root_path, "..", "static", "uploads", "waivers", tournament_url)
-    os.makedirs(upload_dir, exist_ok=True)
-
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    fname = f"{stamp}_{safe_slug}"
-    abs_path = os.path.join(upload_dir, fname)
     try:
-        with open(abs_path, "wb") as out:
-            out.write(data)
-    except OSError as e:
-        return jsonify({"error": f"Could not save file: {e}"}), 500
-
-    rel_path = f"uploads/waivers/{tournament_url}/{fname}"
-    cfg.waiver_filepath = rel_path
-    cfg.waiver_sha256 = sha256_hex
-    db.session.commit()
-    return jsonify({"success": True, "waiver_filepath": rel_path, "waiver_sha256": sha256_hex})
+        upload = read_waiver(required=True)
+        persist_settings(tournament, {}, cfg, {}, upload, "tournament", tournament_url)
+    except SettingsSaveError as error:
+        return jsonify({"error": str(error)}), error.status
+    return jsonify({"success": True, "waiver_filepath": cfg.waiver_filepath, "waiver_sha256": cfg.waiver_sha256})
 
 
 @bp.route("/leagues/<league_url>/upload-waiver", methods=["POST"])
@@ -237,41 +212,9 @@ def league_upload_waiver_api(league_url):
     if not rc:
         return jsonify({"error": "Registration is not configured"}), 400
 
-    f = request.files.get("waiver")
-    if not f or not f.filename:
-        return jsonify({"error": "No file (field name 'waiver')"}), 400
-
-    data = f.read()
-    if not data:
-        return jsonify({"error": "Empty file"}), 400
-
-    sha256_hex = hashlib.sha256(data).hexdigest()
-
-    base_name = os.path.basename(f.filename or "waiver.pdf")
-    safe_slug = re.sub(r"[^a-zA-Z0-9._-]+", "_", base_name)[:120] or "waiver.pdf"
-
-    upload_dir = os.path.join(
-        current_app.root_path,
-        "..",
-        "static",
-        "uploads",
-        "waivers",
-        "leagues",
-        league_url,
-    )
-    os.makedirs(upload_dir, exist_ok=True)
-
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    fname = f"{stamp}_{safe_slug}"
-    abs_path = os.path.join(upload_dir, fname)
     try:
-        with open(abs_path, "wb") as out:
-            out.write(data)
-    except OSError as e:
-        return jsonify({"error": f"Could not save file: {e}"}), 500
-
-    rel_path = f"uploads/waivers/leagues/{league_url}/{fname}"
-    rc.waiver_filepath = rel_path
-    rc.waiver_sha256 = sha256_hex
-    db.session.commit()
-    return jsonify({"success": True, "waiver_filepath": rel_path, "waiver_sha256": sha256_hex})
+        upload = read_waiver(required=True)
+        persist_settings(league, {}, rc, {}, upload, "league", league_url)
+    except SettingsSaveError as error:
+        return jsonify({"error": str(error)}), error.status
+    return jsonify({"success": True, "waiver_filepath": rc.waiver_filepath, "waiver_sha256": rc.waiver_sha256})

@@ -1,19 +1,8 @@
-use crate::api;
-use crate::url_slug::{is_valid_url_slug, URL_SLUG_ALLOWED_HINT};
 use crate::Route;
+use crate::api;
+use crate::components::ToolPageHeader;
+use crate::url_slug::{URL_SLUG_ALLOWED_HINT, is_valid_url_slug};
 use dioxus::prelude::*;
-
-fn slug_from_name(name: &str) -> String {
-    let mut slug = String::new();
-    for character in name.trim().to_lowercase().chars() {
-        if character.is_ascii_alphanumeric() {
-            slug.push(character);
-        } else if !slug.ends_with('-') && !slug.is_empty() {
-            slug.push('-');
-        }
-    }
-    slug.trim_end_matches('-').to_string()
-}
 
 #[derive(Clone, PartialEq)]
 struct TeamDraft {
@@ -27,31 +16,69 @@ pub fn NewHistoricalTournament() -> Element {
     let navigator = use_navigator();
     let mut name = use_signal(String::new);
     let mut url_slug = use_signal(String::new);
-    let mut slug_edited = use_signal(|| false);
     let mut location = use_signal(String::new);
     let mut start_date = use_signal(String::new);
     let mut end_date = use_signal(String::new);
     let mut next_team_id = use_signal(|| 1u32);
-    let mut teams = use_signal(|| vec![TeamDraft { id: 0, name: String::new(), shortname: String::new() }]);
+    let mut teams = use_signal(|| {
+        vec![TeamDraft {
+            id: 0,
+            name: String::new(),
+            shortname: String::new(),
+        }]
+    });
     let mut error = use_signal(|| None::<String>);
     let mut submitting = use_signal(|| false);
 
-    let team_count = teams.read().iter().filter(|team| !team.name.trim().is_empty()).count();
+    let team_count = teams
+        .read()
+        .iter()
+        .filter(|team| !team.name.trim().is_empty())
+        .count();
+    let user = crate::auth::use_account();
 
-    rsx! {
-        div { class: "row justify-content-center",
-            div { class: "col-md-8",
-                div { class: "card",
-                    div { class: "card-header",
-                        h3 { class: "mb-0",
-                            i { class: "fas fa-history me-2 text-secondary" }
-                            "Record a Past Tournament"
+    if user.read().is_none() {
+        return rsx! { div { class: "loading-state", role: "status", "Checking your account…" } };
+    }
+    if matches!(
+        user.read().as_ref(),
+        Some(Err(api::AccountError::Unauthenticated))
+    ) {
+        return rsx! {
+            div { class: "row justify-content-center form-page",
+                div { class: "col-12 ordinary-form-rail",
+                    div { class: "edit-section",
+                        div { class: "edit-section-body",
+                            ToolPageHeader {
+                                title: "Log past Event", standalone: true,
+                                back: Some((Route::Index {}, "Back to Events".into())),
+                            }
+                            p { "Log in to record a tournament that already happened." }
+                            a { class: "btn btn-primary", href: "/login?next=/new-historical-tournament", "Log in to continue" }
                         }
                     }
-                    div { class: "card-body",
-                        p { class: "text-muted",
-                            "Enter where and when it happened and who attended. You'll enter matches and scores on the next page. The record stays hidden until you publish it."
-                        }
+                }
+            }
+        };
+    }
+    if matches!(
+        user.read().as_ref(),
+        Some(Err(api::AccountError::Unavailable))
+    ) {
+        return rsx! {};
+    }
+
+    rsx! {
+        div { class: "row justify-content-center form-page",
+            div { class: "col-12 ordinary-form-rail",
+                div { class: "edit-section",
+                    ToolPageHeader {
+                        title: "Log past Event",
+                        standalone: true,
+                        back: Some((Route::Index {}, "Back to Events".into())),
+                        description: "Enter where and when it happened and who attended. You'll enter matches and scores on the next page. The record stays hidden until you publish it.",
+                    }
+                    div { class: "edit-section-body",
                         if let Some(ref err) = error() {
                             div { class: "alert alert-danger mb-3", "{err}" }
                         }
@@ -125,13 +152,7 @@ pub fn NewHistoricalTournament() -> Element {
                                     required: true,
                                     autofocus: true,
                                     value: "{name}",
-                                    oninput: move |ev| {
-                                        let value = ev.value();
-                                        if !slug_edited() {
-                                            url_slug.set(slug_from_name(&value));
-                                        }
-                                        name.set(value);
-                                    },
+                                    oninput: move |ev| name.set(ev.value()),
                                 }
                             }
                             div { class: "mb-3",
@@ -144,10 +165,7 @@ pub fn NewHistoricalTournament() -> Element {
                                     pattern: r"[A-Za-z0-9\.\_\~\-]+",
                                     title: URL_SLUG_ALLOWED_HINT,
                                     value: "{url_slug}",
-                                    oninput: move |ev| {
-                                        slug_edited.set(true);
-                                        url_slug.set(ev.value());
-                                    },
+                                    oninput: move |ev| url_slug.set(ev.value()),
                                 }
                                 div { class: "form-text", "Used in the address, e.g. /{url_slug}. {URL_SLUG_ALLOWED_HINT}" }
                             }
@@ -157,7 +175,7 @@ pub fn NewHistoricalTournament() -> Element {
                                     r#type: "text",
                                     class: "form-control",
                                     id: "historical-location",
-                                    placeholder: "e.g. Riverside Park, Berlin",
+                                    placeholder: "e.g. Hearst North Field, Berkeley, CA",
                                     value: "{location}",
                                     oninput: move |ev| location.set(ev.value()),
                                 }
