@@ -44,9 +44,9 @@ class SideComp(db.Model):
             Applies to every type except chain/breaking.
         track_chain_losses: :attr:`track_losses` for chains in chain/breaking.
         track_break_losses: :attr:`track_losses` for breakers in chain/breaking.
-        track_matchups: When ``True`` (only with :attr:`track_losses`), results
-            are entered as a bout between two people. A win for one is a loss
-            for the other.
+        track_matchups: When ``True``, results are entered as a bout between
+            two people. A win for one is a loss for the other. Requires loss
+            tracking: :attr:`track_losses`, or either chain/breaker flag.
         allowed_weapons: JSON-encoded list of :class:`Pompfen` member names
             that players may select when registering. Defaults to all.
         only_show_top_n_results: When ``None``, public standings show all
@@ -126,6 +126,12 @@ class SideComp(db.Model):
             if weapon_value == Pompfen.CHAIN.value:
                 return bool(self.track_chain_losses)
             return bool(self.track_break_losses)
+        return bool(self.track_losses)
+
+    def loss_tracking_enabled(self) -> bool:
+        """Return whether this competition records losses for anyone."""
+        if self.type == SideCompType.CHAIN_BREAKING:
+            return bool(self.track_chain_losses or self.track_break_losses)
         return bool(self.track_losses)
 
 

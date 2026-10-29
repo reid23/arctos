@@ -154,11 +154,15 @@ impl MatchSide {
 struct MatchupParty {
     entry_number: i32,
     display_name: String,
+    profile_photo: Option<String>,
+    team_profile_photo: Option<String>,
+    team_known: bool,
+    weapon: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 struct MatchupEvent {
-    winner: MatchupParty,
+    winner: Option<MatchupParty>,
     loser: Option<MatchupParty>,
     result_uuids: Vec<String>,
     flagged: bool,
@@ -168,6 +172,10 @@ fn party_from_player(player: &SideCompEnterRosterPlayer) -> MatchupParty {
     MatchupParty {
         entry_number: player.entry_number,
         display_name: player.display_name.clone(),
+        profile_photo: player.profile_photo.clone(),
+        team_profile_photo: player.team_profile_photo.clone(),
+        team_known: player.team_id.is_some() || player.team_shortname.is_some() || player.team_profile_photo.is_some(),
+        weapon: player.weapon.clone().filter(|weapon| !weapon.is_empty()),
     }
 }
 
@@ -218,28 +226,32 @@ fn place_party(
 
 fn log_side_win(
     comp_id: i32,
-    winner: SideCompEnterRosterPlayer,
+    winner: Option<SideCompEnterRosterPlayer>,
     loser: Option<SideCompEnterRosterPlayer>,
     mut matchup_history: Signal<Vec<MatchupEvent>>,
     mut error: Signal<Option<String>>,
     mut matchup_busy: Signal<bool>,
 ) {
+    if winner.is_none() && loser.is_none() {
+        error.set(Some("Pick at least one person".into()));
+        return;
+    }
     if matchup_busy() {
         return;
     }
     matchup_busy.set(true);
     error.set(None);
-    let winner_party = party_from_player(&winner);
+    let winner_party = winner.as_ref().map(party_from_player);
     let loser_party = loser.as_ref().map(party_from_player);
-    let winner_registration_id = winner.registration_id;
-    let winner_player_id = winner.player_id.clone();
+    let winner_registration_id = winner.as_ref().and_then(|player| player.registration_id);
+    let winner_player_id = winner.as_ref().map(|player| player.player_id.clone());
     let loser_registration_id = loser.as_ref().and_then(|player| player.registration_id);
     let loser_player_id = loser.as_ref().map(|player| player.player_id.clone());
     spawn(async move {
         match api::sidecomp_log_matchup(
             comp_id,
             winner_registration_id,
-            &winner_player_id,
+            winner_player_id.as_deref(),
             loser_registration_id,
             loser_player_id.as_deref(),
         )
@@ -290,12 +302,13 @@ fn MatchupBoard(
                     let known = player.is_some();
                     let card_class = party_class(side, selected == side, known);
                     let name = player.as_ref().map(|person| person.display_name.clone()).unwrap_or_else(|| "Unknown".into());
-                    let meta = player.as_ref().map(|person| format!("#{} · {}", person.entry_number, team_label(person)));
-                    let kicker = if selected == side {
-                        format!("{} · editing", side.label())
-                    } else {
-                        side.label().to_string()
-                    };
+                    let entry_label = player.as_ref().map(|person| format!("#{}", person.entry_number));
+                    let photo = player.as_ref().and_then(|person| person.profile_photo.clone());
+                    let team_photo = player.as_ref().and_then(|person| person.team_profile_photo.clone());
+                    let team_known = player.as_ref().is_some_and(|person| {
+                        person.team_id.is_some() || person.team_shortname.is_some() || person.team_profile_photo.is_some()
+                    });
+                    let weapon = player.as_ref().and_then(|person| person.weapon.clone()).unwrap_or_default();
                     let side_key = side.label().to_string();
                     let clear_label = format!("Clear {}", side.label());
                     rsx! {
@@ -303,11 +316,6 @@ fn MatchupBoard(
                             class: "{card_class}",
                             key: "{side_key}",
                             onclick: move |_| selected_side.set(side),
-                            div { class: "sc-party-kicker", "{kicker}" }
-                            div { class: "sc-party-name", "{name}" }
-                            if let Some(meta) = meta {
-                                div { class: "sc-party-meta", "{meta}" }
-                            }
                             if known {
                                 button {
                                     class: "sc-party-clear",
@@ -321,6 +329,23 @@ fn MatchupBoard(
                                     "×"
                                 }
                             }
+                            if known {
+                                AvatarCircle { photo: photo.clone(), size: "2.4rem".to_string(), is_team: false }
+                            }
+                            div { class: "sc-party-name", "{name}" }
+                            if let Some(entry_label) = entry_label {
+                                div { class: "sc-party-meta", "{entry_label}" }
+                            }
+                            if team_known || !weapon.is_empty() {
+                                div { class: "sc-party-marks",
+                                    if team_known {
+                                        AvatarCircle { photo: team_photo.clone(), size: "1.2rem".to_string(), is_team: true }
+                                    }
+                                    if !weapon.is_empty() {
+                                        PompfenIcon { weapon: weapon.clone(), size: "1.2em".to_string() }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -332,29 +357,29 @@ fn MatchupBoard(
                 (MatchSide::Right, right.clone(), left.clone()),
             ] {
                 {
-                    let label = match &player {
-                        Some(person) => format!("{} wins", person.display_name),
-                        None => format!("{} wins", side.label()),
-                    };
                     let side_class = match side {
                         MatchSide::Left => "sc-win-btn left",
                         MatchSide::Right => "sc-win-btn right",
                     };
-                    let winner = player.clone();
-                    let winner_for_click = winner.clone();
+                    let winner_for_click = player.clone();
                     let side_key = side.label().to_string();
                     rsx! {
                         button {
                             class: "{side_class}",
                             key: "{side_key}",
                             r#type: "button",
-                            disabled: winner.is_none() || busy,
+                            disabled: busy,
                             onclick: move |_| {
-                                if let Some(winner) = winner_for_click.clone() {
-                                    log_side_win(comp_id, winner, opponent.clone(), matchup_history, error, matchup_busy);
-                                }
+                                log_side_win(
+                                    comp_id,
+                                    winner_for_click.clone(),
+                                    opponent.clone(),
+                                    matchup_history,
+                                    error,
+                                    matchup_busy,
+                                );
                             },
-                            "{label}"
+                            "Log win"
                         }
                     }
                 }
@@ -375,7 +400,6 @@ fn MatchupPicker(
 ) -> Element {
     let entered = query();
     let side = selected_side();
-    let hint = format!("Type a number for {}", side.label().to_lowercase());
     let matches: Vec<SideCompEnterRosterPlayer> = if entered.is_empty() {
         Vec::new()
     } else {
@@ -386,7 +410,7 @@ fn MatchupPicker(
     };
     rsx! {
         if entered.is_empty() {
-            p { class: "sc-matchup-hint", "{hint}" }
+            p { class: "sc-matchup-hint", "Type a number" }
         } else if matches.is_empty() {
             p { class: "text-muted text-center mt-3", "No matching players" }
         }
@@ -395,6 +419,9 @@ fn MatchupPicker(
                 let chosen = player.clone();
                 let shortname = team_label(&player);
                 let weapon = player.weapon.clone().unwrap_or_default();
+                let photo = player.profile_photo.clone();
+                let team_photo = player.team_profile_photo.clone();
+                let team_known = player.team_id.is_some() || player.team_shortname.is_some() || player.team_profile_photo.is_some();
                 rsx! {
                     button {
                         class: "sc-pick-row",
@@ -413,13 +440,17 @@ fn MatchupPicker(
                                 query.set(String::new());
                             }
                         },
+                        AvatarCircle { photo: photo, size: "2.2rem".to_string(), is_team: false }
                         div { class: "sc-pick-num", "#{player.entry_number}" }
                         div { class: "sc-pick-text",
                             div { class: "sc-display-name", "{player.display_name}" }
                             div { class: "sc-meta-text", "{shortname}" }
                         }
+                        if team_known {
+                            AvatarCircle { photo: team_photo, size: "1.25rem".to_string(), is_team: true }
+                        }
                         if !weapon.is_empty() {
-                            PompfenIcon { weapon: weapon, size: "1.5em".to_string() }
+                            PompfenIcon { weapon: weapon, size: "1.4em".to_string() }
                         }
                     }
                 }
@@ -529,9 +560,11 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
                 box-sizing: border-box;
                 display: flex;
                 flex-direction: column;
+                width: 100%;
+                min-width: 0;
+                max-width: min(560px, 100%);
                 height: 100vh;
                 height: 100dvh;
-                max-width: 560px;
                 margin: 0 auto;
                 padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
                 background: var(--ui-bg);
@@ -539,11 +572,21 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
                 overflow: hidden;
             }}
             .sc-enter-top {{
-                padding: 0.75rem 1rem 0.25rem;
+                min-width: 0;
+                padding: 0.5rem 0.5rem 0.15rem;
                 flex-shrink: 0;
+                overflow: hidden;
+            }}
+            .sc-enter-top > .btn,
+            .sc-enter-top > a {{
+                flex: 0 0 auto;
             }}
             .sc-search-display {{
-                font-size: 1.6rem;
+                min-width: 0;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                font-size: 1.35rem;
                 font-weight: 600;
                 letter-spacing: 0.04em;
                 min-height: 2.2rem;
@@ -555,8 +598,10 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
             }}
             .sc-results {{
                 flex: 1 1 auto;
+                min-width: 0;
                 overflow-y: auto;
-                padding: 0.5rem 0.75rem;
+                overflow-x: hidden;
+                padding: 0.4rem 0.5rem;
                 min-height: 0;
             }}
             .sc-player-row {{
@@ -635,6 +680,8 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
             }}
             .sc-history {{
                 flex-shrink: 0;
+                min-width: 0;
+                max-width: 100%;
                 border-top: 1px solid var(--ui-border);
                 border-bottom: 1px solid var(--ui-border);
                 background: var(--ui-surface);
@@ -680,13 +727,28 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
             }}
             .sc-hist-line {{
                 width: 100%;
+                min-width: 0;
                 display: flex;
                 align-items: center;
                 justify-content: center;
                 gap: 0.2rem;
                 white-space: nowrap;
                 overflow: hidden;
+            }}
+            .sc-hist-text {{
+                min-width: 0;
+                overflow: hidden;
                 text-overflow: ellipsis;
+            }}
+            .sc-hist-person {{
+                width: 100%;
+                min-width: 0;
+            }}
+            .sc-hist-marks {{
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 0.2rem;
             }}
             .sc-hist-points {{
                 text-align: center;
@@ -697,10 +759,12 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
             .sc-hist-points.loss {{ color: var(--bs-danger-text-emphasis); }}
             .sc-numpad {{
                 flex-shrink: 0;
+                min-width: 0;
+                width: 100%;
                 display: grid;
-                grid-template-columns: repeat(3, 1fr);
+                grid-template-columns: repeat(3, minmax(0, 1fr));
                 gap: 0.35rem;
-                padding: 0.55rem;
+                padding: 0.45rem;
                 background: var(--ui-surface-muted);
             }}
             .sc-num-btn {{
@@ -716,83 +780,98 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
             .sc-num-btn:active {{ background: var(--ui-surface-hover); }}
             .sc-matchup {{
                 flex-shrink: 0;
+                min-width: 0;
+                width: 100%;
                 display: grid;
-                grid-template-columns: 1fr 1fr;
-                gap: 0.5rem;
-                padding: 0.15rem 0.75rem 0;
+                grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+                gap: 0.4rem;
+                padding: 0.15rem 0.5rem 0;
             }}
             .sc-party {{
                 position: relative;
-                min-height: 5.75rem;
+                min-width: 0;
+                min-height: 6.4rem;
+                box-sizing: border-box;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                gap: 0.15rem;
                 border-radius: 0.9rem;
                 border: 3px solid var(--ui-border);
                 background: var(--ui-surface);
-                padding: 0.45rem 0.55rem 0.55rem;
-                text-align: left;
+                padding: 0.4rem 0.35rem 0.45rem;
+                text-align: center;
+                overflow: hidden;
             }}
             .sc-party.left.selected {{ border-color: #1565c0; }}
             .sc-party.right.selected {{ border-color: #ef6c00; }}
-            .sc-party-kicker {{
-                font-size: 0.72rem;
-                font-weight: 800;
-                letter-spacing: 0.04em;
-                text-transform: uppercase;
-                color: var(--ui-muted);
-            }}
-            .sc-party.left .sc-party-kicker {{ color: #1565c0; }}
-            .sc-party.right .sc-party-kicker {{ color: #ef6c00; }}
             .sc-party-name {{
-                margin-top: 0.2rem;
-                font-size: 1.2rem;
+                width: 100%;
+                min-width: 0;
+                font-size: 1rem;
                 font-weight: 800;
                 line-height: 1.15;
                 overflow: hidden;
                 text-overflow: ellipsis;
                 white-space: nowrap;
-                padding-right: 2.2rem;
             }}
             .sc-party.unknown .sc-party-name {{
                 color: var(--ui-muted);
                 font-weight: 600;
             }}
             .sc-party-meta {{
-                margin-top: 0.15rem;
+                max-width: 100%;
                 font-size: 0.82rem;
                 color: var(--ui-muted);
                 white-space: nowrap;
                 overflow: hidden;
                 text-overflow: ellipsis;
             }}
+            .sc-party-marks {{
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 0.35rem;
+                max-width: 100%;
+                min-width: 0;
+            }}
             .sc-party-clear {{
                 position: absolute;
-                top: 0.3rem;
-                right: 0.3rem;
-                width: 2.5rem;
-                height: 2.5rem;
+                top: 0.2rem;
+                right: 0.2rem;
+                width: 2.25rem;
+                height: 2.25rem;
                 border: none;
-                border-radius: 0.6rem;
+                border-radius: 0.55rem;
                 background: var(--ui-surface-muted);
                 color: var(--ui-text);
-                font-size: 1.25rem;
+                font-size: 1.15rem;
                 line-height: 1;
             }}
             .sc-wins {{
                 flex-shrink: 0;
+                min-width: 0;
+                width: 100%;
                 display: grid;
-                grid-template-columns: 1fr 1fr;
-                gap: 0.5rem;
-                padding: 0.45rem 0.75rem 0.35rem;
+                grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+                gap: 0.4rem;
+                padding: 0.4rem 0.5rem 0.3rem;
             }}
             .sc-win-btn {{
-                min-height: 4.5rem;
+                min-width: 0;
+                min-height: 3.6rem;
+                box-sizing: border-box;
                 border: none;
                 border-radius: 0.9rem;
                 color: #fff;
                 background: #2e7d32;
-                font-size: 1.15rem;
+                font-size: 1rem;
                 font-weight: 800;
                 line-height: 1.15;
-                padding: 0.45rem 0.55rem;
+                padding: 0.4rem 0.4rem;
+                white-space: normal;
+                overflow-wrap: anywhere;
             }}
             .sc-win-btn.left {{ box-shadow: inset 0 7px 0 #1565c0; }}
             .sc-win-btn.right {{ box-shadow: inset 0 7px 0 #ef6c00; }}
@@ -805,17 +884,21 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
             }}
             .sc-pick-row {{
                 width: 100%;
+                max-width: 100%;
+                min-width: 0;
+                box-sizing: border-box;
                 display: flex;
                 align-items: center;
-                gap: 0.65rem;
+                gap: 0.5rem;
                 text-align: left;
                 border: none;
                 border-radius: 0.8rem;
                 background: var(--ui-surface);
                 color: inherit;
-                padding: 0.75rem;
+                padding: 0.55rem 0.6rem;
                 margin-bottom: 0.45rem;
-                min-height: 3.8rem;
+                min-height: 3.6rem;
+                overflow: hidden;
             }}
             .sc-pick-num {{
                 font-weight: 800;
@@ -838,7 +921,8 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
                     height: auto;
                     min-height: 100vh;
                     min-height: 100dvh;
-                    overflow: visible;
+                    overflow-x: hidden;
+                    overflow-y: visible;
                 }}
                 .sc-results {{
                     flex: 0 1 auto;
@@ -858,13 +942,7 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
                 }
                 {
                     let matchup_mode = roster().as_ref().is_some_and(|data| data.track_matchups);
-                    let placeholder = if !matchup_mode {
-                        "type to search"
-                    } else if selected_side() == MatchSide::Left {
-                        "number for left"
-                    } else {
-                        "number for right"
-                    };
+                    let placeholder = if matchup_mode { "number" } else { "type to search" };
                     let undo_disabled = undo_busy() || if matchup_mode {
                         matchup_history().is_empty()
                     } else {
@@ -1118,7 +1196,18 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
                                     } else {
                                         "sc-hist-card matchup"
                                     };
-                                    let winner_line = format!("#{} {}", event.winner.entry_number, event.winner.display_name);
+                                    let winner_line = match &event.winner {
+                                        Some(party) => format!("#{} {}", party.entry_number, party.display_name),
+                                        None => "Unknown".to_string(),
+                                    };
+                                    let winner_photo = event.winner.as_ref().and_then(|party| party.profile_photo.clone());
+                                    let winner_team_known = event.winner.as_ref().is_some_and(|party| party.team_known);
+                                    let winner_team_photo = event.winner.as_ref().and_then(|party| party.team_profile_photo.clone());
+                                    let winner_weapon = event.winner.as_ref().and_then(|party| party.weapon.clone()).unwrap_or_default();
+                                    let loser_photo = event.loser.as_ref().and_then(|party| party.profile_photo.clone());
+                                    let loser_team_known = event.loser.as_ref().is_some_and(|party| party.team_known);
+                                    let loser_team_photo = event.loser.as_ref().and_then(|party| party.team_profile_photo.clone());
+                                    let loser_weapon = event.loser.as_ref().and_then(|party| party.weapon.clone()).unwrap_or_default();
                                     let loser_line = match &event.loser {
                                         Some(party) => format!("#{} {}", party.entry_number, party.display_name),
                                         None => "Unknown".to_string(),
@@ -1154,9 +1243,43 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
                                             if event.flagged {
                                                 i { class: "fas fa-flag sc-hist-flag" }
                                             }
-                                            div { class: "sc-hist-line sc-hist-points win", "{winner_line}" }
+                                            div { class: "sc-hist-person",
+                                                div { class: "sc-hist-line sc-hist-points win",
+                                                    if event.winner.is_some() {
+                                                        AvatarCircle { photo: winner_photo, size: "1rem".to_string(), is_team: false }
+                                                    }
+                                                    span { class: "sc-hist-text", "{winner_line}" }
+                                                }
+                                                if winner_team_known || !winner_weapon.is_empty() {
+                                                    div { class: "sc-hist-marks",
+                                                        if winner_team_known {
+                                                            AvatarCircle { photo: winner_team_photo, size: "0.85rem".to_string(), is_team: true }
+                                                        }
+                                                        if !winner_weapon.is_empty() {
+                                                            PompfenIcon { weapon: winner_weapon, size: "0.85em".to_string() }
+                                                        }
+                                                    }
+                                                }
+                                            }
                                             div { class: "sc-hist-beat", "beat" }
-                                            div { class: "sc-hist-line sc-hist-points loss", "{loser_line}" }
+                                            div { class: "sc-hist-person",
+                                                div { class: "sc-hist-line sc-hist-points loss",
+                                                    if event.loser.is_some() {
+                                                        AvatarCircle { photo: loser_photo, size: "1rem".to_string(), is_team: false }
+                                                    }
+                                                    span { class: "sc-hist-text", "{loser_line}" }
+                                                }
+                                                if loser_team_known || !loser_weapon.is_empty() {
+                                                    div { class: "sc-hist-marks",
+                                                        if loser_team_known {
+                                                            AvatarCircle { photo: loser_team_photo, size: "0.85rem".to_string(), is_team: true }
+                                                        }
+                                                        if !loser_weapon.is_empty() {
+                                                            PompfenIcon { weapon: loser_weapon, size: "0.85em".to_string() }
+                                                        }
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
