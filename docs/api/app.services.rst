@@ -19,5 +19,6 @@ app.services
    app.services.schedule_import_export_service
    app.services.scoreboard_service
    app.services.sidecomp_service
+   app.services.team_management_service
    app.services.team_stats_service
    app.services.tournament_service

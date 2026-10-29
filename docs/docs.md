@@ -4,7 +4,7 @@
 
 - **Find an event or league:** browse [Events](/) or [Leagues](/leagues), then open its schedule, teams, or results.
 - **Join an event:** open the event and choose **Register**. A league event uses one registration for the league. If you joined a team, that team must approve your place on its roster.
-- **Manage your team’s roster:** sign in with the team account, open the event or league, and choose **Manage roster**.
+- **Manage a team:** open its profile and choose **Manage team**. Team accounts and designated player managers can manage its profile, registrations, and rosters. See [Team Managers](#team-managers).
 - **Run a match:** open its schedule entry and follow [Running Games](#running-games). Your account needs permission to head referee that match.
 - **Set up an event:** use **Organize** on [Events](/), then follow [Tournament Settings](#tournament-settings) and [Match Schedule Setup](#match-schedule-setup).
 - **Run a side event:** see [Running a Side Comp](#running-a-side-comp).
@@ -32,6 +32,7 @@ Overview
     - [Day-Of Operations](#on-the-day-of)
  - [Stones](#stones)
  - [Account Types](#account-types)
+ - [Team Managers](#team-managers)
  - [Penalties](#penalties)
 
 For Players
@@ -343,6 +344,31 @@ Player accounts, on the other hand, are much less ephemeral - your URL
 is permanent, and your profile is meant to be the thing that ties you
 to you between tournaments. This is why you can change your jersey
 name and jersey number for each tournament.
+
+## Team Managers
+
+A team account can give one or more player accounts permission to manage the
+team. Open the team's profile, choose **Manage team**, and use **Managers** to
+find a player by name or username. Check the username before adding them.
+Only the team account can add or remove managers.
+
+Managers sign in with their own player accounts. **Manage teams** in the account
+menu lists the teams they can manage. The team name stays visible on management
+pages; personal player registration remains separate from team registration.
+
+Managers can edit the team profile and images, register or withdraw the team,
+edit its event registration, and approve or decline roster requests. They can
+also add registered, unattached players or remove players from the roster.
+Removing a player from the team leaves their event registration, payment, and
+waiver intact. Team membership is still recorded separately for each event or
+league; being a manager does not put a player on the roster.
+
+Managers also have organizer access to events and leagues organized by the
+team account. They can see the team information available to that account,
+including its private notes. They cannot change the team account's password,
+Google connection, or OAuth credentials, and cannot appoint other managers.
+Removing a manager ends access granted by that team; any separate organizer
+role held by the player still applies.
 
 ## Penalties
 

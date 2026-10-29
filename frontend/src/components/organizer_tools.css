@@ -25,5 +25,5 @@
 @media (max-width: 575px) {
   .arctos-app .sidecomp-heading .organizer-tools-dropdown { right: 0; left: auto; }
 
-  .arctos-app .event-hero-actions .organizer-tools-dropdown { right: 0; width: min(19rem, calc(100vw - 32px)); }
+  .arctos-app .event-header-organizer .organizer-tools-dropdown { right: 0; width: min(19rem, calc(100vw - 32px)); }
 }

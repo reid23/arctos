@@ -55,7 +55,8 @@ pub(super) fn main_section(route: &Route) -> Option<MainSection> {
         | Route::LeagueNewTournament { .. }
         | Route::LeagueManage { .. }
         | Route::LeagueInvitations { .. } => Some(Leagues),
-        Route::TeamsList { .. }
+        Route::ManageTeams { .. } | Route::ManageTeam { .. } | Route::ManageTeamWithTab { .. } | Route::ManageTeamEvent { .. }
+        | Route::TeamsList { .. }
         | Route::TeamsListWithQuery { .. }
         | Route::TeamProfilePage { .. }
         | Route::TeamProfilePageWithTab { .. }

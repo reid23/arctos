@@ -11,6 +11,8 @@ pub struct User {
     /// True if the account has a password set (can change password). False for Google-only accounts.
     #[serde(default)]
     pub has_password: bool,
+    #[serde(default)]
+    pub managed_teams: Vec<ManagedTeam>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -284,59 +286,6 @@ pub struct ManagePlayerRegistrationData {
 pub struct ManagePlayerInfo {
     pub id: String,
     pub name: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TournamentInvitationsResponse {
-    pub tournament: Tournament,
-    pub team_registration: InvitationTeamRegistration,
-    pub current_team_size: u32,
-    pub invitations: Vec<InvitationItem>,
-    pub team_roster: Vec<RosterItem>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct InvitationTeamRegistration {
-    pub id: u32,
-    pub pseudonym: String,
-    #[serde(default)]
-    pub shortname: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct InvitationItem {
-    pub registration: InvitationRegistration,
-    pub player: InvitationPlayer,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct InvitationRegistration {
-    pub id: u32,
-    pub jersey_name: Option<String>,
-    pub jersey_number: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct InvitationPlayer {
-    pub id: String,
-    pub name: String,
-    pub profile_photo: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct RosterItem {
-    pub registration: RosterRegistration,
-    pub player: InvitationPlayer,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct RosterRegistration {
-    pub id: u32,
-    pub jersey_name: Option<String>,
-    pub jersey_number: Option<String>,
-    pub status: String,
-    pub paid: bool,
-    pub amount_paid: f64,
 }
 
 /// Thin tournament identity for bracket pages (not a full tournament dump).
@@ -1234,6 +1183,8 @@ pub struct TeamProfileData {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TeamProfileResponse {
+    #[serde(default)]
+    pub can_manage: bool,
     pub team: TeamProfileData,
     #[serde(default)]
     pub past_event_count: u32,
@@ -2062,4 +2013,73 @@ pub struct ConnectedApp {
     pub homepage_url: Option<String>,
     pub scopes: Vec<OAuthScope>,
     pub last_used_at: Option<String>,
+}
+
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ManagedTeam {
+    pub id: String,
+    pub name: String,
+    pub profile_photo: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct TeamManagementData {
+    pub team: ManagedTeam,
+    pub is_owner: bool,
+    pub registrations: Vec<ManagedRegistration>,
+}
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct ManagedRegistration {
+    pub start_date: Option<String>,
+    pub slug: String,
+    pub name: String,
+    pub kind: String,
+    pub pseudonym: String,
+    pub pending_count: u32,
+}
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct TeamCandidate {
+    pub id: String,
+    pub name: String,
+    pub profile_photo: Option<String>,
+    #[serde(default)]
+    pub registration_id: Option<u32>,
+}
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct TeamCandidates { pub players: Vec<TeamCandidate> }
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct TeamEventRef { pub slug: String, pub kind: String, pub name: String }
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct TeamRosterMember {
+    pub amount_paid: f64,
+    pub registration_id: u32,
+    pub player: TeamCandidate,
+    pub status: String,
+    pub jersey_name: Option<String>,
+    pub jersey_number: Option<String>,
+    pub paid: bool,
+}
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct TeamEventData {
+    pub terms_link: Option<String>,
+    pub payment_info: Option<String>,
+    pub team: ManagedTeam,
+    pub event: TeamEventRef,
+    pub registered: bool,
+    pub pseudonym: String,
+    pub shortname: Option<String>,
+    pub registration_open: bool,
+    pub roster_open: bool,
+    pub roster_limit: Option<u32>,
+    pub team_fee: Option<f64>,
+    pub paid: bool,
+    pub roster: Vec<TeamRosterMember>,
+}
+
+impl User {
+    pub fn can_manage_team(&self, team_id: &str) -> bool {
+        (self.user_type == "team" && self.id == team_id)
+            || self.managed_teams.iter().any(|team| team.id == team_id)
+    }
 }

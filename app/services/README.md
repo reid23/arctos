@@ -23,6 +23,28 @@ The registration service provides the following key methods:
 - **`register_player_as_to(tournament_url, *, actor_user_id, actor_user_type, player_id, team_id=None, ...)`** — Register a player on behalf of a TO. The actor must be a TO for the tournament. Always returns a `CONFIRMED`, fully-paid `PlayerRegistration` with `paid=True, amount_paid=0`. Existing `CANCELLED`/`REJECTED` registrations for the same (tournament, player) are reused; existing `CONFIRMED` rows return a duplicate-error.
 - **`register_team_as_to(tournament_url, *, actor_user_id, actor_user_type, team_id, pseudonym="")`** - Register a team on behalf of a TO. The actor must be a TO for the tournament. Returns a CONFIRMED, fully-paid `TeamRegistration` with `paid=True, amount_paid=0`. Honors `n_max_teams` (error message includes the count and limit). Existing `CANCELLED` rows for the same (tournament, team) are reused; existing `CONFIRMED` rows return a duplicate-error.
 
+## Team roster changes
+
+`team_management_service.change_roster(scope, team_id, registration_id, action)`
+updates a player's team assignment within a standalone event or league. Pass
+`Scope.event(event_url)` or `Scope.league(league_url)` from `_common.py`. The
+calling route authorizes the team account or its manager before calling the service.
+
+| Action | Required player state | Result |
+| --- | --- | --- |
+| `add` | Confirmed registration, unattached | Joins the team's confirmed roster. |
+| `approve` | Pending approval for this team | Joins the team's confirmed roster. |
+| `decline` | Pending approval for this team | Becomes a confirmed, unattached player. |
+| `remove` | Confirmed on this team | Becomes a confirmed, unattached player. |
+
+The team must have a confirmed registration in the same scope. Adding and removing
+players require open player registration; pending requests remain reviewable after
+registration closes. Adding and approving players respect the roster limit, with
+writes serialized per team to keep concurrent approvals within capacity.
+
+The service preserves payment, waiver, and jersey details. It commits a successful
+change and returns `Ok(None)`, or returns `Err(ArctosError)` for a rejected action.
+
 ## Conventions
 
 ### Static-method namespace classes

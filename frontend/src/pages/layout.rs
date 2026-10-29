@@ -128,6 +128,7 @@ fn page_title_for_route(route: &Route) -> String {
         Route::EditInjury { .. } => "Edit Injury".into(),
         Route::EditPlayerProfile { .. } => "Edit Profile".into(),
         Route::EditTeamProfile { .. } => "Edit Profile".into(),
+        Route::ManageTeams { .. } | Route::ManageTeam { .. } | Route::ManageTeamWithTab { .. } | Route::ManageTeamEvent { .. } => "Manage team".into(),
         Route::PlayersList { .. } | Route::PlayersListWithQuery { .. } => "Players".into(),
         Route::PlayerProfilePage { id } | Route::PlayerProfilePageWithTab { id, .. } => format!("{id}"),
         Route::TeamsList { .. } | Route::TeamsListWithQuery { .. } => "Teams".into(),
@@ -345,6 +346,9 @@ pub fn Layout() -> Element {
                                             Link { to: Route::PlayerProfilePage { id: u.id.clone() }, id: "account-profile-link", class: "dropdown-item", "My profile" }
                                         } else {
                                             Link { to: Route::TeamProfilePage { id: u.id.clone() }, id: "account-profile-link", class: "dropdown-item", "Team profile" }
+                                        }
+                                        if !u.managed_teams.is_empty() {
+                                            Link { to: Route::ManageTeams {}, class: "dropdown-item", "Manage teams" }
                                         }
                                         Link { to: Route::DeveloperApps {}, class: "dropdown-item", "Developer apps" }
                                         button {

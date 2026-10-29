@@ -1,6 +1,6 @@
 use super::PlayerPompfen;
-use crate::Route;
 use crate::api;
+use crate::Route;
 use dioxus::prelude::*;
 
 #[component]
@@ -15,6 +15,7 @@ pub fn ProfileHeader(
     #[props(default)] pompfen: Vec<String>,
     past_count: u32,
     edit_route: Option<Route>,
+    #[props(default)] manage_route: Option<Route>,
 ) -> Element {
     let backend = api::base_url();
     rsx! {
@@ -27,7 +28,7 @@ pub fn ProfileHeader(
                 }
             }
             div { class: "profile-header-body",
-                div { class: "profile-avatar-row",
+                div { class: "profile-avatar-row profile-header-toolbar",
                     if let Some(photo) = avatar {
                         img { class: "profile-avatar", src: "{backend}/static/{photo}", alt: "" }
                     } else {
@@ -35,8 +36,12 @@ pub fn ProfileHeader(
                             i { class: if kind == "team" { "fas fa-users" } else { "fas fa-user" } }
                         }
                     }
-                    if let Some(route) = edit_route {
-                        Link { to: route, class: "btn btn-outline-secondary profile-edit-link", "Edit profile" }
+                    div { class: "profile-header-actions",
+                    if let Some(route) = manage_route {
+                        Link { to: route, class: "btn btn-outline-secondary profile-header-action", "Manage team" }
+                    } else if let Some(route) = edit_route {
+                        Link { to: route, class: "btn btn-outline-secondary profile-header-action", "Edit profile" }
+                    }
                     }
                 }
                 div { class: "profile-identity",

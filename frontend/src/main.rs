@@ -167,6 +167,18 @@ enum Route {
     #[route("/players/:player_id/edit")]
     EditPlayerProfile { player_id: String },
 
+    #[route("/manage-teams")]
+    ManageTeams {},
+
+    #[route("/teams/:team_id/manage?:tab")]
+    ManageTeamWithTab { team_id: String, tab: String },
+
+    #[route("/teams/:team_id/manage")]
+    ManageTeam { team_id: String },
+
+    #[route("/teams/:team_id/manage/:kind/:slug")]
+    ManageTeamEvent { team_id: String, kind: String, slug: String },
+
     #[route("/teams/:team_id/edit")]
     EditTeamProfile { team_id: String },
 

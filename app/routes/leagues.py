@@ -82,10 +82,8 @@ def _visible_league_rounds():
     """Query published rounds and drafts belonging to leagues the caller organizes."""
     visible = Tournament.published == True
     if current_user.is_authenticated:
-        organized_ids = db.session.query(TO.league_id).filter(
-            TO.user_id == current_user.id,
-            TO.user_type == current_user_type(),
-            TO.league_id.isnot(None),
+        organized_ids = (
+            PermissionService.organizer_query(current_user).with_entities(TO.league_id).filter(TO.league_id.isnot(None))
         )
         visible = or_(visible, Tournament.league_id.in_(organized_ids))
     return Tournament.query.filter(visible)
@@ -129,10 +127,8 @@ def leagues_list():
 
     visible = League.published == True
     if current_user.is_authenticated:
-        organized_ids = db.session.query(TO.league_id).filter(
-            TO.user_id == current_user.id,
-            TO.user_type == current_user_type(),
-            TO.league_id.isnot(None),
+        organized_ids = (
+            PermissionService.organizer_query(current_user).with_entities(TO.league_id).filter(TO.league_id.isnot(None))
         )
         visible = or_(visible, League.url.in_(organized_ids))
     leagues = League.query.filter(visible).all()
@@ -237,13 +233,7 @@ def leagues_list():
 @login_required
 def leagues_organized():
     """List leagues that the current user organizes (TO). For tournament create/edit league selector."""
-    user_id = current_user.id
-    user_type = current_user_type()
-    to_entries = TO.query.filter(
-        TO.league_id.isnot(None),
-        TO.user_id == user_id,
-        TO.user_type == user_type,
-    ).all()
+    to_entries = PermissionService.organizer_query(current_user).filter(TO.league_id.isnot(None)).all()
     result = []
     seen = set()
     for to_entry in to_entries:
@@ -334,8 +324,9 @@ def league_detail(league_url):
     for e in to_rows:
         user = (to_players_by_id if e.user_type == "player" else to_teams_by_id).get(e.user_id)
         user_name = user.name if user else e.user_id
-        is_current = (
-            current_user.is_authenticated and current_user.id == e.user_id and current_user_type() == e.user_type
+        is_current = current_user.is_authenticated and (
+            (current_user.id == e.user_id and current_user_type() == e.user_type)
+            or (e.user_type == "team" and PermissionService.can_manage_team(e.user_id, current_user))
         )
         to_entries.append(
             {
@@ -565,7 +556,9 @@ def league_remove_to(league_url):
     if to_to_remove.league_id != league_url:
         return jsonify({"success": False, "error": "Invalid TO entry"}), 400
 
-    if to_to_remove.user_id == current_user.id and to_to_remove.user_type == current_user_type():
+    if (to_to_remove.user_id == current_user.id and to_to_remove.user_type == current_user_type()) or (
+        to_to_remove.user_type == "team" and PermissionService.can_manage_team(to_to_remove.user_id, current_user)
+    ):
         return (
             jsonify({"success": False, "error": "You cannot remove yourself as a TO"}),
             400,
@@ -672,22 +665,23 @@ def league_manage_api(league_url):
 @login_required
 def league_invitations_api(league_url):
     """League roster/invitations for a team. Same structure as tournament invitations."""
-    if not is_team(current_user):
-        return jsonify({"error": "Only teams can view invitations"}), 403
+    from app.utils.team_access import requested_team_id
+
+    team_id = requested_team_id()
 
     league, err = require_league(league_url)
     if err:
         return jsonify({"error": "Not found" if err == 404 else "Forbidden"}), err
 
     team_registration = TeamRegistration.query.filter_by(
-        league_id=league_url, team=current_user.id, status=RegistrationStatus.CONFIRMED
+        league_id=league_url, team=team_id, status=RegistrationStatus.CONFIRMED
     ).first()
     if not team_registration:
         return jsonify({"error": "Not registered"}), 404
 
     pending_regs = PlayerRegistration.query.filter_by(
         league_id=league_url,
-        team=current_user.id,
+        team=team_id,
         status=RegistrationStatus.PENDING_TEAM_APPROVAL,
     ).all()
     pending_with_players = []
@@ -697,10 +691,10 @@ def league_invitations_api(league_url):
             pending_with_players.append({"registration": reg, "player": player})
 
     current_team_size = PlayerRegistration.query.filter_by(
-        league_id=league_url, team=current_user.id, status=RegistrationStatus.CONFIRMED
+        league_id=league_url, team=team_id, status=RegistrationStatus.CONFIRMED
     ).count()
 
-    all_player_registrations = PlayerRegistration.query.filter_by(league_id=league_url, team=current_user.id).all()
+    all_player_registrations = PlayerRegistration.query.filter_by(league_id=league_url, team=team_id).all()
     team_roster = []
     for reg in all_player_registrations:
         player = Player.query.get(reg.player)

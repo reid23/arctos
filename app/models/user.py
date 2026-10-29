@@ -152,3 +152,12 @@ class Team(UserMixin, db.Model):
         if not self.pw_hash:
             return False
         return check_password_hash(self.pw_hash, password)
+
+
+class TeamManager(db.Model):
+    """A player allowed to manage a team without sharing its login."""
+
+    __tablename__ = "team_managers"
+    team_id = db.Column(db.String(USER_ID_LEN), db.ForeignKey("teams.id", ondelete="CASCADE"), primary_key=True)
+    player_id = db.Column(db.String(USER_ID_LEN), db.ForeignKey("players.id", ondelete="CASCADE"), primary_key=True)
+    __table_args__ = (db.Index("ix_team_managers_player_id", "player_id"),)

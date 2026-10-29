@@ -1,17 +1,22 @@
 use crate::api;
 use crate::components::{
-    ActionRecovery, EditRegistrationContext, EditRegistrationModal, EventAbout, EventBannerPhoto, EventHeader, EventTab, EventTabs,
-    EventTeamsList, LeagueRegistrationButtons, Modal, ModalKind, OrganizerTools, PompfenIcon,
+    ActionRecovery, EditRegistrationContext, EditRegistrationModal, EventAbout, EventBannerPhoto,
+    EventHeader, EventTab, EventTabs, EventTeamsList, LeagueRegistrationButtons, Modal, ModalKind,
+    OrganizerTools, PompfenIcon,
 };
 use crate::types::{ToEntry, User};
 use crate::Route;
 use dioxus::prelude::*;
 
-fn is_current_user_to(me: Option<&Result<User, api::AccountError>>, to_entries: &[ToEntry]) -> bool {
+fn is_current_user_to(
+    me: Option<&Result<User, api::AccountError>>,
+    to_entries: &[ToEntry],
+) -> bool {
     me.and_then(|r| r.as_ref().ok()).map_or(false, |u| {
-        to_entries
-            .iter()
-            .any(|e| e.user_id == u.id && e.user_type == u.user_type)
+        to_entries.iter().any(|e| {
+            (e.user_id == u.id && e.user_type == u.user_type)
+                || (e.user_type == "team" && u.can_manage_team(&e.user_id))
+        })
     })
 }
 
@@ -90,7 +95,9 @@ pub fn TournamentHomeContent(
         let md = about_markdown();
         let has_overview = show_overview();
         async move {
-            if !has_overview { return Ok(String::new()); }
+            if !has_overview {
+                return Ok(String::new());
+            }
             match md.as_deref() {
                 Some(m) if !m.is_empty() => api::render_markdown(m).await,
                 _ => Ok(String::new()),
@@ -103,10 +110,13 @@ pub fn TournamentHomeContent(
         let u = url_for_sidecomps.clone();
         let has_overview = show_overview();
         async move {
-            if has_overview { api::sidecomps_list(&u).await } else { Ok(Vec::new()) }
+            if has_overview {
+                api::sidecomps_list(&u).await
+            } else {
+                Ok(Vec::new())
+            }
         }
     });
-
 
     rsx! {
         if let Some(Ok(d)) = val.read().as_ref() {
@@ -146,6 +156,21 @@ pub fn TournamentHomeContent(
                     registration_open: team_open || player_open,
                     badge_league_url: league.map(|l| l.league_url.clone()),
                     badge_name: league.map(|l| l.name.clone()),
+                    organizer_tools: viewer_is_to.then(|| rsx! {
+                        OrganizerTools {
+                            label: "Organize".to_string(),
+                            Link { to: Route::TournamentSettings { url: url.clone() }, class: "dropdown-item", i { class: "fas fa-sliders-h", aria_hidden: "true" } "Settings" }
+                            Link { to: Route::ScheduleEdit { url: url.clone() }, class: "dropdown-item", i { class: "far fa-calendar-alt", aria_hidden: "true" } "Edit Schedule" }
+                            if let Some(l) = league {
+                                Link { to: Route::LeagueManage { league_url: l.league_url.clone() }, class: "dropdown-item", i { class: "fas fa-users", aria_hidden: "true" } "Registration Management" }
+                            } else {
+                                Link { to: Route::Manage { url: url.clone() }, class: "dropdown-item", i { class: "fas fa-users", aria_hidden: "true" } "Registration Management" }
+                            }
+                            Link { to: Route::ManageFootage { url: url.clone() }, class: "dropdown-item", i { class: "fas fa-video", aria_hidden: "true" } "Manage Footage" }
+                            Link { to: Route::SideCompNew { url: url.clone() }, class: "dropdown-item", i { class: "fas fa-plus", aria_hidden: "true" } "Add side competition" }
+                            button { r#type: "button", class: "dropdown-item text-danger", onclick: move |_| { delete_modal_open.set(true); delete_confirm_url.set(String::new()); delete_error.set(None); }, i { class: "fas fa-trash", aria_hidden: "true" } "Delete Tournament" }
+                        }
+                    }),
                     if (content.is_none() || matches!(active_tab.as_str(), "schedule" | "results" | "bracket")) && !matches!(me_res.read().as_ref(), Some(Err(api::AccountError::Unavailable))) {
                     div { class: "event-participant-actions", role: "group", aria_label: "Event registration",
                     if let Some(ref l) = d.tournament.league {
@@ -225,22 +250,8 @@ pub fn TournamentHomeContent(
                             button { r#type: "button", class: "btn btn-secondary", disabled: true, "Registration closed" }
                         }
                     }
+                    crate::pages::ManagedTeamActions { kind: if league.is_some() { "leagues".to_string() } else { "events".to_string() }, slug: league.map_or(url.clone(), |l| l.league_url.clone()) }
                     }
-                    }
-
-                    if viewer_is_to {
-                        OrganizerTools {
-                            Link { to: Route::TournamentSettings { url: url.clone() }, class: "dropdown-item", i { class: "fas fa-sliders-h", aria_hidden: "true" } "Settings" }
-                            Link { to: Route::ScheduleEdit { url: url.clone() }, class: "dropdown-item", i { class: "far fa-calendar-alt", aria_hidden: "true" } "Edit Schedule" }
-                            if let Some(l) = league {
-                                Link { to: Route::LeagueManage { league_url: l.league_url.clone() }, class: "dropdown-item", i { class: "fas fa-users", aria_hidden: "true" } "Registration Management" }
-                            } else {
-                                Link { to: Route::Manage { url: url.clone() }, class: "dropdown-item", i { class: "fas fa-users", aria_hidden: "true" } "Registration Management" }
-                            }
-                            Link { to: Route::ManageFootage { url: url.clone() }, class: "dropdown-item", i { class: "fas fa-video", aria_hidden: "true" } "Manage Footage" }
-                            Link { to: Route::SideCompNew { url: url.clone() }, class: "dropdown-item", i { class: "fas fa-plus", aria_hidden: "true" } "Add side competition" }
-                            button { r#type: "button", class: "dropdown-item text-danger", onclick: move |_| { delete_modal_open.set(true); delete_confirm_url.set(String::new()); delete_error.set(None); }, i { class: "fas fa-trash", aria_hidden: "true" } "Delete Tournament" }
-                        }
                     }
                 }
                 EventTabs {
@@ -573,11 +584,13 @@ pub fn TournamentHomeContent(
     }
 }
 
-
 /// Shared by the overview and edit page; a failed DELETE is checked before retry.
 #[component]
 pub(super) fn SideCompDeleteAction(
-    url: String, comp_id: i32, name: String, on_deleted: EventHandler<()>,
+    url: String,
+    comp_id: i32,
+    name: String,
+    on_deleted: EventHandler<()>,
     #[props(default = false)] full_label: bool,
     #[props(default = false)] disabled: bool,
     #[props(default)] on_blocked: EventHandler<bool>,
@@ -586,18 +599,35 @@ pub(super) fn SideCompDeleteAction(
     let mut confirm_delete = use_signal(|| false);
     let accessible_name = format!("Delete {name}");
     let mut action = move |send_delete: bool| {
-        if disabled || state().busy() || (send_delete && state().blocks_write()) { return; }
-        state.set(if send_delete { ActionRecovery::Pending } else { ActionRecovery::Checking });
+        if disabled || state().busy() || (send_delete && state().blocks_write()) {
+            return;
+        }
+        state.set(if send_delete {
+            ActionRecovery::Pending
+        } else {
+            ActionRecovery::Checking
+        });
         on_blocked.call(true);
         let url = url.clone();
         spawn(async move {
-            let result = if send_delete { api::sidecomp_delete(comp_id).await.map(|_| ()) } else { Err("Delete was not confirmed.".into()) };
-            if result.is_ok() { on_deleted.call(()); return; }
+            let result = if send_delete {
+                api::sidecomp_delete(comp_id).await.map(|_| ())
+            } else {
+                Err("Delete was not confirmed.".into())
+            };
+            if result.is_ok() {
+                on_deleted.call(());
+                return;
+            }
             let message = result.err().unwrap_or_default();
             state.set(ActionRecovery::Checking);
-            let present = api::sidecomps_list(&url).await.map(|rows| rows.iter().any(|row| row.id == comp_id));
+            let present = api::sidecomps_list(&url)
+                .await
+                .map(|rows| rows.iter().any(|row| row.id == comp_id));
             let next = ActionRecovery::after_check(present, &message);
-            if next == ActionRecovery::Idle { on_deleted.call(()); }
+            if next == ActionRecovery::Idle {
+                on_deleted.call(());
+            }
             on_blocked.call(next.blocks_write());
             state.set(next);
         });

@@ -53,6 +53,8 @@ mod sidecomp_results;
 mod start_match;
 mod stones;
 mod team_profile;
+mod team_management;
+pub use team_management::{ManageTeams, ManageTeam, ManageTeamWithTab, ManageTeamEvent, TeamEventPanel, ManagedTeamActions};
 mod teams_list;
 mod terms;
 mod thanks;

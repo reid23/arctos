@@ -10,6 +10,7 @@ endpoints. The dict shape is part of the API contract:
         "type":         "player" | "team",
         "profile_photo": str | None,
         "has_password": bool,
+        "managed_teams": [{"id": str, "name": str, "profile_photo": str | None}],
     }
 
 When the current user is not authenticated, returns ``None``.
@@ -27,14 +28,20 @@ def user_json() -> dict | None:
 
     Returns:
         A dict with keys ``id``, ``name``, ``type`` (``"player"`` or
-        ``"team"``), ``profile_photo``, and ``has_password``; or ``None`` when no user is
+        ``"team"``), ``profile_photo``, ``has_password``, and ``managed_teams``; or ``None`` when no user is
         authenticated.
     """
     if not current_user.is_authenticated:
         return None
     t = current_user_type()
     has_password = bool(getattr(current_user, "pw_hash", None))
+    from app.services.permission_service import PermissionService
+
     return {
+        "managed_teams": [
+            {"id": team.id, "name": team.name, "profile_photo": team.profile_photo}
+            for team in PermissionService.managed_teams(current_user)
+        ],
         "id": current_user.id,
         "name": current_user.name,
         "type": t,

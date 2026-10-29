@@ -460,8 +460,9 @@ def tournament_detail(tournament_url):
         else:
             user = to_teams_by_id.get(e.user_id)
         user_name = user.name if user else e.user_id
-        is_current = (
-            current_user.is_authenticated and current_user.id == e.user_id and current_user_type() == e.user_type
+        is_current = current_user.is_authenticated and (
+            (current_user.id == e.user_id and current_user_type() == e.user_type)
+            or (e.user_type == "team" and PermissionService.can_manage_team(e.user_id, current_user))
         )
         to_entries.append(
             {
@@ -524,8 +525,9 @@ def tournament_manage_api(tournament_url):
 @bp.route("/tournaments/<tournament_url>/invitations", methods=["GET"])
 @login_required
 def tournament_invitations_api(tournament_url):
-    if not is_team(current_user):
-        return jsonify({"error": "Only teams can view invitations"}), 403
+    from app.utils.team_access import requested_team_id
+
+    team_id = requested_team_id()
 
     tournament = Tournament.query.filter_by(url=tournament_url).first_or_404()
     # League events register at the league scope — point teams there.
@@ -541,14 +543,14 @@ def tournament_invitations_api(tournament_url):
         )
 
     team_registration = TeamRegistration.query.filter_by(
-        event=tournament_url, team=current_user.id, status=RegistrationStatus.CONFIRMED
+        event=tournament_url, team=team_id, status=RegistrationStatus.CONFIRMED
     ).first()
     if not team_registration:
         return jsonify({"error": "Not registered"}), 404
 
     pending_regs = PlayerRegistration.query.filter_by(
         event=tournament_url,
-        team=current_user.id,
+        team=team_id,
         status=RegistrationStatus.PENDING_TEAM_APPROVAL,
     ).all()
     pending_with_players = []
@@ -558,10 +560,10 @@ def tournament_invitations_api(tournament_url):
             pending_with_players.append({"registration": reg, "player": player})
 
     current_team_size = PlayerRegistration.query.filter_by(
-        event=tournament_url, team=current_user.id, status=RegistrationStatus.CONFIRMED
+        event=tournament_url, team=team_id, status=RegistrationStatus.CONFIRMED
     ).count()
 
-    all_player_registrations = PlayerRegistration.query.filter_by(event=tournament_url, team=current_user.id).all()
+    all_player_registrations = PlayerRegistration.query.filter_by(event=tournament_url, team=team_id).all()
     team_roster = []
     for reg in all_player_registrations:
         player = Player.query.get(reg.player)

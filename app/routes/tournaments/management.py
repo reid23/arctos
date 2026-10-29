@@ -438,7 +438,9 @@ def remove_to(tournament_url):
         return jsonify({"success": False, "error": "Invalid TO entry"}), 400
 
     # Prevent removing yourself (optional - you might want to allow this)
-    if to_to_remove.user_id == current_user.id and to_to_remove.user_type == current_user_type():
+    if (to_to_remove.user_id == current_user.id and to_to_remove.user_type == current_user_type()) or (
+        to_to_remove.user_type == "team" and PermissionService.can_manage_team(to_to_remove.user_id, current_user)
+    ):
         return (
             jsonify({"success": False, "error": "You cannot remove yourself as a TO"}),
             400,
