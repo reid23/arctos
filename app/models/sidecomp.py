@@ -44,6 +44,9 @@ class SideComp(db.Model):
             Applies to every type except chain/breaking.
         track_chain_losses: :attr:`track_losses` for chains in chain/breaking.
         track_break_losses: :attr:`track_losses` for breakers in chain/breaking.
+        track_matchups: When ``True`` (only with :attr:`track_losses`), results
+            are entered as a bout between two people. A win for one is a loss
+            for the other.
         allowed_weapons: JSON-encoded list of :class:`Pompfen` member names
             that players may select when registering. Defaults to all.
         only_show_top_n_results: When ``None``, public standings show all
@@ -68,6 +71,7 @@ class SideComp(db.Model):
     track_losses = db.Column(db.Boolean, nullable=False, default=False)
     track_chain_losses = db.Column(db.Boolean, nullable=False, default=False)
     track_break_losses = db.Column(db.Boolean, nullable=False, default=False)
+    track_matchups = db.Column(db.Boolean, nullable=False, default=False)
     allowed_weapons = db.Column(
         db.Text,
         nullable=False,
@@ -221,8 +225,8 @@ class SideCompResult(db.Model):
         uuid: UUID primary key.
         comp: FK to the parent :class:`SideComp`.
         player: FK to the scoring :class:`SideCompRegistration`.
-        opponent: Optional FK to an opposing registration (reserved for
-            future features).
+        opponent: Optional FK to the other registration in a matchup. A win
+            and its matching loss point at each other.
         stamp: Timestamp when the point was recorded.
         points: Point delta (currently ``+1`` or ``-1``).
         ref: User ID of the account that logged the point.
