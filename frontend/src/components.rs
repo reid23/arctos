@@ -31,6 +31,8 @@ mod organizer_tools;
 mod results_games_table;
 mod results_sort_header;
 mod sidecomp_weapon_modal;
+mod schedule_item;
+pub use schedule_item::{ScheduleItemDialog, ScheduleItemDetails, activity_time_label, activity_time_range};
 mod team_label;
 mod team_token_input;
 

@@ -1,5 +1,5 @@
 use crate::api;
-use crate::components::{ActionRecovery, RegistrationIntent, OrganizerTools, PompfenIcon, SideCompRegistrationMode, SideCompWeaponModal};
+use crate::components::{ScheduleItemDialog, ScheduleItemDetails, activity_time_range,ActionRecovery, RegistrationIntent, OrganizerTools, PompfenIcon, SideCompRegistrationMode, SideCompWeaponModal};
 use crate::Route;
 use dioxus::prelude::*;
 
@@ -9,6 +9,9 @@ pub fn SideCompDetail(url: String, comp_id: i32) -> Element {
     let me = crate::auth::use_account();
     let mut recovery = use_signal(ActionRecovery::default);
     let mut requested = use_signal(|| None::<(RegistrationIntent, (String, String))>);
+    let mut schedule_open = use_signal(|| false);
+    let mut schedule_edit = use_signal(|| None::<crate::types::ScheduleItemData>);
+    let mut schedule_details = use_signal(|| None::<i32>);
     let mut show_register_modal = use_signal(|| false);
     let mut show_edit_modal = use_signal(|| false);
 
@@ -64,6 +67,7 @@ pub fn SideCompDetail(url: String, comp_id: i32) -> Element {
 
     rsx! {
         style { {include_str!("../components/organizer_tools.css")} }
+        style { {include_str!("../components/schedule_item.css")} }
         div { class: "row",
             div { class: "col-12",
                 Link {
@@ -159,6 +163,7 @@ pub fn SideCompDetail(url: String, comp_id: i32) -> Element {
                                         OrganizerTools {
                                             id_prefix: "sidecomp-organizer-tools".to_string(),
                                             label: "Side competition tools".to_string(),
+                                            button { r#type: "button", class: "dropdown-item", onclick: move |_| { schedule_edit.set(None); schedule_open.set(true); }, "Add to schedule" }
                                             Link {
                                                 to: Route::SideCompEdit { url: url_for_edit.clone(), comp_id },
                                                 class: "dropdown-item", "Edit"
@@ -175,6 +180,26 @@ pub fn SideCompDetail(url: String, comp_id: i32) -> Element {
                                     }
                                 }
                             }
+                            if !d.schedule_items.is_empty() {
+                                div { class: "sidecomp-schedule-times",
+                                    for item in &d.schedule_items {
+                                        {
+                                            let item = item.clone();
+                                            let label = activity_time_range(&item.start_time, &item.end_time);
+                                            rsx! { button { r#type: "button", class: "btn btn-link text-start", aria_haspopup: "dialog", aria_label: if viewer_is_to { format!("Edit scheduled time: {label}") } else { format!("View scheduled time: {label}") },
+                                                onclick: move |_| { if viewer_is_to { schedule_edit.set(Some(item.clone())); schedule_open.set(true); } else { schedule_details.set(Some(item.id)); } },
+                                                i { class: "far fa-calendar me-2", aria_hidden: true } "{label}"
+                                            } }
+                                        }
+                                    }
+                                }
+                            }
+                            if schedule_open() && viewer_is_to {
+                                ScheduleItemDialog { tournament_url: url.clone(), existing: schedule_edit(), initial_sidecomp: Some(comp_id),
+                                    on_close: move |_| schedule_open.set(false), on_saved: move |_| { schedule_open.set(false); detail.restart(); }
+                                }
+                            }
+                            if let Some(item_id) = schedule_details() { ScheduleItemDetails { tournament_url: url.clone(), item_id, on_close: move |_| schedule_details.set(None) } }
                             if let Some(desc) = description.as_ref() {
                                 if !desc.is_empty() { p { style: "white-space: pre-wrap;", "{desc}" } }
                             }

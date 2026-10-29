@@ -1385,3 +1385,172 @@
     .schedule-scale-controls > span { display: none; }
     .schedule-timeline { --time-col-width: 60px !important; }
 }
+
+
+/* One creation entry point for mouse, touch, and keyboard users. */
+.schedule-add-menu { position: relative; }
+.arctos-app .schedule-add-menu > .schedule-add-trigger { display: inline-flex; align-items: center; gap: .45rem; min-height: 44px; }
+.schedule-add-trigger .fa-chevron-down { font-size: .7em; }
+.schedule-add-dismiss { position: fixed; inset: 0; z-index: 1038; border: 0; background: transparent; cursor: default; }
+.schedule-add-menu.is-open > .schedule-add-trigger { position: relative; z-index: 1040; }
+.schedule-add-dropdown {
+    position: absolute; top: calc(100% + .35rem); left: 0; z-index: 1040;
+    width: 17rem; max-width: calc(100vw - 2rem); overflow-y: auto;
+    overscroll-behavior: contain; padding: .35rem;
+    background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: .6rem;
+    box-shadow: 0 4px 12px var(--ui-shadow);
+}
+.schedule-add-menu.opens-above .schedule-add-dropdown { top: auto; bottom: calc(100% + .35rem); }
+.schedule-add-group + .schedule-add-group { margin-top: .3rem; padding-top: .3rem; border-top: 1px solid var(--ui-border); }
+.schedule-add-group-label { margin: .15rem .65rem; color: var(--ui-muted); font-size: .75rem; font-weight: 600; }
+.schedule-add-choice {
+    display: block; width: 100%; min-height: 44px; padding: .55rem .65rem;
+    border: 0; border-radius: .35rem; background: transparent;
+    color: var(--ui-text); font: inherit; text-align: left;
+}
+.schedule-add-choice:hover:not(:disabled), .schedule-add-choice:focus-visible { background: var(--ui-surface-hover); }
+.schedule-add-choice:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: -2px; }
+.schedule-add-choice:disabled { color: var(--ui-muted); opacity: .55; }
+.schedule-add-hint { margin: .35rem .65rem .65rem; color: var(--ui-muted); font-size: .8125rem; }
+.schedule-add-selection-context { display: flex; flex-wrap: wrap; gap: .25rem 1rem; margin-bottom: .75rem; }
+.schedule-add-selection-context span { color: var(--ui-muted); font-variant-numeric: tabular-nums; }
+.schedule-add-selection-body .schedule-add-choices { max-width: 100%; }
+
+/* When timed items share a field, use short rows so the status cannot cover
+   the match title. The full name remains on the match link and card tooltip. */
+.schedule-timeline-event--compact-field {
+    justify-content: flex-start;
+    gap: 2px;
+    padding: 3px 5px;
+    font-size: 12px;
+    line-height: 1.15;
+}
+.schedule-timeline-event--compact-field .schedule-timeline-status-tag--corner {
+    position: static;
+    align-self: flex-start;
+    padding: 0 3px;
+    font-size: 11px;
+    line-height: 1.15;
+}
+.schedule-timeline-event--compact-field .schedule-timeline-event-header {
+    display: block !important;
+    min-width: 0;
+    margin: 0;
+}
+.schedule-timeline-event--compact-field .schedule-timeline-event-name,
+.schedule-timeline-event--compact-field .schedule-match-action {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    line-height: 1.15;
+}
+.schedule-timeline-event--compact-field .schedule-timeline-event-teams,
+.schedule-timeline-event--compact-field .schedule-timeline-event-refs {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex-wrap: nowrap !important;
+    margin: 0 !important;
+    font-size: 11px;
+    line-height: 1.15;
+}
+.schedule-timeline-event--compact-field .team-label,
+.schedule-timeline-event--compact-field .team-label > span:last-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.schedule-timeline-event--very-dense .schedule-timeline-event-refs {
+    display: none !important;
+}
+
+@media (max-width: 767.98px) {
+    /* Overlapping team cards have four short rows: status, field/time, title,
+       and opponent/role. Keep the full match link and its accessible name. */
+    .schedule-timeline-event--compact-team {
+        justify-content: flex-start;
+        gap: 2px;
+        padding: 3px 5px;
+        font-size: 12px;
+        line-height: 1.15;
+    }
+    .schedule-timeline-event--compact-team .schedule-timeline-status-tag--corner {
+        position: static;
+        align-self: flex-start;
+        padding: 0 3px;
+        font-size: 11px;
+        line-height: 1.15;
+    }
+    .schedule-timeline-event--compact-team .schedule-timeline-event-team-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 2px 4px;
+        flex-shrink: 0;
+    }
+    .schedule-timeline-event--compact-team .schedule-timeline-event-main,
+    .schedule-timeline-event--compact-team .schedule-timeline-event-header {
+        display: contents !important;
+    }
+    .schedule-timeline-event--compact-team .schedule-timeline-event-meta {
+        grid-area: 1 / 1 / 2 / -1;
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 4px;
+        max-width: 100%;
+        min-width: 0;
+        padding: 0;
+        text-align: left;
+        line-height: 1.15;
+    }
+    .schedule-timeline-event--compact-team .schedule-timeline-event-field {
+        min-width: 0;
+        margin: 0;
+        font-size: 11px;
+    }
+    .schedule-timeline-event--compact-team .schedule-timeline-event-start {
+        flex-shrink: 0;
+        font-size: 11px;
+    }
+    .schedule-timeline-event--compact-team .schedule-timeline-event-name {
+        grid-area: 2 / 1 / 3 / -1;
+        min-width: 0;
+        font-size: 12px;
+        line-height: 1.15;
+    }
+    .schedule-timeline-event--compact-team .schedule-match-action {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .schedule-timeline-event--compact-team .schedule-timeline-event-teams {
+        grid-area: 3 / 1 / 4 / 2;
+        min-width: 0;
+        overflow: hidden;
+        flex-wrap: nowrap !important;
+        font-size: 11px;
+        line-height: 1.15;
+    }
+    .schedule-timeline-event--compact-team .schedule-timeline-event-teams > .d-inline-flex,
+    .schedule-timeline-event--compact-team .team-label,
+    .schedule-timeline-event--compact-team .team-label > span:last-child {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .schedule-timeline-event--compact-team .schedule-role-badge {
+        grid-area: 3 / 2 / 4 / 3;
+        padding: 1px 3px;
+        font-size: 10px;
+        line-height: 1.15;
+    }
+    .schedule-timeline-event--compact-team .schedule-timeline-event-refs {
+        display: none !important;
+    }
+}

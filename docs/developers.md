@@ -371,8 +371,9 @@ Confirmed players, by name (league-wide for league tournaments).
 
 #### `GET /tournaments/{tournament_id}/matches`
 
-The schedule, with scores, by start time. `403` while the schedule is
-unpublished. Query parameters:
+Matches and match-timing entries (breaks and joins), with scores, by start time.
+Event activities and scheduled side competitions are not included in this
+endpoint. `403` while the schedule is unpublished. Query parameters:
 
 - `field`: field name.
 - `team`: team id.

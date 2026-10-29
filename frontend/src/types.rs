@@ -1471,6 +1471,8 @@ pub struct UpdateTeamRegistrationRequest {
 pub struct ScheduleSetupResponse {
     pub tournament: Tournament,
     pub matches: Vec<MatchSetupData>,
+    #[serde(default)]
+    pub schedule_items: Vec<ScheduleItemData>,
     pub fields: Vec<FieldSetupData>,
     pub tags: Vec<TagSetupData>,
     #[serde(default)]
@@ -1797,6 +1799,8 @@ pub struct SideCompRegistrant {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SideCompDetail {
+    #[serde(default)]
+    pub schedule_items: Vec<ScheduleItemData>,
     pub id: i32,
     pub event: String,
     pub name: String,
@@ -2062,4 +2066,29 @@ pub struct ConnectedApp {
     pub homepage_url: Option<String>,
     pub scopes: Vec<OAuthScope>,
     pub last_used_at: Option<String>,
+}
+
+/// A fixed-time activity or linked side competition, separate from match results.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ScheduleItemData {
+    pub id: i32,
+    pub sidecomp_id: Option<i32>,
+    pub title: String,
+    pub description: Option<String>,
+    pub start_time: String,
+    pub end_time: String,
+    pub field: Option<String>,
+    pub location: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SaveScheduleItem {
+    pub request_id: String,
+    pub sidecomp_id: Option<i32>,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub start_time: String,
+    pub end_time: String,
+    pub field: Option<String>,
+    pub location: Option<String>,
 }

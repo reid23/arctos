@@ -40,6 +40,7 @@ from app.services.match_start_eligibility import (
     why_sections_to_dict,
 )
 from app.services.permission_service import PermissionService
+from app.services.schedule_item_service import schedule_items_payload
 from app.services.registration_resolver import (
     is_player_registered,
     is_team_registered,
@@ -679,6 +680,7 @@ def tournament_schedule(tournament_url):
         {
             "tournament": tournament_to_dict(tournament),
             "matches": match_list,
+            "schedule_items": schedule_items_payload(tournament_url),
             "fields": fields,
             "team_options": team_options,
         }
@@ -874,6 +876,7 @@ def tournament_schedule_setup(tournament_url):
         {
             "tournament": tournament_to_dict(tournament),
             "matches": match_list,
+            "schedule_items": schedule_items_payload(tournament_url),
             "fields": fields_data,
             "tags": tags_data,
             "script_variables": script_variables_data,

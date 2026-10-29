@@ -15,6 +15,7 @@ from models import (
     Tournament,
     Match,
     Field,
+    ScheduleItem,
     Tag,
     ScriptVariable,
     TeamRegistration,
@@ -265,6 +266,7 @@ def delete_tournament(tournament_url):
     # Order: side comp results & registrations -> side comps; points & match notes -> matches;
     # then penalty types, head refs, registrations, TOs, fields, tags; finally tournament.
 
+    ScheduleItem.query.filter_by(event=tournament_url).delete(synchronize_session=False)
     side_comps = SideComp.query.filter_by(event=tournament_url).all()
     side_comp_ids = [sc.id for sc in side_comps]
     if side_comp_ids:
@@ -483,7 +485,7 @@ def update_field(tournament_url):
     if not field_id:
         return jsonify({"success": False, "error": "Field ID is required"}), 400
 
-    field = Field.query.get_or_404(field_id)
+    field = Field.query.filter_by(id=field_id, event=tournament_url).first_or_404()
     old_field_name = field.name
     new_field_name = request.form["field_name"]
 
@@ -493,6 +495,7 @@ def update_field(tournament_url):
     # Propagate field name change to all matches that reference this field
     name_update_count = 0
     if old_field_name != new_field_name:
+        ScheduleItem.query.filter_by(event=tournament_url, field=old_field_name).update({"field": new_field_name})
         matches_to_update = Match.query.filter_by(event=tournament_url, field=old_field_name).all()
         for match in matches_to_update:
             match.field = new_field_name
@@ -515,7 +518,8 @@ def delete_field(tournament_url):
     if not field_id:
         return jsonify({"success": False, "error": "Field ID is required"}), 400
 
-    field = Field.query.get_or_404(field_id)
+    field = Field.query.filter_by(id=field_id, event=tournament_url).first_or_404()
+    ScheduleItem.query.filter_by(event=tournament_url, field=field.name).update({"field": None})
     db.session.delete(field)
     db.session.commit()
     return jsonify({"success": True, "message": "Field deleted successfully!"}), 200

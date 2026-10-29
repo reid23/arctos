@@ -3834,3 +3834,66 @@ pub async fn upload_league_banner_photo(id: &str, bytes: bytes::Bytes) -> Result
 pub async fn delete_league_banner_photo(id: &str) -> Result<(), String> {
     delete_event_banner("leagues", id).await
 }
+
+
+pub async fn schedule_item(tournament_url: &str, id: i32) -> Result<ScheduleItemData, String> {
+    let r = with_credentials(client().get(format!(
+        "{}/_api/tournaments/{tournament_url}/schedule-items/{id}",
+        base()
+    )))
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
+pub async fn save_schedule_item(
+    tournament_url: &str,
+    id: Option<i32>,
+    body: &SaveScheduleItem,
+) -> Result<ScheduleItemData, String> {
+    let url = format!(
+        "{}/_api/tournaments/{tournament_url}/schedule-items",
+        base()
+    );
+    let request = if let Some(id) = id {
+        client().put(format!("{url}/{id}"))
+    } else {
+        client().post(url)
+    };
+    let r = with_credentials(request.json(body))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
+pub async fn delete_schedule_item(tournament_url: &str, id: i32) -> Result<Value, String> {
+    let r = with_credentials(client().delete(format!(
+        "{}/_api/tournaments/{tournament_url}/schedule-items/{id}",
+        base()
+    )))
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
+pub async fn create_scheduled_sidecomp(
+    tournament_url: &str,
+    name: &str,
+    kind: &str,
+    description: &str,
+    schedule: &SaveScheduleItem,
+) -> Result<Value, String> {
+    let body = serde_json::json!({ "name": name, "type": kind, "description": description, "schedule": schedule });
+    let r = with_credentials(
+        client()
+            .post(format!("{}/_api/{tournament_url}/sidecomps", base()))
+            .json(&body),
+    )
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
