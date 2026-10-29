@@ -1553,6 +1553,126 @@ def test_log_result_and_standings(test_db, tournament):
     assert row["weapon"] == "LONG"
 
 
+def _matchup_comp(tournament, *players):
+    from app.services.sidecomp_service import SideCompService
+
+    sc = SideComp(
+        event=tournament.url,
+        name="Duels",
+        type="DUELING",
+        registration_open=True,
+        active=True,
+        track_losses=True,
+        track_matchups=True,
+    )
+    db.session.add(sc)
+    db.session.commit()
+    regs = []
+    for player in players:
+        _confirm_event_registration(tournament.url, player.id)
+        regs.append(SideCompService.register_player(sc.id, player_id=player.id, weapon="LONG").unwrap())
+    return sc, regs
+
+
+def test_track_matchups_requires_loss_tracking(test_db, tournament):
+    to_user = _make_player("to_user", "TO User")
+    _make_to(tournament.url, to_user.id)
+    sc = SideComp(event=tournament.url, name="Duels", type="DUELING", active=True)
+    db.session.add(sc)
+    db.session.commit()
+    from app.services.sidecomp_service import SideCompService
+
+    rejected = SideCompService.update(
+        sc.id,
+        actor_user_id=to_user.id,
+        actor_user_type="player",
+        track_matchups=True,
+    )
+    assert isinstance(rejected, Err)
+    assert "losses" in str(rejected.unwrap_err()).lower()
+
+    enabled = SideCompService.update(
+        sc.id,
+        actor_user_id=to_user.id,
+        actor_user_type="player",
+        track_losses=True,
+        track_matchups=True,
+    )
+    assert isinstance(enabled, Ok)
+    assert enabled.unwrap().track_matchups is True
+
+    cleared = SideCompService.update(
+        sc.id,
+        actor_user_id=to_user.id,
+        actor_user_type="player",
+        track_losses=False,
+    )
+    assert cleared.unwrap().track_losses is False
+    assert cleared.unwrap().track_matchups is False
+
+
+def test_log_matchup_records_both_sides_and_undoes_together(test_db, tournament):
+    from app.services.sidecomp_service import SideCompService
+
+    left = _make_player("p_left", "Left")
+    right = _make_player("p_right", "Right")
+    sc, (left_reg, right_reg) = _matchup_comp(tournament, left, right)
+    assert SideCompService.enter_results_roster(sc.id).unwrap()["track_matchups"] is True
+
+    rows = SideCompService.log_matchup(
+        sc.id,
+        winner_registration_id=left_reg.id,
+        loser_registration_id=right_reg.id,
+        ref_user_id="ref",
+    ).unwrap()
+    assert [row.points for row in rows] == [1, -1]
+    assert rows[0].opponent == right_reg.id
+    assert rows[1].opponent == left_reg.id
+    assert rows[0].stamp == rows[1].stamp
+
+    by_player = {row["player_id"]: row for row in SideCompService.standings(sc.id).unwrap()["tables"][0]["rows"]}
+    assert (by_player[left.id]["wins"], by_player[left.id]["losses"]) == (1, 0)
+    assert (by_player[right.id]["wins"], by_player[right.id]["losses"]) == (0, 1)
+
+    SideCompService.delete_result(rows[0].uuid, actor_user_id="ref").unwrap()
+    assert SideCompResult.query.filter_by(comp=sc.id).count() == 0
+
+
+def test_log_matchup_allows_an_unknown_opponent(test_db, tournament):
+    from app.services.sidecomp_service import SideCompService
+
+    left = _make_player()
+    sc, (left_reg,) = _matchup_comp(tournament, left)
+    rows = SideCompService.log_matchup(sc.id, winner_registration_id=left_reg.id, ref_user_id="ref").unwrap()
+    assert len(rows) == 1
+    assert rows[0].points == 1
+    assert rows[0].opponent is None
+    row = SideCompService.standings(sc.id).unwrap()["tables"][0]["rows"][0]
+    assert row["wins"] == 1
+    assert row["losses"] == 0
+
+
+def test_log_matchup_rejects_the_same_person_and_a_comp_that_does_not_track_them(test_db, tournament):
+    from app.services.sidecomp_service import SideCompService
+
+    left = _make_player()
+    sc, (left_reg,) = _matchup_comp(tournament, left)
+    same = SideCompService.log_matchup(
+        sc.id,
+        winner_registration_id=left_reg.id,
+        loser_registration_id=left_reg.id,
+        ref_user_id="ref",
+    )
+    assert isinstance(same, Err)
+    assert "different" in str(same.unwrap_err()).lower()
+
+    sc.track_matchups = False
+    db.session.commit()
+    disabled = SideCompService.log_matchup(sc.id, winner_registration_id=left_reg.id, ref_user_id="ref")
+    assert isinstance(disabled, Err)
+    assert "not tracked" in str(disabled.unwrap_err()).lower()
+
+
 def test_log_result_rejects_when_inactive(test_db, tournament):
     from app.error_values import Err
     from app.services.sidecomp_service import SideCompService

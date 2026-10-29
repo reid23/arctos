@@ -55,6 +55,7 @@ def _sc_payload(sc):
         "track_losses": bool(sc.track_losses),
         "track_chain_losses": bool(sc.track_chain_losses),
         "track_break_losses": bool(sc.track_break_losses),
+        "track_matchups": bool(sc.track_matchups),
         "allowed_weapons": sc.allowed_weapon_names(),
         "only_show_top_n_results": sc.only_show_top_n_results,
         "results_page_enabled": sc.results_page_enabled(),
@@ -198,6 +199,7 @@ def update(comp_id: int):
         track_losses=data.get("track_losses"),
         track_chain_losses=data.get("track_chain_losses"),
         track_break_losses=data.get("track_break_losses"),
+        track_matchups=data.get("track_matchups"),
         allowed_weapons=data.get("allowed_weapons"),
         only_show_top_n_results=top_n_arg,
     )
@@ -215,6 +217,7 @@ def update(comp_id: int):
             "track_losses": bool(sc.track_losses),
             "track_chain_losses": bool(sc.track_chain_losses),
             "track_break_losses": bool(sc.track_break_losses),
+            "track_matchups": bool(sc.track_matchups),
             "allowed_weapons": sc.allowed_weapon_names(),
             "only_show_top_n_results": sc.only_show_top_n_results,
             "results_page_enabled": sc.results_page_enabled(),
@@ -500,6 +503,39 @@ def log_result(comp_id: int):
         ref_user_id=current_user.id,
     )
     return json_from_result(res, ok_to_payload=lambda result: result.to_payload())
+
+
+@bp.route("/sidecomps/<int:comp_id>/matchups", methods=["POST"])
+@login_required
+@require_json_body()
+def log_matchup(comp_id: int):
+    """Authenticated: log a win for one person and, when known, the other's loss."""
+    data = g.json_body
+
+    def registration_id_for(key: str) -> int | None:
+        raw = data.get(key)
+        if raw is None:
+            return None
+        try:
+            return int(raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(key) from exc
+
+    try:
+        winner_registration_id = registration_id_for("winner_registration_id")
+        loser_registration_id = registration_id_for("loser_registration_id")
+    except ValueError as exc:
+        return jsonify({"success": False, "error": f"{exc} must be an integer"}), 400
+
+    res = SideCompService.log_matchup(
+        comp_id,
+        winner_registration_id=winner_registration_id,
+        winner_player_id=(data.get("winner_player_id") or "").strip() or None,
+        loser_registration_id=loser_registration_id,
+        loser_player_id=(data.get("loser_player_id") or "").strip() or None,
+        ref_user_id=current_user.id,
+    )
+    return json_from_result(res, ok_to_payload=lambda results: {"results": [row.to_payload() for row in results]})
 
 
 @bp.route("/sidecomps/results/<result_uuid>", methods=["PATCH"])
