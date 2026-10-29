@@ -65,8 +65,9 @@ def _normalize_shortname(raw) -> Result[str | None, ArctosError]:
         return Ok(None)
     if len(shortname) > SHORTNAME_LEN:
         return Err(ValidationError(f"Short name must be at most {SHORTNAME_LEN} characters"))
-    if problem := team_pseudonym_char_error(shortname):
-        return Err(ValidationError(f"{shortname}: {problem}"))
+    match team_pseudonym_char_error(shortname):
+        case Some(problem):
+            return Err(ValidationError(f"{shortname}: {problem}"))
     return Ok(shortname)
 
 
@@ -92,8 +93,9 @@ def _clean_team_entries(raw_entries: list | None) -> Result[list[tuple[str, str 
         name = str(name).strip()
         if not name or name.casefold() in seen_names:
             continue
-        if problem := team_pseudonym_char_error(name):
-            return Err(ValidationError(f"{name}: {problem}"))
+        match team_pseudonym_char_error(name):
+            case Some(problem):
+                return Err(ValidationError(f"{name}: {problem}"))
         shortname = _normalize_shortname(raw_shortname).Q()
         if shortname is not None and shortname.casefold() in seen_shortnames:
             return Err(ValidationError(f"Short name already used: {shortname}"))
@@ -372,8 +374,9 @@ class HistoricalRecordsService:
         name = (name or "").strip()
         if not name:
             return Err(ValidationError("Team name is required"))
-        if problem := team_pseudonym_char_error(name):
-            return Err(ValidationError(problem))
+        match team_pseudonym_char_error(name):
+            case Some(problem):
+                return Err(ValidationError(problem))
         registrations = team_registrations_for_tournament(tournament)
         registration = next((r for r in registrations if r.team == team_id), None)
         if registration is None:
@@ -495,8 +498,9 @@ class HistoricalRecordsService:
         name = (name or "").strip()
         if not name:
             return Err(ValidationError("Match name is required"))
-        if problem := match_name_char_error(name):
-            return Err(ValidationError(problem))
+        match match_name_char_error(name):
+            case Some(problem):
+                return Err(ValidationError(problem))
         if any(m.name == name and m is not match for m in matches):
             return Err(ValidationError(f"There is already a match named {name}"))
         winner_side = parse_enum(WinnerSide, winner)

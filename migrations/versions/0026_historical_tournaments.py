@@ -80,7 +80,8 @@ def downgrade() -> None:
     try:
         with op.batch_alter_table("teams") as batch:
             batch.drop_index("ix_teams_placeholder_event")
-            batch.drop_constraint("fk_teams_placeholder_event", type_="foreignkey")
+            # SQLite batch reflection does not keep the name given to this
+            # foreign key, so dropping the column removes the key with it.
             batch.drop_column("placeholder_event")
         with op.batch_alter_table("tournaments") as batch:
             batch.drop_column("historical")
