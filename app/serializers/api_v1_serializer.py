@@ -376,6 +376,7 @@ def side_competition_json(side_competition, registrant_count: int) -> dict:
         "track_losses": bool(side_competition.track_losses),
         "track_chain_losses": bool(side_competition.track_chain_losses),
         "track_break_losses": bool(side_competition.track_break_losses),
+        "track_matchups": bool(side_competition.track_matchups),
         "results_available": side_competition.results_page_enabled(),
         "registrant_count": registrant_count,
         "created_at": iso(side_competition.created_at),

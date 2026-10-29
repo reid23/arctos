@@ -3352,6 +3352,7 @@ pub async fn sidecomp_update(
     track_losses: Option<bool>,
     track_chain_losses: Option<bool>,
     track_break_losses: Option<bool>,
+    track_matchups: Option<bool>,
     allowed_weapons: Option<&[String]>,
     only_show_top_n_results: Option<i32>,
 ) -> Result<Value, String> {
@@ -3380,6 +3381,9 @@ pub async fn sidecomp_update(
     }
     if let Some(track) = track_break_losses {
         body.insert("track_break_losses".to_string(), serde_json::json!(track));
+    }
+    if let Some(track) = track_matchups {
+        body.insert("track_matchups".to_string(), serde_json::json!(track));
     }
     if let Some(weapons) = allowed_weapons {
         body.insert("allowed_weapons".to_string(), serde_json::json!(weapons));
@@ -3555,6 +3559,36 @@ pub async fn sidecomp_log_result(
     .await
     .map_err(|e| e.to_string())?;
     response_json(r).await
+}
+
+pub async fn sidecomp_log_matchup(
+    comp_id: i32,
+    winner_registration_id: Option<i32>,
+    winner_player_id: Option<&str>,
+    loser_registration_id: Option<i32>,
+    loser_player_id: Option<&str>,
+) -> Result<Vec<SideCompResultEntry>, String> {
+    let c = client();
+    let body = serde_json::json!({
+        "winner_registration_id": winner_registration_id,
+        "winner_player_id": winner_player_id,
+        "loser_registration_id": loser_registration_id,
+        "loser_player_id": loser_player_id,
+    });
+    let r = with_credentials(
+        c.post(format!("{}/_api/sidecomps/{}/matchups", base(), comp_id))
+            .json(&body),
+    )
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    let payload: MatchupLogResponse = response_json(r).await?;
+    Ok(payload.results)
+}
+
+#[derive(serde::Deserialize)]
+struct MatchupLogResponse {
+    results: Vec<SideCompResultEntry>,
 }
 
 pub async fn sidecomp_flag_result(

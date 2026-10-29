@@ -459,6 +459,7 @@ class SideCompService:
         track_losses: Optional[bool] = None,
         track_chain_losses: Optional[bool] = None,
         track_break_losses: Optional[bool] = None,
+        track_matchups: Optional[bool] = None,
         allowed_weapons: Optional[list] = None,
         only_show_top_n_results: object = ...,
     ) -> Result["SideComp", ArctosError]:
@@ -487,6 +488,9 @@ class SideCompService:
                 chain/breaking. If ``None``, the field is left untouched.
             track_break_losses: New value for loss tracking of breakers in
                 chain/breaking. If ``None``, the field is left untouched.
+            track_matchups: New value for matchup scoring. Requires loss
+                tracking. If ``None``, the field is left untouched. Turning
+                loss tracking off clears it.
             allowed_weapons: New list of enabled :class:`~app.domain.enums.Pompfen`
                 names. If ``None``, the field is left untouched.
             only_show_top_n_results: Sentinel ``...`` leaves the field untouched.
@@ -539,6 +543,13 @@ class SideCompService:
             sc.track_chain_losses = bool(track_chain_losses)
         if track_break_losses is not None:
             sc.track_break_losses = bool(track_break_losses)
+        if not sc.loss_tracking_enabled():
+            sc.track_matchups = False
+        if track_matchups is not None:
+            want_matchups = bool(track_matchups)
+            if want_matchups and not sc.loss_tracking_enabled():
+                return Err(ValidationError("Track matchups requires tracking losses"))
+            sc.track_matchups = want_matchups
 
         if allowed_weapons is not None:
             parsed_weapons = _parse_allowed_weapons(allowed_weapons)
@@ -1017,9 +1028,50 @@ class SideCompService:
                 "name": sc.name,
                 "type": str(sc.type),
                 "active": bool(sc.active),
+                "track_matchups": bool(sc.track_matchups),
                 "registrants": registrants,
             }
         )
+
+    @staticmethod
+    def _existing_registration(
+        sc: "SideComp",
+        *,
+        registration_id: Optional[int],
+        player_id: Optional[str],
+    ) -> Result[Optional["SideCompRegistration"], ArctosError]:
+        """Find the registration a point would be logged against.
+
+        ``Ok(None)`` means *player_id* holds an entry number here but has no
+        registration yet. The caller creates that registration only after the
+        point itself is accepted.
+        """
+        from models import SideCompEntryNumber, SideCompRegistration
+
+        if registration_id is not None:
+            reg = SideCompRegistration.query.filter_by(id=registration_id, comp=sc.id).first()
+            if reg is None:
+                return Err(NotFoundError("Registration not found"))
+            return Ok(reg)
+        if not player_id:
+            return Err(ValidationError("registration_id or player_id is required"))
+        reg = SideCompRegistration.query.filter_by(player=player_id, comp=sc.id).first()
+        if reg is not None:
+            return Ok(reg)
+        holds_number = SideCompEntryNumber.query.filter_by(
+            scope=SideCompService._entry_number_scope(sc), player=player_id
+        ).first()
+        if holds_number is None:
+            return Err(NotFoundError("Player has no side competition entry number here"))
+        return Ok(None)
+
+    @staticmethod
+    def _open_for_results(sc: "SideComp") -> Result[None, ArctosError]:
+        if sc.finalized:
+            return Err(ValidationError("This side competition has been finalized; results cannot be entered"))
+        if not sc.active:
+            return Err(ValidationError("This side competition is not active; results cannot be entered"))
+        return Ok(None)
 
     @staticmethod
     @allow_Q
@@ -1038,7 +1090,7 @@ class SideCompService:
         without a registration in this comp gets an incomplete one (no
         weapon) created alongside the result.
         """
-        from models import SideComp, SideCompEntryNumber, SideCompRegistration, SideCompResult, db
+        from models import SideComp, SideCompResult, db
 
         if points not in (1, -1):
             return Err(ValidationError("points must be +1 or -1"))
@@ -1047,26 +1099,8 @@ class SideCompService:
         if sc is None:
             return Err(NotFoundError("Side competition not found"))
 
-        if sc.finalized:
-            return Err(ValidationError("This side competition has been finalized; results cannot be entered"))
-
-        if not sc.active:
-            return Err(ValidationError("This side competition is not active; results cannot be entered"))
-
-        if registration_id is not None:
-            reg = SideCompRegistration.query.filter_by(id=registration_id, comp=comp_id).first()
-            if reg is None:
-                return Err(NotFoundError("Registration not found"))
-        elif player_id is not None:
-            reg = SideCompRegistration.query.filter_by(player=player_id, comp=comp_id).first()
-            if reg is None:
-                holds_number = SideCompEntryNumber.query.filter_by(
-                    scope=SideCompService._entry_number_scope(sc), player=player_id
-                ).first()
-                if holds_number is None:
-                    return Err(NotFoundError("Player has no side competition entry number here"))
-        else:
-            return Err(ValidationError("registration_id or player_id is required"))
+        SideCompService._open_for_results(sc).Q()
+        reg = SideCompService._existing_registration(sc, registration_id=registration_id, player_id=player_id).Q()
 
         weapon_value = reg.weapon if reg is not None else None
         if points < 0 and not sc.tracks_losses_for_weapon(weapon_value):
@@ -1087,6 +1121,100 @@ class SideCompService:
         db.session.add(result)
         db.session.commit()
         return Ok(result)
+
+    @staticmethod
+    @allow_Q
+    def log_matchup(
+        comp_id: int,
+        *,
+        winner_registration_id: Optional[int] = None,
+        winner_player_id: Optional[str] = None,
+        loser_registration_id: Optional[int] = None,
+        loser_player_id: Optional[str] = None,
+        ref_user_id: str,
+    ) -> Result[list["SideCompResult"], ArctosError]:
+        """Record a bout. Either person may be unknown.
+
+        A known winner gets ``+1``. A known loser gets ``-1``. When both are
+        known the rows share a timestamp and point at each other, so undoing
+        either one removes the bout. At least one person is required.
+        """
+        from app.utils.datetime_helpers import now_utc_naive
+        from models import SideComp, SideCompResult, db
+
+        sc = SideComp.query.get(comp_id)
+        if sc is None:
+            return Err(NotFoundError("Side competition not found"))
+        if not sc.track_matchups:
+            return Err(ValidationError("Matchups are not tracked for this side competition"))
+
+        SideCompService._open_for_results(sc).Q()
+        winner_known = winner_registration_id is not None or bool(winner_player_id)
+        loser_known = loser_registration_id is not None or bool(loser_player_id)
+        if not winner_known and not loser_known:
+            return Err(ValidationError("Pick at least one person"))
+
+        winner = None
+        if winner_known:
+            winner = SideCompService._existing_registration(
+                sc, registration_id=winner_registration_id, player_id=winner_player_id
+            ).Q()
+        loser = None
+        if loser_known:
+            loser = SideCompService._existing_registration(
+                sc, registration_id=loser_registration_id, player_id=loser_player_id
+            ).Q()
+        if winner_known and loser_known:
+            winner_player = winner.player if winner is not None else winner_player_id
+            loser_player = loser.player if loser is not None else loser_player_id
+            if winner_player == loser_player:
+                return Err(ValidationError("Pick two different people"))
+
+        if winner_known and winner is None:
+            if not winner_player_id:
+                return Err(ValidationError("registration_id or player_id is required"))
+            winner = SideCompService._add_registration(
+                sc, player_id=winner_player_id, weapon=None, registered_by_to=False
+            )
+        if loser_known and loser is None:
+            if not loser_player_id:
+                return Err(ValidationError("registration_id or player_id is required"))
+            loser = SideCompService._add_registration(
+                sc, player_id=loser_player_id, weapon=None, registered_by_to=False
+            )
+        db.session.flush()
+
+        stamp = now_utc_naive()
+        rows = []
+        if winner is not None:
+            rows.append(
+                SideCompResult(
+                    comp=comp_id,
+                    player=winner.id,
+                    opponent=loser.id if loser is not None else None,
+                    points=1,
+                    ref=ref_user_id,
+                    flagged=False,
+                    valid=True,
+                    stamp=stamp,
+                )
+            )
+        if loser is not None:
+            rows.append(
+                SideCompResult(
+                    comp=comp_id,
+                    player=loser.id,
+                    opponent=winner.id if winner is not None else None,
+                    points=-1,
+                    ref=ref_user_id,
+                    flagged=False,
+                    valid=True,
+                    stamp=stamp,
+                )
+            )
+        db.session.add_all(rows)
+        db.session.commit()
+        return Ok(rows)
 
     @staticmethod
     @allow_Q
@@ -1116,7 +1244,11 @@ class SideCompService:
         actor_user_id: str,
     ) -> Result[None, ArctosError]:
         """Undo a logged point. Only the ref who logged it may delete it, and only
-        while the side competition is still accepting results."""
+        while the side competition is still accepting results.
+
+        Deleting one side of a matchup also deletes the other side, matched by
+        the shared timestamp and the swapped opponent link.
+        """
         from models import SideComp, SideCompResult, db
 
         result = SideCompResult.query.get(result_uuid)
@@ -1132,6 +1264,19 @@ class SideCompService:
 
         if sc.finalized or not sc.active:
             return Err(ValidationError("This side competition is not active; results cannot be changed"))
+
+        if result.opponent is not None:
+            pair = SideCompResult.query.filter(
+                SideCompResult.comp == result.comp,
+                SideCompResult.player == result.opponent,
+                SideCompResult.opponent == result.player,
+                SideCompResult.ref == result.ref,
+                SideCompResult.points == -result.points,
+                SideCompResult.stamp == result.stamp,
+                SideCompResult.uuid != result.uuid,
+            ).first()
+            if pair is not None:
+                db.session.delete(pair)
 
         db.session.delete(result)
         db.session.commit()
@@ -1456,8 +1601,8 @@ class SideCompService:
             chains = [r for r in regs if r.weapon == Pompfen.CHAIN.value]
             breaks = [r for r in regs if r.weapon != Pompfen.CHAIN.value]
             tables = [
-                build_table("chains", "Chains", chains, bool(sc.track_chain_losses)),
-                build_table("breaks", "Breaks", breaks, bool(sc.track_break_losses)),
+                build_table("chains", "Chains", chains, bool(sc.track_chain_losses or sc.track_matchups)),
+                build_table("breaks", "Breaks", breaks, bool(sc.track_break_losses or sc.track_matchups)),
             ]
         else:
             tables = [build_table("all", "Standings", regs, bool(sc.track_losses))]

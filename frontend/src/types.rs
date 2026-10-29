@@ -1821,6 +1821,8 @@ pub struct SideCompDetail {
     #[serde(default)]
     pub track_break_losses: bool,
     #[serde(default)]
+    pub track_matchups: bool,
+    #[serde(default)]
     pub allowed_weapons: Vec<String>,
     pub only_show_top_n_results: Option<i32>,
     #[serde(default)]
@@ -1899,6 +1901,8 @@ pub struct SideCompEnterRoster {
     pub type_: String,
     #[serde(default)]
     pub active: bool,
+    #[serde(default)]
+    pub track_matchups: bool,
     pub registrants: Vec<SideCompEnterRosterPlayer>,
 }
 
