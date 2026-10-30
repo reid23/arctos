@@ -10,8 +10,14 @@ and fill only the values you need.
 
 `ARCTOS_CORS_DEV`
 : (default `0`) Set to `1` when the frontend and backend run on
-  different local origins during development. Leave unset or `0` in
-  production.
+  different local origins during development. Leave unset or `0` for the
+  normal Dioxus development proxy and in production.
+
+`ARCTOS_API_BASE`
+: Optional frontend build-time API origin. The Rust frontend uses its own
+  browser origin by default; Dioxus proxies `/_api/`, `/api/`, and `/static/`
+  to Flask on port 5006 in development. Export an absolute URL before
+  building only when intentionally using a separate API server.
 
 `ARCTOS_PORT`
 : (default `5006`) Backend port when running `python run_app.py`.
@@ -36,9 +42,23 @@ and fill only the values you need.
 : (default `104857600`) Max upload/request size in bytes.
 
 `SILLY_USERS`
-: Colon-separated account ids/usernames. These are the `Player.id` or
-  `Team.id` slug values used to log in, not display names and not
-  numeric database row ids; e.g. `alice:team-slug`.
+: Enables the additional built-in Stones sounds for the listed accounts.
+  Use exact, case-sensitive usernames separated by colons; for example,
+  `alice:team-slug`. These are the `Player.id` or `Team.id` values used to
+  sign in. Unlisted accounts and signed-out visitors receive Classic and
+  Snare. Custom MP3 playback is available to everyone.
+
+  Set this variable in the backend process environment and restart the
+  backend after changing it. `just dev` and `just run` load `.env`; the
+  isolated demo launcher uses the environment passed to its command.
+  To enable the extra sounds for the demo organizer:
+
+  ```sh
+  SILLY_USERS=demo-organizer uv run python -m scripts.dev_demo
+  ```
+
+  Sign in as that account and open or reload Stones. The same environment
+  prefix works with the demo launcher's `--snapshot` option.
 
 
 ## Scoreboard overlay rendering
@@ -70,10 +90,29 @@ go to google cloud console for these
 `GOOGLE_CLIENT_SECRET`
 : OAuth client secret from Google Cloud Console.
 
-Google OAuth callback URLs are derived from the incoming request host. If the
-same server is reachable on multiple public domains, add each domain's
+`GOOGLE_REDIRECT_URI`
+: Optional exact public callback URL, such as
+  `http://localhost:8080/_api/auth/google/callback` for Dioxus development or
+  `https://arctos.example.org/_api/auth/google/callback` in production.
+  Must be an absolute HTTP(S) URL without credentials, query, or fragment.
+  Include any deployment path prefix. Invalid values cause Google sign-in
+  to fail with a configuration error.
+
+When testing Google sign-in through `dx serve`, set `GOOGLE_REDIRECT_URI` to
+the frontend's callback URL because the Dioxus proxy replaces the request's
+Host header with Flask's address. Register that exact URL in Google Cloud
+Console and open Arctos at the same origin: switching between `localhost`
+and `127.0.0.1`, or between desktop and phone addresses, loses the session
+cookie needed to verify the OAuth callback. A phone needs an accessible
+HTTPS hostname accepted by Google for its callback; a desktop loopback URL
+points at the phone itself. The callback must pass through the same proxy
+as the initial login request so its state and session cookies are preserved.
+
+When `GOOGLE_REDIRECT_URI` is unset, callback URLs are derived from the
+incoming request host. If the same server
+is reachable on multiple public domains, add each domain's
 `/_api/auth/google/callback` URL to the authorized redirect URIs in Google
-Cloud Console.
+Cloud Console. Forwarded host headers are not trusted to choose this URL.
 
 
 ## Sign in with Arctos

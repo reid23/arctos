@@ -1,0 +1,30 @@
+.arctos-app .sidecomp-weapon-filter { display: flex; align-items: center; gap: .75rem; max-width: 100%; }
+.arctos-app .sidecomp-weapon-filter .form-select { width: 12rem; max-width: 100%; }
+.arctos-app .sidecomp-weapon-filter .form-select:focus-visible { outline: 3px solid var(--ui-link); outline-offset: 2px; }
+.arctos-app .sidecomp-standings-table { width: 100%; min-width: 17.5rem; }
+.arctos-app .sidecomp-standings-table th.table-number { width: 5rem; }
+.arctos-app .sidecomp-standings-table th { vertical-align: middle; }
+.arctos-app .sidecomp-standings-table th:first-child { width: 3.5rem; }
+.arctos-app .sidecomp-standings-table td.table-copy { min-width: 5rem; }
+.arctos-app .sidecomp-standings-table th[aria-sort="descending"] { color: var(--ui-text); }
+.arctos-app .sidecomp-standings-table .results-sort-button { display: inline-flex; align-items: center; gap: .35rem; min-width: 44px; min-height: 44px; padding: .35rem 0; border: 0; border-radius: .2rem; background: transparent; color: inherit; font: inherit; white-space: nowrap; }
+.arctos-app .sidecomp-standings-table .results-sort-button:focus-visible { outline: 3px solid var(--ui-link); outline-offset: 2px; }
+.arctos-app .sidecomp-sort-label { white-space: nowrap; }
+.arctos-app .sidecomp-standing-player { display: flex; align-items: center; }
+.arctos-app .sidecomp-standing-identity { min-width: 0; }
+.arctos-app .sidecomp-standing-avatar { flex-shrink: 0; }
+.arctos-app .sidecomp-standing-entry { display: flex; flex-wrap: wrap; gap: .15rem .65rem; }
+.arctos-app .sidecomp-standing-weapon { display: inline-flex; align-items: center; gap: .25rem; }
+.arctos-app .sidecomp-standing-self { display: inline-block; margin-left: .5rem; padding: .05rem .3rem; border: 1px solid currentColor; border-radius: .25rem; font-size: .75rem; white-space: nowrap; }
+.arctos-app .event-route-tabs.sidecomp-results-tabs { padding-inline: 0; scroll-padding-inline: 0; border-bottom: 1px solid var(--ui-border); }
+
+@media (max-width: 575.98px) {
+  .arctos-app .sidecomp-weapon-filter { width: 100%; }
+  .arctos-app .sidecomp-weapon-filter .form-select { flex: 1; min-width: 0; }
+  .arctos-app .sidecomp-standings-table th.table-number { width: 3.25rem; }
+  .arctos-app .sidecomp-standings-table th:first-child { width: 2.25rem; }
+  .arctos-app .sidecomp-standings-table :is(th, td) { padding: .5rem .25rem; }
+  .arctos-app .sidecomp-standings-table th { font-size: .75rem; }
+  .arctos-app .sidecomp-standings-table .results-sort-button { min-width: 44px; justify-content: flex-end; gap: .15rem; white-space: normal; }
+  .arctos-app .sidecomp-standing-avatar { display: none !important; }
+}

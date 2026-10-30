@@ -1,0 +1,65 @@
+/* Profiles share a flat column; the cover and avatar are separate image crops. */
+.arctos-app .profile-page { width: 100%; max-width: 900px; min-width: 0; margin-inline: auto; color: var(--ui-text); background: var(--ui-surface); }
+.arctos-app .profile-detail-header { width: 100%; min-width: 0; color: var(--ui-text); background: var(--ui-surface); }
+.arctos-app .profile-cover { position: relative; width: 100%; aspect-ratio: 3 / 1; background: linear-gradient(115deg, var(--ui-gradient-start), var(--ui-gradient-end)); }
+.arctos-app .profile-cover-image { display: block; width: 100%; height: 100%; object-fit: cover; }
+.arctos-app .profile-header-body { position: relative; padding: 0 24px 20px; text-align: left; }
+.arctos-app .profile-avatar-row { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; margin-top: -60px; margin-bottom: 12px; }
+.arctos-app .profile-avatar { display: block; flex: 0 0 auto; width: 120px; height: 120px; aspect-ratio: 1; object-fit: cover; border: 4px solid var(--ui-surface); border-radius: 50%; background: var(--ui-surface-muted); }
+.arctos-app .profile-avatar-placeholder { display: grid; place-items: center; color: var(--ui-accent-text); background: var(--ui-accent-soft); font-size: 2.6rem; }
+.arctos-app .profile-identity { min-width: 0; }
+.arctos-app .profile-identity h1 { margin: 0; font-size: clamp(1.5rem, 3vw, 2rem); line-height: 1.2; color: var(--ui-text); overflow-wrap: anywhere; }
+.arctos-app .profile-account-name { margin: .3rem 0 0; color: var(--ui-muted); overflow-wrap: anywhere; }
+.arctos-app .profile-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: .5rem 1.25rem; margin-top: .75rem; color: var(--ui-muted); font-size: .875rem; }
+.arctos-app .profile-location { margin: 0; overflow-wrap: anywhere; }
+.arctos-app .profile-location i { margin-right: .45rem; }
+.arctos-app .profile-detail-header .profile-event-stat { display: flex; flex-direction: row; align-items: baseline; gap: .4rem; margin: 0; padding: 0; border: 0; background: transparent; color: var(--ui-muted); }
+.arctos-app .profile-detail-header .profile-event-stat dt { color: inherit; font-size: .875rem; font-weight: 500; }
+.arctos-app .profile-detail-header .profile-event-stat dd { color: inherit; font-size: .875rem; margin: 0; font-weight: 500; }
+.arctos-app .profile-edit-link { flex: 0 0 auto; margin-bottom: 8px; background: var(--ui-surface); color: var(--ui-text); border-color: var(--ui-control-border); }
+.arctos-app .profile-page .event-route-tabs { padding-inline: 24px; }
+.arctos-app .profile-detail-content { padding: 24px 24px 3rem; }
+.arctos-app .profile-section { min-width: 0; }
+.arctos-app .profile-section[hidden] { display: none; }
+.arctos-app .profile-section-heading { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: .75rem; padding: 0 0 1rem; }
+.arctos-app .profile-section-heading h2 { margin: 0; font-size: 1.1rem; }
+.arctos-app .profile-section-body { min-width: 0; }
+.arctos-app .profile-section .markdown-content { overflow-wrap: anywhere; }
+.arctos-app .profile-table-scroll { width: 100%; max-width: 100%; min-width: 0; overflow-x: auto; overscroll-behavior-x: contain; }
+.arctos-app .profile-table-scroll:focus-visible { outline: 2px solid var(--ui-link); outline-offset: -2px; }
+.arctos-app .profile-page .table { --bs-table-bg: transparent; margin: 0; }
+.arctos-app .profile-page .table th { background: transparent; }
+/* Historical records stay tables on every screen; only this region scrolls. */
+.arctos-app .profile-table-scroll .table { min-width: 36rem; }
+.arctos-app .profile-table-scroll .profile-history-table { min-width: 48rem; }
+.arctos-app .profile-table-scroll .profile-injury-table { min-width: 44rem; }
+.arctos-app .profile-table-scroll .table > :not(caption) > * > * { padding: 8px 12px; vertical-align: middle; }
+.arctos-app .profile-table-scroll .table th { white-space: nowrap; font-size: .8125rem; }
+.arctos-app .profile-table-scroll .badge { white-space: nowrap; }
+.arctos-app .profile-table-scroll .table td a { display: inline-flex; align-items: center; min-height: 44px; }
+.arctos-app .profile-table-scroll .table tbody tr:last-child > td { border-bottom: 1px solid var(--ui-border); }
+.arctos-app .profile-history-table .profile-history-toggle { width: 44px; }
+.arctos-app .profile-table-scroll .profile-history-table td > .table-jersey { display: inline-grid; grid-template-columns: minmax(0, 1fr) max-content; width: 100%; min-width: 8.5rem; max-width: 20rem; column-gap: .75rem; }
+.arctos-app .profile-table-scroll .profile-history-table .table-jersey > .table-nowrap { text-align: right; }
+.arctos-app .profile-table-scroll .profile-record-actions .btn { min-height: 44px; white-space: nowrap; }
+.arctos-app .profile-roster-panel { max-width: min(36rem, calc(100vw - 64px)); }
+.arctos-app .profile-roster-copy .profile-roster-meta { display: grid; grid-template-columns: 8.5rem minmax(0, 1fr); align-items: center; gap: .75rem; flex-basis: 100%; min-width: 0; }
+.arctos-app .profile-injury-table .form-control { width: 100%; min-width: 9.5rem; }
+.arctos-app .profile-injury-table input[type="text"] { min-width: 14rem; }
+.arctos-app .profile-injury-table .form-check-label { display: inline-flex; align-items: center; min-height: 44px; }
+.arctos-app .profile-injury-table .form-check-input { margin-top: 13px; }
+.arctos-app .profile-injury-table .profile-record-actions .btn-group { display: flex; flex-wrap: wrap; gap: 6px; min-width: 10rem; }
+.arctos-app .profile-injury-table .profile-record-actions .btn { margin: 0; border-radius: 8px; }
+@media (max-width: 575.98px) {
+  .arctos-app .profile-header-body { padding-inline: 16px; }
+  .arctos-app .profile-avatar-row { margin-top: -44px; }
+  .arctos-app .profile-avatar { width: 88px; height: 88px; border-width: 3px; }
+  .arctos-app .profile-avatar-placeholder { font-size: 2rem; }
+  .arctos-app .profile-meta { gap: .5rem 1rem; }
+  .arctos-app .profile-page .event-route-tabs { padding-inline: 16px; }
+  .arctos-app .profile-detail-content { padding: 20px 16px 2rem; }
+  .arctos-app .profile-roster-copy small { flex-basis: 100%; }
+}
+.arctos-app .banner-upload { margin-block: 0 1.5rem; }
+.arctos-app .banner-upload-preview { display: block; width: 100%; max-height: 220px; object-fit: cover; border-radius: .5rem; margin-bottom: .75rem; }
+.arctos-app .profile-pronouns { color: var(--ui-muted); font-size: .9rem; }

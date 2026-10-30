@@ -6,6 +6,8 @@ registration. Mirrors the style of :class:`~app.services.registration_service.Re
 
 from __future__ import annotations
 
+from sqlalchemy.exc import IntegrityError
+
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, List, Optional
 
@@ -252,6 +254,7 @@ class SideCompService:
         description: Optional[str] = None,
         allowed_weapons: Optional[list] = None,
         only_show_top_n_results: Optional[int] = None,
+        schedule: Optional[dict] = None,
     ) -> Result["SideComp", ArctosError]:
         """Create a new side competition for *tournament_url*.
 
@@ -265,8 +268,11 @@ class SideCompService:
                 strings are treated as ``None``.
             allowed_weapons: Optional list of :class:`~app.domain.enums.Pompfen`
                 names. Defaults to all pompfen options when omitted.
-            only_show_top_n_results: Optional top-N standings cut. ``None``
-                means show all; ``0`` hides the results page.
+            only_show_top_n_results: Optional public standings limit.
+                ``None`` means show all; ``0`` hides results. A selected
+                weapon shows its leader when public results are limited.
+            schedule: Optional start/end times, field, and location. The
+                competition and its schedule entry are saved together.
 
         Returns:
             :class:`~app.error_values.Ok` wrapping the persisted
@@ -305,6 +311,45 @@ class SideCompService:
             return top_n_res
         top_n_value = top_n_res.unwrap()
 
+        schedule_values = None
+        if schedule is not None:
+            from app.services.schedule_item_service import validate_schedule_item, schedule_item_matches
+
+            try:
+                schedule_values = validate_schedule_item(tournament_url, schedule, linked=True)
+            except ValueError as error:
+                return Err(ValidationError(str(error)))
+            from models import ScheduleItem
+
+            request_id = schedule_values.get("request_id")
+            existing_item = (
+                ScheduleItem.query.filter_by(event=tournament_url, request_id=request_id).first()
+                if request_id
+                else None
+            )
+
+            def creation_replay(item):
+                comp = item.sidecomp
+                if not (
+                    comp is not None
+                    and schedule_item_matches(item, schedule_values, new_sidecomp=True)
+                    and comp.name == name_value
+                    and comp.type == parsed_type
+                    and comp.description == description_value
+                    and comp.get_allowed_weapons() == parsed_weapons
+                    and comp.only_show_top_n_results == top_n_value
+                ):
+                    return Err(
+                        ValidationError(
+                            "This activity was already saved. Close this form and edit it from the schedule.",
+                            status_code=409,
+                        )
+                    )
+                return Ok(comp)
+
+            if existing_item:
+                return creation_replay(existing_item)
+
         sc = SideComp(
             event=tournament_url,
             name=name_value,
@@ -314,7 +359,25 @@ class SideCompService:
         )
         sc.set_allowed_weapons(parsed_weapons)
         db.session.add(sc)
-        db.session.commit()
+        if schedule_values is not None:
+            from models import ScheduleItem
+
+            db.session.flush()
+            schedule_values["sidecomp_id"] = sc.id
+            db.session.add(ScheduleItem(event=tournament_url, created_sidecomp=True, **schedule_values))
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            request_id = schedule_values.get("request_id") if schedule_values else None
+            existing_item = (
+                ScheduleItem.query.filter_by(event=tournament_url, request_id=request_id).first()
+                if request_id
+                else None
+            )
+            if existing_item:
+                return creation_replay(existing_item)
+            raise
         return Ok(sc)
 
     @staticmethod
@@ -428,7 +491,8 @@ class SideCompService:
                 names. If ``None``, the field is left untouched.
             only_show_top_n_results: Sentinel ``...`` leaves the field untouched.
                 Explicit ``None`` clears it (show all). ``0`` hides results.
-                Positive ints keep the top N.
+                Positive ints limit public tables to the top N; a selected
+                weapon shows its leader.
 
         Returns:
             :class:`~app.error_values.Ok` wrapping the updated
@@ -527,8 +591,11 @@ class SideCompService:
 
         SideCompService._require_to(sc.event, actor_user_id, actor_user_type).Q()
 
-        SideCompRegistration.query.filter_by(comp=comp_id).delete(synchronize_session=False)
+        from models import ScheduleItem
+
+        ScheduleItem.query.filter_by(sidecomp_id=comp_id).delete(synchronize_session=False)
         SideCompResult.query.filter_by(comp=comp_id).delete(synchronize_session=False)
+        SideCompRegistration.query.filter_by(comp=comp_id).delete(synchronize_session=False)
         db.session.delete(sc)
         db.session.commit()
         return Ok(None)
@@ -1217,14 +1284,30 @@ class SideCompService:
         )
 
     @staticmethod
-    def standings(comp_id: int, *, include_below_cut: bool = False) -> Result[dict, ArctosError]:
+    def standings(
+        comp_id: int,
+        *,
+        include_below_cut: bool = False,
+        viewer_player_id: str | None = None,
+        application_view: bool = False,
+        table_id: str | None = None,
+        weapon: str | None = None,
+        sort_by: str | None = None,
+    ) -> Result[dict, ArctosError]:
         """Compute standings tables for *comp_id*.
 
-        Rankings are computed per table over all valid points, then an optional
-        top-N cut is applied. ``include_below_cut`` keeps every ranked player
-        for an organizer viewing the in-app results page. Weapon filtering is
-        left to the client so ranks remain global within each table.
-        Incomplete registrations are excluded.
+        ``application_view`` limits weapon choices to complete registrations
+        with valid results. The public table shows the configured number of
+        leaders, or one leader when a weapon is selected. Filtered table ranks
+        are relative to that weapon. Personal standings retain the whole-table
+        rank and are independent of the selected weapon. The external API uses
+        the default summary with the configured limit for every selection.
+
+        ``include_below_cut`` returns complete standings for an organizer.
+        ``viewer_player_id`` adds only that player's own standing. Callers must
+        derive both values from the authenticated viewer. A zero limit hides
+        every result, including personal standings. Only valid results count
+        toward wins and losses.
         """
         from sqlalchemy import case, func
 
@@ -1238,6 +1321,15 @@ class SideCompService:
         sc = SideComp.query.get(comp_id)
         if sc is None:
             return Err(NotFoundError("Side competition not found"))
+
+        table_ids = ("chains", "breaks") if sc.type == SideCompType.CHAIN_BREAKING else ("all",)
+        if table_id is not None and table_id not in table_ids:
+            return Err(ValidationError("Invalid standings table"))
+        selected_weapon = Pompfen.from_name(weapon)
+        if weapon is not None and selected_weapon is None:
+            return Err(ValidationError("Invalid standings weapon"))
+        if sort_by is not None and sort_by not in ("wins", "win_percentage"):
+            return Err(ValidationError("Invalid standings sort"))
 
         tournament = Tournament.query.get(sc.event)
         regs = SideCompRegistration.query.filter(
@@ -1260,6 +1352,8 @@ class SideCompService:
         )
         wins_by_reg = {reg_id: int(wins or 0) for reg_id, wins, _ in score_rows}
         losses_by_reg = {reg_id: int(losses or 0) for reg_id, _, losses in score_rows}
+        # A valid loss also establishes participation, even when wins are zero.
+        scored_registration_ids = {reg_id for reg_id, _, _ in score_rows}
 
         player_ids = [r.player for r in regs]
         players_by_id = {p.id: p for p in Player.query.filter(Player.id.in_(player_ids)).all()} if player_ids else {}
@@ -1316,9 +1410,13 @@ class SideCompService:
             }
 
         def build_table(table_id: str, title: str, members: list, track_losses: bool) -> dict:
+            selectable_members = [reg for reg in members if not application_view or reg.id in scored_registration_ids]
+            available_weapons = [p.name for p in Pompfen if any(reg.weapon == p.value for reg in selectable_members)]
+            effective_sort = "win_percentage" if track_losses and sort_by != "wins" else "wins"
+
             def sort_key(reg: SideCompRegistration):
                 wins = wins_by_reg.get(reg.id, 0)
-                if not track_losses:
+                if effective_sort == "wins":
                     return (-wins, reg.entry_number)
                 games = wins + losses_by_reg.get(reg.id, 0)
                 if games == 0:
@@ -1326,11 +1424,33 @@ class SideCompService:
                 return (0, -wins / games, -wins, reg.entry_number)
 
             ranked = sorted(members, key=sort_key)
-            ranked_rows = [row_for(reg, idx, track_losses) for idx, reg in enumerate(ranked, start=1)]
             top_n = sc.only_show_top_n_results
-            if not include_below_cut and top_n is not None and top_n > 0:
-                ranked_rows = ranked_rows[:top_n]
-            return {"id": table_id, "title": title, "track_losses": track_losses, "rows": ranked_rows}
+            personal_row = None
+            if top_n == 0:
+                visible = []
+            else:
+                for rank, reg in enumerate(ranked, start=1):
+                    if reg.player == viewer_player_id:
+                        personal_row = row_for(reg, rank, track_losses)
+                        break
+                visible = ranked
+                if selected_weapon is not None:
+                    visible = [reg for reg in visible if reg.weapon == selected_weapon.value]
+                    if application_view and selected_weapon.name not in available_weapons:
+                        visible = []
+                if not include_below_cut and top_n is not None:
+                    limit = 1 if application_view and selected_weapon is not None else top_n
+                    visible = visible[:limit]
+            return {
+                "id": table_id,
+                "title": title,
+                "track_losses": track_losses,
+                "available_weapons": available_weapons,
+                "weapon": weapon,
+                "sort": effective_sort,
+                "rows": [row_for(reg, rank, track_losses) for rank, reg in enumerate(visible, start=1)],
+                "personal_row": personal_row,
+            }
 
         if sc.type == SideCompType.CHAIN_BREAKING:
             chains = [r for r in regs if r.weapon == Pompfen.CHAIN.value]
@@ -1341,6 +1461,8 @@ class SideCompService:
             ]
         else:
             tables = [build_table("all", "Standings", regs, bool(sc.track_losses))]
+        if table_id is not None:
+            tables = [table for table in tables if table["id"] == table_id]
 
         return Ok(
             {
@@ -1349,6 +1471,8 @@ class SideCompService:
                 "type": str(sc.type),
                 "finalized": bool(sc.finalized),
                 "only_show_top_n_results": sc.only_show_top_n_results,
+                "showing_all_results": sc.results_page_enabled()
+                and (include_below_cut or sc.only_show_top_n_results is None),
                 "results_page_enabled": sc.results_page_enabled(),
                 "tables": tables,
             }

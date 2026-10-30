@@ -2,11 +2,13 @@
 //! Explains the registration flow and what to do if team isn't listed.
 
 use dioxus::prelude::*;
+use crate::components::Modal;
 
 #[component]
 pub fn TeamRegistrationHelpModal(
     /// Context for the message: "tournament" or "league". Affects "Check the X homepage" text.
     context: String,
+    #[props(default)] return_focus_id: Option<String>,
     on_close: EventHandler<()>,
 ) -> Element {
     let homepage_text = if context == "league" {
@@ -16,19 +18,13 @@ pub fn TeamRegistrationHelpModal(
     };
 
     rsx! {
-        div {
-            class: "modal show d-block",
-            style: "background: rgba(0,0,0,0.5);",
-            tabindex: "-1",
-            role: "dialog",
-            aria_modal: "true",
-            onclick: move |_| on_close.call(()),
-            div {
-                class: "modal-dialog modal-dialog-centered",
-                onclick: move |ev: Event<MouseData>| { ev.stop_propagation(); },
-                div { class: "modal-content",
+        Modal {
+            id: "registration-help-dialog",
+            labelled_by: "teamRegistrationHelpModalLabel",
+            return_focus_id,
+            on_close,
                     div { class: "modal-header",
-                        h5 { class: "modal-title", id: "teamRegistrationHelpModalLabel", "Registration Help" }
+                        h2 { class: "modal-title h5", id: "teamRegistrationHelpModalLabel", tabindex: "-1", "Registration Help" }
                         button {
                             r#type: "button",
                             class: "btn-close",
@@ -56,8 +52,6 @@ pub fn TeamRegistrationHelpModal(
                             "Close"
                         }
                     }
-                }
-            }
         }
     }
 }

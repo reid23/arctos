@@ -179,7 +179,7 @@ Token and revocation errors follow
 [RFC 6749 section 5.2](https://www.rfc-editor.org/rfc/rfc6749#section-5.2):
 a `400` or `401` with `{"error": "...", "error_description": "..."}`.
 API requests with a missing, expired, or revoked access token get `401`;
-tokens without a needed scope get `403` (see [API errors](#errors-1)).
+tokens without a needed scope get `403` (see [API errors](#api-errors)).
 
 ## API reference
 
@@ -231,7 +231,7 @@ browser) must do this, since they can't use client credentials.
 - **CORS**: responses carry `Access-Control-Allow-Origin: *`, so
   browser apps can call the API directly.
 
-### Errors
+### API errors
 
 Errors are JSON with an `error` message and an HTTP status:
 
@@ -371,8 +371,9 @@ Confirmed players, by name (league-wide for league tournaments).
 
 #### `GET /tournaments/{tournament_id}/matches`
 
-The schedule, with scores, by start time. `403` while the schedule is
-unpublished. Query parameters:
+Matches and match-timing entries (breaks and joins), with scores, by start time.
+Event activities and scheduled side competitions are not included in this
+endpoint. `403` while the schedule is unpublished. Query parameters:
 
 - `field`: field name.
 - `team`: team id.
@@ -595,9 +596,11 @@ tournament, or of the league when the tournament belongs to one.
 
 Standings. `CHAIN_BREAKING` has two tables, `chains` and `breaks`; every
 other type has one, `all`. Rows are ranked by wins, or by win percentage
-when the table tracks losses. When the organizers show only the top
-players, each table has only those rows. `404` when the organizers have
-hidden the results.
+when the table tracks losses. This endpoint returns the public summary: a
+positive public result limit selects that many rows per table. Its payload
+contains the published tables. Personal results are provided by the application
+endpoint. `404` when the organizers have hidden
+the results.
 
 ```json
 {
@@ -752,6 +755,8 @@ All players, by name, 50 to a page. `?search=` matches names and ids.
     "location": "Boston",
     "profile_photo": null,
     "bio": "Captain of Smith & Co.",
+    "pronouns": "she / her",
+    "pompfen": ["CHAIN", "STAFF"],
     "registrations": [
       {
         "tournament": {"id": "spring-open", "name": "Spring Open"},
@@ -767,6 +772,12 @@ All players, by name, 50 to a page. `?search=` matches names and ids.
 
 `registrations` lists confirmed registrations in published tournaments
 and leagues; exactly one of `tournament` and `league` is set.
+
+`pronouns` is optional public text (up to 64 characters), or `null`.
+`pompfen` lists the player's chosen roles in canonical order: `CHAIN`,
+`LONG`, `QTIP`, `STAFF`, `BOARD`, `FLORENTINE`, `SKULL`, `UNARMED`.
+It is an empty list when no choices are set. These profile preferences
+do not change a player's weapon selection for any side competition.
 
 #### `GET /players/{player_id}/injuries`
 

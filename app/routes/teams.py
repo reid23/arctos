@@ -7,23 +7,33 @@ Hosts the ``teams`` blueprint at ``/_api``:
 - ``/teams/<team_id>/players`` (GET) - list team members.
 - ``/teams/<team_id>/profile-photo`` (POST, DELETE) - upload and
   remove the team's profile photo.
+- ``/teams/<team_id>/banner-photo`` (POST, DELETE) - replace or remove
+  the team's validated profile banner.
 """
 
 from __future__ import annotations
 
-import os
-
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, jsonify, request
 from flask_login import current_user, login_required
 from sqlalchemy import and_, or_
 
 from app.domain.enums import RegistrationStatus
+from app.services.profile_stats_service import past_event_counts
 from app.utils.datetime_helpers import dt_iso
 from app.utils.helpers import can_head_ref_match
-from app.utils.profile_photo_helpers import (
-    profile_photo_upload_dir,
-    safe_profile_photo_filename,
+from app.utils.profile_banner_helpers import (
+    BannerUploadError,
+    read_banner_upload,
+    remove_profile_banner,
+    replace_profile_banner,
 )
+from app.utils.profile_photo_helpers import (
+    PhotoUploadError,
+    read_profile_photo_upload,
+    remove_profile_photo,
+    replace_profile_photo,
+)
+from app.utils.profile_edit_helpers import ProfileEditError, save_profile_edit
 from app.utils.user_helpers import is_player, is_team
 from models import (
     Match,
@@ -34,7 +44,6 @@ from models import (
     Team,
     TeamRegistration,
     Tournament,
-    db,
 )
 
 bp = Blueprint("teams", __name__, url_prefix="/_api")
@@ -48,6 +57,7 @@ def teams_list():
         teams = Team.query.filter(Team.name.contains(search) | Team.id.contains(search)).all()
     else:
         teams = Team.query.all()
+    event_counts = past_event_counts("team", (team.id for team in teams))
     return jsonify(
         {
             "teams": [
@@ -56,6 +66,7 @@ def teams_list():
                     "name": t.name,
                     "profile_photo": t.profile_photo,
                     "location": t.location,
+                    "past_event_count": event_counts[t.id],
                 }
                 for t in teams
             ]
@@ -255,11 +266,13 @@ def team_profile(team_id):
                 "id": team.id,
                 "name": team.name,
                 "profile_photo": team.profile_photo,
+                "banner_photo": team.banner_photo,
                 "location": team.location,
                 "email": team.email,
                 "website": team.website,
                 "about": team.about,
             },
+            "past_event_count": past_event_counts("team", [team_id])[team_id],
             "registrations": [
                 {
                     "event": r.event or (f"league:{r.league_id}" if r.league_id else ""),
@@ -280,64 +293,50 @@ def team_profile(team_id):
 @bp.route("/teams/<team_id>", methods=["PUT"])
 @login_required
 def update_team_profile(team_id):
-    """Update team profile."""
-    if current_user.id != team_id:
+    """Save profile text and optional multipart images together."""
+    if current_user.id != team_id or not is_team(current_user):
         return jsonify({"error": "You can only edit your own team profile"}), 403
 
     team = Team.query.get_or_404(team_id)
-    data = request.get_json()
-    if not data:
-        return jsonify({"error": "Invalid JSON"}), 400
-
-    if "name" in data:
-        team.name = data["name"]
-    if "location" in data:
-        team.location = data["location"]
-    if "email" in data:
-        team.email = data["email"]
-    if "website" in data:
-        team.website = data["website"]
-    if "about" in data:
-        team.about = data["about"]
-
-    db.session.commit()
+    try:
+        save_profile_edit(team, "team")
+    except ProfileEditError as error:
+        return jsonify({"error": str(error)}), error.status
     return jsonify({"success": True})
+
+
+@bp.route("/teams/<team_id>/banner-photo", methods=["POST", "DELETE"])
+@login_required
+def team_banner_photo(team_id):
+    """Replace or remove a banner belonging to this team account only."""
+    if not is_team(current_user) or current_user.id != team_id:
+        return jsonify({"error": "You can only change the banner on your own team profile"}), 403
+    team = Team.query.get_or_404(team_id)
+    try:
+        if request.method == "DELETE":
+            remove_profile_banner(team, "team")
+            return jsonify({"success": True})
+        path = replace_profile_banner(team, "team", read_banner_upload())
+        return jsonify({"success": True, "path": path})
+    except BannerUploadError as error:
+        return jsonify({"error": str(error)}), error.status
 
 
 @bp.route("/teams/<team_id>/profile-photo", methods=["POST"])
 @login_required
 def upload_team_profile_photo(team_id):
-    """Upload or replace team profile photo. Uses predictable path so overwrites previous."""
+    """Validate and replace the team's avatar without overwriting a cached URL."""
     if current_user.id != team_id or not is_team(current_user):
         return (
             jsonify({"error": "You can only upload a photo for your own team profile"}),
             403,
         )
     team = Team.query.get_or_404(team_id)
-    data = request.get_data()
-    if not data or len(data) == 0:
-        return jsonify({"error": "No image data"}), 400
-    upload_dir = profile_photo_upload_dir()
-    os.makedirs(upload_dir, exist_ok=True)
-    filename = safe_profile_photo_filename("team", team_id)
-    file_path = os.path.join(upload_dir, filename)
-    old_path = team.profile_photo
-    rel_path = f"uploads/profiles/{filename}"
     try:
-        if old_path and old_path != rel_path:
-            old_full = os.path.join(current_app.root_path, "..", "static", old_path)
-            if os.path.isfile(old_full):
-                try:
-                    os.remove(old_full)
-                except OSError:
-                    pass
-        with open(file_path, "wb") as f:
-            f.write(data)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    team.profile_photo = rel_path
-    db.session.commit()
-    return jsonify({"success": True, "path": rel_path})
+        path = replace_profile_photo(team, "team", read_profile_photo_upload())
+        return jsonify({"success": True, "path": path})
+    except PhotoUploadError as error:
+        return jsonify({"error": str(error)}), error.status
 
 
 @bp.route("/teams/<team_id>/profile-photo", methods=["DELETE"])
@@ -350,14 +349,8 @@ def delete_team_profile_photo(team_id):
             403,
         )
     team = Team.query.get_or_404(team_id)
-    old_path = team.profile_photo
-    if old_path:
-        old_full = os.path.join(current_app.root_path, "..", "static", old_path)
-        if os.path.isfile(old_full):
-            try:
-                os.remove(old_full)
-            except OSError:
-                pass
-    team.profile_photo = None
-    db.session.commit()
-    return jsonify({"success": True})
+    try:
+        remove_profile_photo(team, "team")
+        return jsonify({"success": True})
+    except PhotoUploadError as error:
+        return jsonify({"error": str(error)}), error.status

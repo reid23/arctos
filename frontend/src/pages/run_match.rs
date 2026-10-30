@@ -1,12 +1,183 @@
-use crate::Route;
 use crate::api;
-use crate::components::PenaltyDisplay;
+use crate::components::{Modal, ModalSize, PenaltyDisplay};
+use crate::Route;
 use dioxus::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use gloo_timers::callback::Interval;
 use serde_json::Value;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
+
+#[derive(Clone)]
+struct PenaltyAttempt {
+    before_ids: Vec<String>,
+    player: String,
+    penalty_type: Option<i32>,
+    text: String,
+}
+
+impl PenaltyAttempt {
+    fn found_in(&self, notes: &[Value]) -> bool {
+        notes.iter().any(|note| {
+            let id = note.get("uuid").and_then(Value::as_str).unwrap_or_default();
+            !id.is_empty()
+                && !self.before_ids.iter().any(|known| known == id)
+                && note.get("player_id").and_then(Value::as_str) == Some(self.player.as_str())
+                && note.get("penalty_type_id").and_then(Value::as_i64)
+                    == self.penalty_type.map(i64::from)
+                && note.get("text").and_then(Value::as_str).unwrap_or_default() == self.text
+        })
+    }
+}
+
+fn note_rows(response: &Value) -> Vec<Value> {
+    response
+        .get("notes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct StoneSave {
+    pending: Signal<bool>,
+    error: Signal<Option<String>>,
+    retry: Signal<Option<Value>>,
+    draft: Signal<bool>,
+    editing: Signal<bool>,
+}
+
+impl StoneSave {
+    fn blocks_point_actions(self) -> bool {
+        (self.pending)() || (self.retry)().is_some() || (self.editing)()
+    }
+
+    async fn commit(
+        mut self,
+        url: String,
+        body: Value,
+        mut state: Signal<Option<Result<Value, String>>>,
+        mut remaining: Signal<Option<u32>>,
+    ) {
+        self.pending.set(true);
+        self.error.set(None);
+        match api::correct_stones(&url, &body).await {
+            Ok(response) => {
+                if let Some(count) = response.get("stones_remaining").and_then(Value::as_u64) {
+                    remaining.set(Some(count as u32));
+                }
+                if let Some(point) = response.get("corrected_point").filter(|p| !p.is_null()) {
+                    let id = point.get("uuid").and_then(Value::as_str);
+                    if let Some(Ok(mut current)) = state() {
+                        if let Some(points) =
+                            current.get_mut("points").and_then(Value::as_array_mut)
+                        {
+                            if let Some(current) = points
+                                .iter_mut()
+                                .find(|p| p.get("uuid").and_then(Value::as_str) == id)
+                            {
+                                current["stones_at_start"] = point["stones_at_start"].clone();
+                            }
+                        }
+                        state.set(Some(Ok(current)));
+                    }
+                }
+                self.retry.set(None);
+                if body.get("correction").is_some() {
+                    self.draft.set(false);
+                    self.editing.set(false);
+                }
+            }
+            Err(message) => {
+                self.retry.set(Some(body));
+                self.error.set(Some(message));
+            }
+        }
+        self.pending.set(false);
+    }
+}
+
+fn point_action_block_reason(
+    finalized: bool,
+    point_pending: bool,
+    stone_pending: bool,
+    stone_uncertain: bool,
+    editing_count: bool,
+    needs_count: bool,
+) -> Option<&'static str> {
+    if finalized {
+        Some("This match is finalized.")
+    } else if point_pending {
+        Some("Saving the point change…")
+    } else if stone_pending {
+        Some("Saving the stone count…")
+    } else if stone_uncertain {
+        Some("Retry the stone correction or check the current count before continuing.")
+    } else if editing_count {
+        Some("Save or cancel the stone correction before continuing.")
+    } else if needs_count {
+        Some("Set the stone count before starting a point.")
+    } else {
+        None
+    }
+}
+
+fn stone_correction_body(
+    match_id: &str,
+    count: u32,
+    observed_at_ms: u64,
+    active: Option<&str>,
+    remaining: Option<u32>,
+    state: Option<&Value>,
+) -> Value {
+    let latest = state
+        .and_then(|s| s.get("points"))
+        .and_then(Value::as_array)
+        .and_then(|points| points.last())
+        .and_then(|p| p.get("uuid"))
+        .and_then(Value::as_str);
+    let anchor = state
+        .and_then(|s| s.get("points"))
+        .and_then(Value::as_array)
+        .and_then(|points| {
+            points
+                .iter()
+                .find(|p| p.get("uuid").and_then(Value::as_str) == active)
+        })
+        .and_then(|p| p.get("stones_at_start"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    serde_json::json!({"match_id": match_id, "stones_remaining": count, "correction": {"point_id": active, "latest_point_id": latest, "observed_at_ms": observed_at_ms, "expected_anchor": anchor, "expected_remaining": remaining}})
+}
+
+#[component]
+fn PointNotesRetry(
+    url: String,
+    match_id: String,
+    point_id: String,
+    selected: Signal<Option<String>>,
+    generation: Signal<u64>,
+    mut notes: Signal<Option<Result<Vec<Value>, String>>>,
+    draft: Option<Signal<String>>,
+    mut map: Signal<std::collections::HashMap<String, Vec<Value>>>,
+) -> Element {
+    rsx! { button { r#type: "button", class: "btn btn-outline-secondary", onclick: move |_| {
+        let u = url.clone(); let mid = match_id.clone(); let pid = point_id.clone();
+        let version = generation(); notes.set(None);
+        spawn(async move {
+            let response = api::get_point_notes(&u, &mid, &pid).await;
+            if generation() != version || selected().as_deref() != Some(pid.as_str()) { return; }
+            match response {
+                Ok(response) => {
+                    let rows = note_rows(&response);
+                    if let Some(mut draft) = draft { draft.set(rows.iter().find(|n| n.get("target").and_then(Value::as_str) == Some("match")).and_then(|n| n.get("text")).and_then(Value::as_str).unwrap_or_default().into()); }
+                    map.write().insert(pid, rows.clone()); notes.set(Some(Ok(rows)));
+                }
+                Err(message) => notes.set(Some(Err(message))),
+            }
+        });
+    }, "Retry loading notes" } }
+}
 
 /// Parse ISO timestamp to epoch seconds (for stones elapsed).
 /// Handles RFC3339 (with Z or offset), and naive ISO from Python (e.g. "2025-02-16T19:34:56.123456").
@@ -243,7 +414,6 @@ fn scores_by_set_from_points(points: &[&Value]) -> Vec<(String, u64, u64)> {
         .collect()
 }
 
-
 /// Optimistically write set_number for a point in match-state JSON. Returns true if found.
 fn set_number_in_state(state: &mut Value, point_id: &str, new_set: u32) -> bool {
     let Some(points) = state.get_mut("points").and_then(|p| p.as_array_mut()) else {
@@ -257,8 +427,6 @@ fn set_number_in_state(state: &mut Value, point_id: &str, new_set: u32) -> bool 
     }
     false
 }
-
-
 
 /// Highlight a point row once, then clear so live re-renders do not restart the animation.
 #[cfg(target_arch = "wasm32")]
@@ -288,6 +456,8 @@ fn SetNumberControls(
     url: String,
     mut state_signal: Signal<Option<Result<Value, String>>>,
     mut action_error: Signal<Option<String>>,
+    mut point_pending: Signal<bool>,
+    stone_save: StoneSave,
 ) -> Element {
     let mut shown = use_signal(|| set_number);
     let mut applied = use_signal(|| set_number);
@@ -307,47 +477,17 @@ fn SetNumberControls(
             button {
                 class: "set-step-btn",
                 r#type: "button",
+                aria_label: "Decrease set number",
+                disabled: point_pending() || stone_save.blocks_point_actions(),
                 onclick: move |_| {
-                    let prev = state_signal().clone();
-                    let current = shown();
-                    let new_set = current.saturating_add(1).max(1);
-                    shown.set(new_set);
-                    if let Some(Ok(ref state)) = prev.clone() {
-                        let mut state = state.clone();
-                        if set_number_in_state(&mut state, pid_inc.as_str(), new_set) {
-                            state_signal.set(Some(Ok(state)));
-                        }
-                    }
-                    let u = u_inc.clone();
-                    let p = pid_inc.clone();
-                    let mut state_signal = state_signal;
-                    let mut action_error = action_error;
-                    let mut shown = shown;
-                    spawn(async move {
-                        let body = serde_json::json!({ "point_id": p, "set_number": new_set });
-                        match api::update_point(&u, &p, &body).await {
-                            Ok(_) => { action_error.set(None); }
-                            Err(e) => {
-                                action_error.set(Some(e));
-                                shown.set(current);
-                                state_signal.set(prev);
-                            }
-                        }
-                    });
-                },
-                "+"
-            }
-            span { class: "set-number-display", "{displayed}" }
-            button {
-                class: "set-step-btn",
-                r#type: "button",
-                onclick: move |_| {
+                    if point_pending() || stone_save.blocks_point_actions() { return; }
                     let prev = state_signal().clone();
                     let current = shown();
                     let new_set = current.saturating_sub(1).max(1);
                     if new_set == current {
                         return;
                     }
+                    point_pending.set(true);
                     shown.set(new_set);
                     if let Some(Ok(ref state)) = prev.clone() {
                         let mut state = state.clone();
@@ -370,9 +510,49 @@ fn SetNumberControls(
                                 state_signal.set(prev);
                             }
                         }
+                        point_pending.set(false);
                     });
                 },
                 "−"
+            }
+            span { class: "set-number-display", "{displayed}" }
+            button {
+                class: "set-step-btn",
+                r#type: "button",
+                aria_label: "Increase set number",
+                disabled: point_pending() || stone_save.blocks_point_actions(),
+                onclick: move |_| {
+                    if point_pending() || stone_save.blocks_point_actions() { return; }
+                    let prev = state_signal().clone();
+                    let current = shown();
+                    let new_set = current.saturating_add(1).max(1);
+                    point_pending.set(true);
+                    shown.set(new_set);
+                    if let Some(Ok(ref state)) = prev.clone() {
+                        let mut state = state.clone();
+                        if set_number_in_state(&mut state, pid_inc.as_str(), new_set) {
+                            state_signal.set(Some(Ok(state)));
+                        }
+                    }
+                    let u = u_inc.clone();
+                    let p = pid_inc.clone();
+                    let mut state_signal = state_signal;
+                    let mut action_error = action_error;
+                    let mut shown = shown;
+                    spawn(async move {
+                        let body = serde_json::json!({ "point_id": p, "set_number": new_set });
+                        match api::update_point(&u, &p, &body).await {
+                            Ok(_) => { action_error.set(None); }
+                            Err(e) => {
+                                action_error.set(Some(e));
+                                shown.set(current);
+                                state_signal.set(prev);
+                            }
+                        }
+                        point_pending.set(false);
+                    });
+                },
+                "+"
             }
         }
     }
@@ -523,7 +703,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
         });
     });
 
-    // In-progress point: when Some, button shows "End Point" and we tick stones.
+    // In-progress point: when Some, button shows "End point" and we tick stones.
     let mut current_point = use_signal(|| None as Option<String>);
     // Sync current_point from state: if latest point has no end_stamp, we're in End Point mode.
     let state_for_sync = state_signal();
@@ -646,6 +826,13 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
     let mut notes_modal_point_id = use_signal(|| None as Option<String>);
     let mut notes_modal_notes = use_signal(|| None as Option<Result<Vec<Value>, String>>);
     let mut notes_modal_new_text = use_signal(|| String::new());
+    let mut notes_pending = use_signal(|| false);
+    let mut notes_error = use_signal(|| None::<String>);
+    let mut notes_generation = use_signal(|| 0_u64);
+    let mut penalty_pending = use_signal(|| false);
+    let mut penalty_error = use_signal(|| None::<String>);
+    let mut penalty_uncertain = use_signal(|| None::<PenaltyAttempt>);
+    let mut penalty_generation = use_signal(|| 0_u64);
     let mut notes_modal_target = use_signal(|| "match".to_string());
     let mut notes_modal_player_id = use_signal(|| None as Option<String>);
     let mut notes_modal_player_query = use_signal(|| String::new());
@@ -674,6 +861,27 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
     // When true, stones input shows stones_edit_value so we don't overwrite typing with display_stones.
     let mut stones_input_focused = use_signal(|| false);
     let mut stones_edit_value = use_signal(|| String::new());
+    let mut stones_original = use_signal(String::new);
+    let mut stone_save = StoneSave {
+        pending: use_signal(|| false),
+        error: use_signal(|| None),
+        retry: use_signal(|| None),
+        draft: use_signal(|| false),
+        editing: use_signal(|| false),
+    };
+    let mut point_pending = use_signal(|| false);
+    let mut correction_was_open = use_signal(|| false);
+    use_effect(move || {
+        let open = (stone_save.editing)();
+        if open == *correction_was_open.peek() { return; }
+        correction_was_open.set(open);
+        #[cfg(target_arch = "wasm32")]
+        if let Some(input) = web_sys::window().and_then(|window| window.document())
+            .and_then(|document| document.get_element_by_id(if open { "stones-remaining" } else { "correct-stones" }))
+            .and_then(|element| element.dyn_into::<web_sys::HtmlElement>().ok()) {
+            let _ = input.focus();
+        }
+    });
     // Previous live stone count, for detecting a tick-down to the 15-stone warning threshold.
     #[cfg(target_arch = "wasm32")]
     let mut prev_stones_for_beep = use_signal(|| None as Option<u32>);
@@ -795,7 +1003,9 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                             .to_string();
                         let set_number = pt
                             .get("set_number")
-                            .and_then(|n| n.as_u64().or_else(|| n.as_i64().map(|i| i.max(0) as u64)))
+                            .and_then(|n| {
+                                n.as_u64().or_else(|| n.as_i64().map(|i| i.max(0) as u64))
+                            })
                             .unwrap_or(1) as u32;
                         let winner = pt
                             .get("winner")
@@ -837,7 +1047,8 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                     pt.get("stones_at_start").and_then(|s| s.as_u64())?;
                                 let stamp = pt.get("stamp").and_then(|s| s.as_str());
                                 #[cfg(target_arch = "wasm32")]
-                                let elapsed = stones_elapsed_with_filter(stamp, None, &time_sync) as u64;
+                                let elapsed =
+                                    stones_elapsed_with_filter(stamp, None, &time_sync) as u64;
                                 #[cfg(not(target_arch = "wasm32"))]
                                 let elapsed = stones_elapsed_beats(stamp, None) as u64;
                                 Some((at_start.saturating_sub(elapsed)) as u32)
@@ -871,21 +1082,64 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                         prev_stones_for_beep.set(None);
                     }
                 }
-                let stones_input_value = if stones_input_focused() {
+                let stones_input_value = if (stone_save.editing)() || (stone_save.draft)() {
                     stones_edit_value().clone()
                 } else {
                     display_stones.map(|n| n.to_string()).unwrap_or_default()
                 };
                 let stones_known = display_stones.is_some();
-                let url_stones_blur = url.clone();
-                let id_stones_blur = match_id.clone();
-
+                let submit_stones = {
+                    let u = url.clone();
+                    let id = match_id.clone();
+                    move || {
+                        if (stone_save.pending)() || point_pending() || (stone_save.retry)().is_some() {
+                            return;
+                        }
+                        if stones_edit_value() == stones_original() {
+                            if (stone_save.retry)().is_none() {
+                                stone_save.draft.set(false);
+                                stone_save.error.set(None);
+                                stone_save.editing.set(false);
+                                stones_input_focused.set(false);
+                            }
+                            return;
+                        }
+                        let Ok(count) = stones_edit_value().parse::<u32>() else {
+                            stone_save.error.set(Some(
+                                "Enter a whole number of stones, zero or greater.".into(),
+                            ));
+                            return;
+                        };
+                        let snapshot = state_signal();
+                        let body = stone_correction_body(
+                            &id,
+                            count,
+                            server_now_millis(&time_sync),
+                            current_point().as_deref(),
+                            stones_remaining(),
+                            snapshot.as_ref().and_then(|s| s.as_ref().ok()),
+                        );
+                        stone_save.pending.set(true);
+                        stones_original.set(stones_edit_value());
+                        let u = u.clone();
+                        spawn(async move {
+                            stone_save
+                                .commit(u, body, state_signal, stones_remaining)
+                                .await;
+                        });
+                    }
+                };
                 let url_start = url.clone();
                 let id_start = match_id.clone();
                 let mut current_point = current_point;
                 let mut stones_remaining = stones_remaining;
                 let mut state_signal_start = state_signal;
-                let on_start_end_point = move |_| {
+                let on_start_end_point = EventHandler::<MouseEvent>::new(move |_| {
+                    if point_pending() || stone_save.blocks_point_actions() {
+                        return;
+                    }
+                    point_pending.set(true);
+
                     let u = url_start.clone();
                     let id = id_start.clone();
                     let point_opt = current_point();
@@ -959,17 +1213,25 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                 Ok(_) => {
                                     err_out.set(None);
                                     if let Some(n) = final_stones_for_api {
-                                        let _ =
-                                            api::update_stones(&u_for_stones, &id_for_stones, n)
-                                                .await;
+                                        let body = serde_json::json!({"match_id": id_for_stones, "stones_remaining": n});
+                                        stone_save
+                                            .commit(
+                                                u_for_stones.clone(),
+                                                body,
+                                                state_signal,
+                                                stones_remaining,
+                                            )
+                                            .await;
                                     }
                                 }
                                 Err(e) => {
                                     err_out.set(Some(e));
                                     state_signal.set(prev);
                                     current_point.set(Some(point_id));
+                                    stones_remaining.set(stones_val);
                                 }
                             }
+                            point_pending.set(false);
                         });
                     } else {
                         // Start new point — optimistic: add pending point, set current_point.
@@ -1002,166 +1264,15 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                         let stones_at_start = if set_type_stones { stones_val } else { None };
                         spawn(async move {
                             err_out.set(None);
-                            match api::add_point(&u, &id, default_set, Some(point_start_ms), stones_at_start).await {
-                                Ok(resp) => {
-                                    let real_id = resp
-                                        .get("point_id")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("")
-                                        .to_string();
-                                    if !real_id.is_empty() {
-                                        if let Some(Ok(ref state)) = state_signal() {
-                                            let mut state = state.clone();
-                                            if let Some(points) = state
-                                                .get_mut("points")
-                                                .and_then(|p| p.as_array_mut())
-                                            {
-                                                for p in points.iter_mut() {
-                                                    if p.get("uuid").and_then(|v| v.as_str())
-                                                        == Some(pending_id.as_str())
-                                                    {
-                                                        p["uuid"] = serde_json::json!(real_id);
-                                                        break;
-                                                    }
-                                                }
-                                            }
-                                            state_signal.set(Some(Ok(state)));
-                                        }
-                                        if flash_point_id().as_deref() == Some(pending_id.as_str())
-                                        {
-                                            flash_point_id.set(Some(real_id.clone()));
-                                        }
-                                        current_point.set(Some(real_id));
-                                    }
-                                    err_out.set(None);
-                                }
-                                Err(e) => {
-                                    err_out.set(Some(e));
-                                    state_signal.set(prev);
-                                    current_point.set(None);
-                                }
-                            }
-                        });
-                    }
-                };
-
-                let url_mobile = url.clone();
-                let id_mobile = match_id.clone();
-                let mut current_point_mobile = current_point;
-                let mut stones_remaining_mobile = stones_remaining;
-                let mut state_signal_mobile = state_signal;
-                let on_start_end_point_mobile = move |_| {
-                    let u = url_mobile.clone();
-                    let id = id_mobile.clone();
-                    let point_opt = current_point_mobile();
-                    #[cfg(target_arch = "wasm32")]
-                    {
-                        let is_end = point_opt.is_some();
-                        spawn(async move {
-                            gloo_timers::future::TimeoutFuture::new(0).await;
-                            point_button_feedback(is_end);
-                        });
-                    }
-                    let mut err_out = action_error;
-                    let mut current_point = current_point_mobile;
-                    let mut stones_remaining = stones_remaining_mobile;
-                    let mut state_signal = state_signal_mobile;
-                    let set_type_stones = set_type_stones;
-                    let default_set = default_set;
-                    let stones_val = stones_remaining();
-                    if let Some(point_id) = point_opt {
-                        // Same corrected clock as point start (see desktop handler above).
-                        let end_iso = server_millis_to_rfc3339(server_now_millis(&time_sync));
-                        let prev = state_signal().clone();
-                        let point_id = point_id.clone();
-                        let id_for_stones = id.clone();
-                        let u_for_stones = u.clone();
-                        spawn(async move {
-                            // Native (test) builds skip the wasm-only tick deferral.
-                            #[cfg(target_arch = "wasm32")]
-                            gloo_timers::future::TimeoutFuture::new(0).await;
-                            let mut final_stones_for_api: Option<u32> = None;
-                            if let Some(Ok(ref state)) = prev.clone() {
-                                let mut state = state.clone();
-                                if let Some(points) =
-                                    state.get_mut("points").and_then(|p| p.as_array_mut())
-                                {
-                                    for p in points.iter_mut() {
-                                        if p.get("uuid").and_then(|v| v.as_str())
-                                            == Some(point_id.as_str())
-                                        {
-                                            p["end_stamp"] = serde_json::json!(end_iso);
-                                            if set_type_stones {
-                                                let at_start = p
-                                                    .get("stones_at_start")
-                                                    .and_then(|s| s.as_u64())
-                                                    .unwrap_or(0);
-                                                let stamp = p.get("stamp").and_then(|s| s.as_str());
-                                                let elapsed = stones_elapsed_beats_ms(
-                                                    stamp,
-                                                    Some(end_iso.as_str()),
-                                                )
-                                                    as u64;
-                                                let remaining =
-                                                    (at_start.saturating_sub(elapsed)) as u32;
-                                                stones_remaining.set(Some(remaining));
-                                                final_stones_for_api = Some(remaining);
-                                            }
-                                            break;
-                                        }
-                                    }
-                                }
-                                state_signal.set(Some(Ok(state)));
-                            }
-                            current_point.set(None);
-                            err_out.set(None);
-                            let body =
-                                serde_json::json!({ "point_id": point_id, "end_stamp": end_iso });
-                            match api::update_point(&u_for_stones, &point_id, &body).await {
-                                Ok(_) => {
-                                    err_out.set(None);
-                                    if let Some(n) = final_stones_for_api {
-                                        let _ =
-                                            api::update_stones(&u_for_stones, &id_for_stones, n)
-                                                .await;
-                                    }
-                                }
-                                Err(e) => {
-                                    err_out.set(Some(e));
-                                    state_signal.set(prev);
-                                    current_point.set(Some(point_id));
-                                }
-                            }
-                        });
-                    } else {
-                        let point_start_ms = server_now_millis(&time_sync);
-                        let pending_id = format!("pending-{}", point_start_ms);
-                        let stamp_iso = server_millis_to_rfc3339(point_start_ms);
-                        let new_point = serde_json::json!({
-                            "uuid": pending_id,
-                            "set_number": default_set,
-                            "winner": "none",
-                            "rerolled": false,
-                            "stamp": stamp_iso,
-                            "end_stamp": serde_json::Value::Null,
-                            "stones_at_start": if set_type_stones { serde_json::json!(stones_val) } else { serde_json::Value::Null },
-                        });
-                        let prev = state_signal().clone();
-                        if let Some(Ok(ref state)) = prev.clone() {
-                            let mut state = state.clone();
-                            if let Some(points) =
-                                state.get_mut("points").and_then(|p| p.as_array_mut())
+                            match api::add_point(
+                                &u,
+                                &id,
+                                default_set,
+                                Some(point_start_ms),
+                                stones_at_start,
+                            )
+                            .await
                             {
-                                points.push(new_point);
-                            }
-                            state_signal.set(Some(Ok(state)));
-                        }
-                        current_point.set(Some(pending_id.clone()));
-                        trigger_point_row_flash(flash_point_id, pending_id.clone());
-                        let stones_at_start = if set_type_stones { stones_val } else { None };
-                        spawn(async move {
-                            err_out.set(None);
-                            match api::add_point(&u, &id, default_set, Some(point_start_ms), stones_at_start).await {
                                 Ok(resp) => {
                                     let real_id = resp
                                         .get("point_id")
@@ -1200,10 +1311,12 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                     current_point.set(None);
                                 }
                             }
+                            point_pending.set(false);
                         });
                     }
-                };
+                });
 
+                let on_start_end_point_mobile = on_start_end_point;
                 let url_finalize_btn = url.clone();
                 let id_finalize_btn = match_id.clone();
                 let url_finalize_mobile = url.clone();
@@ -1211,25 +1324,40 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
 
                 let has_in_progress = current_point().is_some();
                 let point_button_text = if has_in_progress {
-                    "End Point"
+                    "End point"
                 } else {
-                    "Start Point"
+                    "Start point"
                 };
                 let point_button_class = if has_in_progress {
-                    "btn btn-danger btn-lg w-100 mobile-sticky-button"
+                    "btn btn-danger w-100 mobile-sticky-button"
                 } else {
-                    "btn btn-success btn-lg w-100 mobile-sticky-button"
+                    "btn btn-success w-100 mobile-sticky-button"
                 };
                 // Block starting a point until the stone count is known (can't record stones_at_start otherwise).
                 let needs_stone_count = set_type_stones && !stones_known && !has_in_progress;
-                let point_button_disabled = finalized || needs_stone_count;
+                let action_block_reason = point_action_block_reason(finalized, point_pending(),
+                    (stone_save.pending)(), (stone_save.retry)().is_some(),
+                    (stone_save.editing)(), needs_stone_count);
+                let point_button_disabled = action_block_reason.is_some();
+                let review_block_reason = if let Some(reason) = point_action_block_reason(false, point_pending(), (stone_save.pending)(), (stone_save.retry)().is_some(), (stone_save.editing)(), false) {
+                    Some(reason)
+                } else if has_in_progress {
+                    Some("End the current point before reviewing the result.")
+                } else {
+                    None
+                };
+                let point_context = if has_in_progress {
+                    format!("Point {} in progress", points.len())
+                } else {
+                    format!("Ready for point {}", points.len() + 1)
+                };
                 let point_button_text = if needs_stone_count {
                     "Set stone count to start"
                 } else {
                     point_button_text
                 };
 
-                let run_match_css = ".set-number-controls{display:flex;flex-direction:column;align-items:center;gap:0;width:40px}\
+                let run_match_css = ".set-number-controls{display:flex;flex-direction:row;align-items:center;gap:0;width:112px}\
                     .set-number-controls .set-number-display{font-size:1rem;font-weight:600;text-align:center;min-width:30px;padding:0}\
                     .set-number-controls button.set-step-btn{width:32px;height:26px;padding:0;font-size:13px;line-height:1;border:none;background:transparent;color:#6c757d;cursor:pointer;touch-action:manipulation}\
                     .set-number-controls button.set-step-btn:hover{color:#212529}\
@@ -1248,11 +1376,11 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                     #quick-timer-scrim{position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,0.6);pointer-events:none;display:flex;align-items:flex-start;justify-content:center}\
                     #quick-timer-scrim .qt-scrim-text{margin-top:20vh;color:#fff;text-align:center;font-size:1.5rem;line-height:1.5}\
                     #quick-timer-scrim .qt-scrim-title{font-size:2rem;font-weight:600}\
-                    @keyframes point-row-flash-kf{0%{background-color:#adb5bd}100%{background-color:transparent}}\
+                    @keyframes point-row-flash-kf{0%{background-color:var(--ui-accent-soft)}100%{background-color:transparent}}\
                     #points-table tbody tr.point-row-flash>td{animation:point-row-flash-kf 1.1s ease-out both}\
                     #point-button,.mobile-button-wrapper .btn{animation:none!important}\
                     #points-table tr.point-row-no-border>td{border-bottom-width:0}\
-                    @media (max-width:768px){.mobile-button-wrapper{position:fixed;bottom:0;left:0;right:0;z-index:1000;background:white;padding:0;margin:0;box-shadow:0 -2px 10px rgba(0,0,0,0.1);display:flex;flex-direction:row}\
+                    @media (max-width:767.98px){.mobile-button-wrapper{position:fixed;bottom:0;left:0;right:0;z-index:1000;background:white;padding:0;margin:0;box-shadow:0 -2px 10px rgba(0,0,0,0.1);display:flex;flex-direction:row}\
                     #quick-timer{position:fixed;top:64px;right:8px;z-index:1030;min-width:3rem;height:3rem;padding:0 0.5rem;font-size:1.5rem;box-shadow:0 2px 6px rgba(0,0,0,0.2)}\
                     .mobile-button-wrapper .btn{border-radius:0;margin:0;flex:1;min-height:96px}\
                     .container .mobile-sticky-button,.container #finalize-match-btn{display:none}\
@@ -1314,9 +1442,13 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                             tr {
                                 key: "{pt_id}",
                                 id: "point-row-{pt_id}",
-                                class: "{main_row_class}",
-                                td { class: "text-muted text-center align-middle", "{point_index}" }
-                                td {
+                                class: "point-entry {main_row_class}",
+                                td { class: "point-index text-muted text-center align-middle",
+                                    span { class: "point-mobile-label", aria_hidden: "true", "Point" }
+                                    "{point_index}"
+                                }
+                                td { class: "point-set",
+                                    span { class: "point-mobile-label", aria_hidden: "true", "Set" }
                                     SetNumberControls {
                                         key: "set-{pt_id}",
                                         point_id: pid.clone(),
@@ -1324,16 +1456,25 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                         url: url.clone(),
                                         state_signal: state_signal,
                                         action_error: action_error,
+                                        point_pending, stone_save,
                                     }
                                 }
-                                td { class: "align-middle", id: "stones-{pt_id}", "{elapsed}" }
-                                td {
+                                td { class: "point-stones align-middle", id: "stones-{pt_id}",
+                                    span { class: "point-mobile-label", aria_hidden: "true", "Stones" }
+                                    "{elapsed}"
+                                }
+                                td { class: "point-winner",
+                                    span { class: "point-mobile-label", aria_hidden: "true", "Winner" }
                                     div { class: "winner-cell",
                                         div { class: "winner-options-group",
                                         button {
                                             class: format!("winner-option{}", if winner_val == "TEAM1" { " active" } else { "" }),
                                             r#type: "button",
+                                            aria_label: "{team1} wins point {point_index}",
+                                            aria_pressed: "{winner_is_t1}", disabled: point_pending() || stone_save.blocks_point_actions(),
                                             onclick: move |_| {
+                                                if point_pending() || stone_save.blocks_point_actions() { return; }
+                                                point_pending.set(true);
                                                 let val = if winner_is_t1 { "none" } else { "TEAM1" };
                                                 let prev = state_signal().clone();
                                                 if let Some(Ok(ref state)) = prev.clone() {
@@ -1358,6 +1499,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                         Ok(_) => { action_error.set(None); }
                                                         Err(e) => { action_error.set(Some(e)); state_signal.set(prev); }
                                                     }
+                                                    point_pending.set(false);
                                                 });
                                             },
                                             if let Some(ref ph) = team1_photo {
@@ -1368,7 +1510,11 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                         button {
                                             class: format!("winner-option{}", if winner_val == "TEAM2" { " active" } else { "" }),
                                             r#type: "button",
+                                            aria_label: "{team2} wins point {point_index}",
+                                            aria_pressed: "{winner_is_t2}", disabled: point_pending() || stone_save.blocks_point_actions(),
                                             onclick: move |_| {
+                                                if point_pending() || stone_save.blocks_point_actions() { return; }
+                                                point_pending.set(true);
                                                 let val = if winner_is_t2 { "none" } else { "TEAM2" };
                                                 let prev = state_signal().clone();
                                                 if let Some(Ok(ref state)) = prev.clone() {
@@ -1393,6 +1539,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                         Ok(_) => { action_error.set(None); }
                                                         Err(e) => { action_error.set(Some(e)); state_signal.set(prev); }
                                                     }
+                                                    point_pending.set(false);
                                                 });
                                             },
                                             if let Some(ref ph) = team2_photo {
@@ -1403,13 +1550,16 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                         }
                                     }
                                 }
-                                td { class: "align-middle",
-                                    div { class: "form-check",
+                                td { class: "point-rerun align-middle",
+                                    label { class: "form-check point-rerun-toggle",
                                         input {
                                             class: "form-check-input",
                                             r#type: "checkbox",
                                             checked: rerolled,
+                                            aria_label: "Rerun this point", disabled: point_pending() || stone_save.blocks_point_actions(),
                                             onchange: move |ev| {
+                                                if point_pending() || stone_save.blocks_point_actions() { return; }
+                                                point_pending.set(true);
                                                 let checked = ev.checked();
                                                 let prev = state_signal().clone();
                                                 if let Some(Ok(ref state)) = prev.clone() {
@@ -1451,7 +1601,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                         Ok(_) => {
                                                             action_error.set(None);
                                                             if let Some(n) = stones_to_send {
-                                                                let _ = api::update_stones(&u, &id_reroll, n).await;
+                                                                stone_save.commit(u.clone(), serde_json::json!({"match_id": id_reroll, "stones_remaining": n}), state_signal, stones_remaining_reroll).await;
                                                             }
                                                         }
                                                         Err(e) => {
@@ -1462,13 +1612,15 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                             }
                                                         }
                                                     }
+                                                    point_pending.set(false);
                                                 });
                                             },
                                         }
+                                        span { class: "point-mobile-label", aria_hidden: "true", "Rerun" }
                                     }
                                 }
-                                td { class: "align-middle",
-                                    div { class: "d-flex flex-column gap-1",
+                                td { class: "point-notes align-middle",
+                                    div { class: "point-note-actions d-flex flex-column gap-1",
                                         {
                                             let pid_notes = pid.clone();
                                             let pid_penalties = pid.clone();
@@ -1478,7 +1630,12 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                 button {
                                                     class: "btn btn-sm btn-outline-secondary",
                                                     title: "Point Note",
+                                                    id: "point-note-{pid_notes}",
+                                                    aria_label: "Edit note for point {point_index}",
                                                     onclick: move |_| {
+                                                        notes_error.set(None);
+                                                        notes_generation += 1;
+                                                        let generation = notes_generation();
                                                         notes_modal_point_id.set(Some(pid_notes.clone()));
                                                         notes_modal_notes.set(None);
                                                         notes_modal_new_text.set(String::new());
@@ -1491,6 +1648,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                         spawn(async move {
                                                             match api::get_point_notes(&u, &id, &pid_fetch).await {
                                                                 Ok(v) => {
+                                                                    if notes_generation() != generation || notes_modal_point_id().as_deref() != Some(pid_fetch.as_str()) { return; }
                                                                     let notes = v.get("notes").and_then(|n| n.as_array()).cloned().unwrap_or_default();
                                                                     let point_note_text = notes.iter()
                                                                         .find(|n| n.get("target").and_then(|t| t.as_str()) == Some("match"))
@@ -1503,7 +1661,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                                     m.insert(pid_fetch.clone(), notes);
                                                                     point_notes_map_signal.set(m);
                                                                 }
-                                                                Err(e) => notes_modal_notes.set(Some(Err(e))),
+                                                                Err(e) => { if notes_generation() == generation && notes_modal_point_id().as_deref() == Some(pid_fetch.as_str()) { notes_modal_notes.set(Some(Err(e))); } },
                                                             }
                                                         });
                                                     },
@@ -1512,7 +1670,13 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                 button {
                                                     class: "btn btn-sm btn-outline-danger",
                                                     title: "Penalties",
+                                                    id: "point-penalties-{pid_penalties}",
+                                                    aria_label: "Manage penalties for point {point_index}",
                                                     onclick: move |_| {
+                                                        penalty_error.set(None);
+                                                        penalty_uncertain.set(None);
+                                                        penalty_generation += 1;
+                                                        let generation = penalty_generation();
                                                         penalties_modal_point_id.set(Some(pid_penalties.clone()));
                                                         penalties_step.set(1);
                                                         penalties_selected_player_id.set(None);
@@ -1529,13 +1693,14 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                         spawn(async move {
                                                             match api::get_point_notes(&u, &id, &pid_fetch).await {
                                                                 Ok(v) => {
+                                                                    if penalty_generation() != generation || penalties_modal_point_id().as_deref() != Some(pid_fetch.as_str()) { return; }
                                                                     let notes = v.get("notes").and_then(|n| n.as_array()).cloned().unwrap_or_default();
                                                                     notes_modal_notes.set(Some(Ok(notes.clone())));
                                                                     let mut m = point_notes_map_signal();
                                                                     m.insert(pid_fetch.clone(), notes);
                                                                     point_notes_map_signal.set(m);
                                                                 }
-                                                                Err(e) => notes_modal_notes.set(Some(Err(e))),
+                                                                Err(e) => { if penalty_generation() == generation && penalties_modal_point_id().as_deref() == Some(pid_fetch.as_str()) { notes_modal_notes.set(Some(Err(e))); } },
                                                             }
                                                         });
                                                     },
@@ -1545,11 +1710,13 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                         }
                                     }
                                 }
-                                td { class: "align-middle",
+                                td { class: "point-delete align-middle",
                                     button {
                                         class: "delete-point-btn",
                                         title: "Delete",
+                                        aria_label: "Delete point {point_index}", disabled: point_pending() || stone_save.blocks_point_actions(),
                                         onclick: move |_| {
+                                            if point_pending() || stone_save.blocks_point_actions() { return; }
                                             #[cfg(target_arch = "wasm32")]
                                             {
                                                 let confirmed = web_sys::window()
@@ -1559,6 +1726,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                     return;
                                                 }
                                             }
+                                            point_pending.set(true);
                                             let prev = state_signal().clone();
                                             if let Some(Ok(ref state)) = prev.clone() {
                                                 let mut state = state.clone();
@@ -1579,6 +1747,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                         state_signal.set(prev);
                                                     }
                                                 }
+                                                point_pending.set(false);
                                             });
                                         },
                                         "×"
@@ -1586,7 +1755,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                 }
                             }
                             if has_notes {
-                                tr { key: "{pt_id}-notes",
+                                tr { key: "{pt_id}-notes", class: "point-note-details",
                                     td { colspan: "7", class: "pt-0 pb-2",
                                         div { class: "d-flex flex-wrap gap-1",
                                             for note_val in notes_for_point.iter() {
@@ -1643,8 +1812,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                         start_stones,
                     } => {
                         #[cfg(target_arch = "wasm32")]
-                        let now_server =
-                            time_sync.server_now_secs();
+                        let now_server = time_sync.server_now_secs();
                         #[cfg(not(target_arch = "wasm32"))]
                         let now_server = now_epoch_secs();
                         let current = quick_timer_current(start_time, start_stones, now_server);
@@ -1670,8 +1838,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                 };
                 let quick_timer_is_idle = quick_timer_label.is_none();
                 let quick_timer_dragging = matches!(quick_timer(), QuickTimer::Dragging { .. });
-                // Single quick-timer element; CSS positions it (right of the Start Point button on
-                // wide screens, fixed top-right corner on narrow). Rendered for all match types.
+                // Keep the timer beside the match heading without adding a separate row.
                 // While dragging it gets `qt-dragging` to lift above the full-screen scrim.
                 #[cfg(target_arch = "wasm32")]
                 let quick_timer_el = rsx! {
@@ -1736,76 +1903,48 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                 };
 
                 rsx! {
-                    div { class: "container mt-4",
+                    div { class: "container run-match-page",
                         style { "{run_match_css}" }
+                        style { {include_str!("live_match_actions.css")} }
                         if quick_timer_dragging {
                             div { id: "quick-timer-scrim",
                                 div { class: "qt-scrim-text",
-                                    div { class: "qt-scrim-title", "Stone Timer Utility" }
-                                    div { "drag to set time" }
+                                    div { class: "qt-scrim-title", "Quick timer" }
+                                    div { "Drag to set stones" }
                                 }
                             }
                         }
                         div { class: "row",
                             div { class: "col-md-12",
-                                h2 { "Run Match: {m.name}" }
-                                div { class: "row d-none d-md-flex",
-                                    div { class: "col-md-4",
-                                        p { class: "mb-0",
-                                            strong { "Teams: " }
-                                            "{team1} vs {team2}"
-                                        }
-                                    }
-                                    div { class: "col-md-4",
-                                        p { class: "mb-0",
-                                            strong { "Refs: " }
-                                            "{refs_display}"
-                                        }
-                                    }
-                                    div { class: "col-md-2",
-                                        if let Some(len) = length_display {
-                                            p { class: "mb-0",
-                                                strong { "Length: " }
-                                                "{len}"
-                                            }
-                                        }
-                                    }
-                                    div { class: "col-md-2",
-                                        p { class: "mb-0",
-                                            strong { "Field: " }
-                                            "{field_display}"
-                                        }
-                                    }
+                                div { class: "live-match-heading",
+                                    h2 { "{m.name}" }
+                                    {quick_timer_el}
                                 }
-                                div { class: "row d-md-none",
-                                    div { class: "col-12",
-                                        p { class: "small mb-0",
-                                            "Refs: {refs_display}"
-                                            if let Some(len) = m.nominal_length {
-                                                " | {len}m"
-                                            }
-                                            " | Field: {field_display}"
-                                        }
+                                div { class: "live-match-metadata",
+                                    span { "Refs: {refs_display}" }
+                                    if let Some(len) = length_display {
+                                        span { "{len}" }
                                     }
+                                    span { "Field: {field_display}" }
                                 }
                             }
                         }
 
-                        div { class: "row mb-4",
+                        div { class: "row live-score-row",
                             div { class: "col-md-12",
                                 div { class: "card", id: "score-stones-card",
                                     div { class: "card-body",
                                         div { class: "row",
-                                            div { class: "col-md-6 mb-4 mb-md-0",
+                                            div { class: if set_type_stones { "col-md-6" } else { "col-12" },
                                                 div { id: "score-by-set",
                                                     div { class: "d-flex align-items-center mb-1 gap-2",
-                                                        div { class: "flex-grow-1 text-center text-truncate",
+                                                        div { class: "flex-grow-1 text-center live-match-team",
                                                             small { class: "text-muted", "{team1}" }
                                                         }
                                                         div { class: "flex-shrink-0 text-nowrap text-center",
                                                             span { id: "time-elapsed", "{time_elapsed_str}" }
                                                         }
-                                                        div { class: "flex-grow-1 text-center text-truncate",
+                                                        div { class: "flex-grow-1 text-center live-match-team",
                                                             small { class: "text-muted", "{team2}" }
                                                         }
                                                     }
@@ -1828,62 +1967,112 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                     }
                                                 }
                                             }
-                                            div { class: "col-md-6",
+                                            div { class: if set_type_stones { "col-md-6 live-stone-panel" } else { "col-12" },
                                                 if set_type_stones {
-                                                    div { class: "d-flex align-items-center justify-content-center gap-3",
-                                                        div { class: "text-start",
-                                                            h4 { class: "mb-0", "Stone Count" }
-                                                            p { class: "small text-muted mb-0", "(click to edit)" }
+                                                    div { class: "live-stone-summary",
+                                                        div {
+                                                            span { class: "live-match-label", "Stones remaining" }
+                                                            output { id: "stones-remaining-display", class: "live-stone-count", aria_label: "Stones remaining",
+                                                                "{display_stones.map(|count| count.to_string()).unwrap_or_else(|| \"—\".into())}"
+                                                            }
                                                         }
-                                                        input {
-                                                            r#type: "number",
-                                                            class: "form-control-plaintext text-center display-4 m-0 p-0",
-                                                            id: "stones-remaining",
-                                                            style: "width: 6ch; line-height: 1; font-size: 3rem; height: 64px; min-width: 6ch;",
-                                                            value: "{stones_input_value}",
-                                                            onfocus: move |_| {
-                                                                stones_input_focused.set(true);
-                                                                stones_edit_value.set(display_stones.map(|n| n.to_string()).unwrap_or_default());
-                                                            },
-                                                            onblur: move |_| {
-                                                                let s = stones_edit_value();
-                                                                if let Ok(n) = s.parse::<u32>() {
-                                                                    stones_remaining.set(Some(n));
-                                                                    let u = url_stones_blur.clone();
-                                                                    let id = id_stones_blur.clone();
-                                                                    spawn(async move {
-                                                                        let _ = api::update_stones(&u, &id, n).await;
-                                                                    });
+                                                        if !(stone_save.editing)() {
+                                                            button { r#type: "button", id: "correct-stones", class: "btn btn-outline-secondary",
+                                                                disabled: point_pending() || (stone_save.pending)() || (stone_save.retry)().is_some(),
+                                                                onclick: move |_| {
+                                                                    if point_pending() || stone_save.blocks_point_actions() { return; }
+                                                                    let value = display_stones.map(|count| count.to_string()).unwrap_or_default();
+                                                                    stones_original.set(value.clone()); stones_edit_value.set(value);
+                                                                    stone_save.draft.set(false); stone_save.error.set(None); stone_save.editing.set(true);
+                                                                }, "Adjust count"
+                                                            }
+                                                        }
+                                                    }
+                                                    if (stone_save.editing)() {
+                                                        div { class: "live-stone-editor", id: "stone-correction-editor",
+                                                            label { r#for: "stones-remaining", class: "form-label", "Adjust stone count" }
+                                                            p { id: "stone-correction-help", class: "small text-muted",
+                                                                "Save applies this count immediately."
+                                                                if has_in_progress { " The active point keeps counting while you edit." }
+                                                            }
+                                                            input {
+                                                                r#type: "number", class: "form-control", id: "stones-remaining",
+                                                                aria_describedby: "stone-correction-help", min: "0", inputmode: "numeric",
+                                                                value: "{stones_input_value}",
+                                                                disabled: point_pending() || (stone_save.pending)() || (stone_save.retry)().is_some(),
+                                                                onfocus: move |_| stones_input_focused.set(true),
+                                                                onblur: move |_| stones_input_focused.set(false),
+                                                                onkeydown: { let mut submit = submit_stones.clone(); move |event| {
+                                                                    if event.key() == Key::Enter { event.prevent_default(); submit(); }
+                                                                    if event.key() == Key::Escape && !(stone_save.pending)() && (stone_save.retry)().is_none() {
+                                                                        event.prevent_default(); stone_save.draft.set(false); stone_save.editing.set(false); stone_save.error.set(None); stones_input_focused.set(false);
+                                                                    }
+                                                                } },
+                                                                oninput: move |event| { stones_edit_value.set(event.value()); stone_save.draft.set(true); },
+                                                            }
+                                                            div { class: "live-match-actions mt-2",
+                                                                button { r#type: "button", id: "save-stone-correction", class: "btn btn-primary",
+                                                                    disabled: point_pending() || (stone_save.pending)() || (stone_save.retry)().is_some(),
+                                                                    onclick: { let mut submit = submit_stones.clone(); move |_| submit() },
+                                                                    if (stone_save.pending)() { "Saving…" } else { "Save correction" }
                                                                 }
-                                                                stones_input_focused.set(false);
-                                                            },
-                                                            oninput: move |ev| {
-                                                                let s = ev.value();
-                                                                stones_edit_value.set(s.clone());
-                                                                if let Ok(n) = s.parse::<u32>() {
-                                                                    stones_remaining.set(Some(n));
-                                                                    let u = url.clone();
-                                                                    let id = match_id.clone();
-                                                                    spawn(async move {
-                                                                        let _ = api::update_stones(&u, &id, n).await;
-                                                                    });
+                                                                button { r#type: "button", class: "btn btn-outline-secondary",
+                                                                    disabled: (stone_save.pending)() || (stone_save.retry)().is_some(),
+                                                                    onclick: move |_| {
+                                                                        if (stone_save.pending)() || (stone_save.retry)().is_some() { return; }
+                                                                        // Cancel only discards the local draft; never restore an old server count.
+                                                                        stone_save.draft.set(false); stone_save.editing.set(false); stone_save.error.set(None); stones_input_focused.set(false);
+                                                                    }, "Cancel"
                                                                 }
-                                                            },
+                                                            }
                                                         }
                                                     }
                                                 }
-                                                div { class: "row mt-3",
-                                                    div { class: "col-12 d-flex align-items-stretch gap-2",
-                                                        div { class: "flex-grow-1",
-                                                            button {
-                                                                id: "point-button",
-                                                                class: "{point_button_class}",
-                                                                onclick: on_start_end_point,
-                                                                disabled: point_button_disabled,
-                                                                "{point_button_text}"
-                                                            }
+                                                if (stone_save.pending)() { p { role: "status", "Saving stone count…" } }
+                                                if let Some(message) = (stone_save.error)() {
+                                                    div { class: "alert alert-danger", role: "alert", id: "stone-save-error",
+                                                        p { "{message}" }
+                                                        if (stone_save.retry)().is_some() {
+                                                            button { r#type: "button", class: "btn btn-outline-danger", disabled: (stone_save.pending)(), onclick: {
+                                                                let u = url.clone(); move |_| {
+                                                                    if (stone_save.pending)() { return; }
+                                                                    if let Some(body) = (stone_save.retry)() { stone_save.pending.set(true); let u = u.clone(); spawn(async move { stone_save.commit(u, body, state_signal, stones_remaining).await; }); }
+                                                                }
+                                                            }, "Retry stone correction" }
+                                                            button { r#type: "button", class: "btn btn-outline-secondary ms-2", disabled: (stone_save.pending)(), onclick: {
+                                                                let u = url.clone(); let id = match_id.clone(); move |_| {
+                                                                    if (stone_save.pending)() { return; }
+                                                                    stone_save.pending.set(true);
+                                                                    let u = u.clone(); let id = id.clone();
+                                                                    spawn(async move {
+                                                                        match api::match_state(&u, &id).await {
+                                                                            Ok(current) => {
+                                                                                state_signal.set(Some(Ok(current)));
+                                                                                match api::match_detail(&u, Some(&id), None).await {
+                                                                                    Ok(detail) => { stones_remaining.set(detail.match_data.stones_remaining.or(detail.match_data.stones_per_set)); stone_save.retry.set(None); stone_save.error.set(None); stone_save.draft.set(false); stone_save.editing.set(false); stones_input_focused.set(false); }
+                                                                                    Err(message) => stone_save.error.set(Some(message)),
+                                                                                }
+                                                                            }
+                                                                            Err(message) => stone_save.error.set(Some(message)),
+                                                                        }
+                                                                        stone_save.pending.set(false);
+                                                                    });
+                                                                }
+                                                            }, "Check current count" }
                                                         }
-                                                        {quick_timer_el}
+                                                    }
+                                                }
+                                                if let Some(reason) = action_block_reason {
+                                                    p { id: "point-action-help", class: "small text-muted mb-2", "{reason}" }
+                                                }
+                                                div { class: "live-desktop-point-action d-none d-md-block",
+                                                    button {
+                                                        id: "point-button",
+                                                        aria_describedby: action_block_reason.map(|_| "point-action-help"),
+                                                        class: "{point_button_class}",
+                                                        onclick: on_start_end_point,
+                                                        disabled: point_button_disabled,
+                                                        "{point_button_text}"
                                                     }
                                                 }
                                             }
@@ -1894,117 +2083,112 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                         }
 
                         if let Some(e) = action_error() {
-                            div { class: "alert alert-danger mt-2", "{e}" }
+                            div { class: "alert alert-danger mt-2", role: "alert", "{e}" }
                         }
 
-                        div { class: "row",
-                            div { class: "col-md-12",
-                                div { class: "card",
-                                    div { class: "card-header",
-                                        h5 { class: "mb-0", "Points" }
+                        section { class: "live-points-section", aria_labelledby: "live-points-heading",
+                            h3 { id: "live-points-heading", "Points" }
+                            div { class: "table-responsive point-history",
+                                table { class: "table table-sm", id: "points-table",
+                                    thead {
+                                        tr {
+                                            th { scope: "col", "#" }
+                                            th { scope: "col", "Set" }
+                                            th { scope: "col", "Stones" }
+                                            th { scope: "col", "Winner" }
+                                            th { scope: "col", "Rerun" }
+                                            th { scope: "col", "Notes" }
+                                            th { scope: "col", span { class: "visually-hidden", "Delete" } }
+                                        }
                                     }
-                                    div { class: "card-body",
-                                        div { class: "table-responsive",
-                                            table { class: "table table-sm", id: "points-table",
-                                                thead {
-                                                    tr {
-                                                        th { "#" }
-                                                        th { "Set" }
-                                                        th { "🪨" }
-                                                        th { "Winner" }
-                                                        th { "Rerun" }
-                                                        th { "Notes" }
-                                                        th { "" }
-                                                    }
-                                                }
-                                                tbody { id: "points-table-body",
-                                                    for node in point_table_rows.into_iter() {
-                                                        {node}
-                                                    }
-                                                }
-                                            }
+                                    tbody { id: "points-table-body",
+                                        for node in point_table_rows.into_iter() {
+                                            {node}
                                         }
                                     }
                                 }
                             }
                         }
 
-                        div { class: "row mt-4",
-                            div { class: "col-12",
-                                button {
-                                    id: "finalize-match-btn",
-                                    class: "btn btn-warning btn-lg w-100",
-                                    onclick: move |_| {
-                                        navigator.push(Route::FinalizeMatch {
-                                            url: url_finalize_btn.clone(),
-                                            match_id: id_finalize_btn.clone(),
-                                        });
-                                    },
-                                    disabled: has_in_progress,
-                                    if has_in_progress {
-                                        "Finalize Match (Point in Progress)"
-                                    } else {
-                                        "Finalize Match"
+                        div { class: "live-match-review mt-3",
+                            if !has_in_progress {
+                                if let Some(reason) = review_block_reason {
+                                    p { id: "review-result-help", class: "small text-muted mb-2", "{reason}" }
+                                }
+                            }
+                            div { class: "live-match-actions",
+                                if !has_in_progress {
+                                    button { r#type: "button", id: "finalize-match-btn", class: "btn btn-outline-primary d-none d-md-inline-flex",
+                                        aria_describedby: review_block_reason.map(|_| "review-result-help"), disabled: review_block_reason.is_some(),
+                                        onclick: move |_| {
+                                            if point_pending() || stone_save.blocks_point_actions() || current_point().is_some() { return; }
+                                            navigator.push(Route::FinalizeMatch { url: url_finalize_btn.clone(), match_id: id_finalize_btn.clone() });
+                                        }, "Review results"
                                     }
+                                }
+                                if point_pending() || (stone_save.pending)() || (stone_save.retry)().is_some() {
+                                    button { r#type: "button", class: "btn btn-outline-secondary", disabled: true,
+                                        aria_describedby: action_block_reason.map(|_| "point-action-help"), "Back to match"
+                                    }
+                                } else {
+                                    Link { to: Route::MatchPageById { url: url.clone(), match_id: match_id.clone() }, class: "btn btn-outline-secondary", "Back to match" }
                                 }
                             }
                         }
                     }
 
-                    div { class: "mobile-button-wrapper d-md-none",
+                    div { class: format!("mobile-button-wrapper operator-match-controls live-match-action-bar d-md-none{}{}",
+                        if (stone_save.editing)() { " live-correction-open" } else { "" },
+                        if has_in_progress { " live-point-running" } else { "" }),
+                        p { class: "live-action-status", role: "status",
+                            if let Some(reason) = action_block_reason { "{reason}" } else { "{point_context}" }
+                        }
                         if !has_in_progress {
-                            button {
-                                class: "btn btn-warning btn-lg",
+                            button { r#type: "button", class: "btn btn-outline-primary", aria_describedby: review_block_reason.map(|_| "review-result-help"),
+                                disabled: review_block_reason.is_some(),
                                 onclick: move |_| {
-                                    navigator.push(Route::FinalizeMatch {
-                                        url: url_finalize_mobile.clone(),
-                                        match_id: id_finalize_mobile.clone(),
-                                    });
-                                },
-                                "Finalize Match"
+                                    if point_pending() || stone_save.blocks_point_actions() || current_point().is_some() { return; }
+                                    navigator.push(Route::FinalizeMatch { url: url_finalize_mobile.clone(), match_id: id_finalize_mobile.clone() });
+                                }, "Review results"
                             }
                         }
-                        button {
-                            class: "{point_button_class}",
-                            onclick: on_start_end_point_mobile,
-                            disabled: point_button_disabled,
+                        button { r#type: "button", class: "{point_button_class}", aria_describedby: action_block_reason.map(|_| "point-action-help"),
+                            onclick: on_start_end_point_mobile, disabled: point_button_disabled,
                             "{point_button_text}"
                         }
                     }
 
                     if show_notes_modal {
-                        div {
-                            class: "modal show",
-                            style: "display: block; background: rgba(0,0,0,0.5);",
-                            role: "dialog",
-                            tabindex: "-1",
-                            onclick: move |_| {
+                        Modal {
+                            id: "run-notes", labelled_by: "run-notes-title", size: ModalSize::Large,
+                            return_focus_id: Some(format!("point-note-{notes_modal_pid}")),
+                            dismissible: !notes_pending(), on_close: move |_| {
                                 notes_modal_point_id.set(None);
                             },
-                            div {
-                                class: "modal-dialog modal-lg",
-                                onclick: move |ev| { ev.stop_propagation(); },
-                                div { class: "modal-content",
+
                                     div { class: "modal-header",
-                                        h5 { class: "modal-title", "Notes for Point" }
+                                        h5 { id: "run-notes-title", tabindex: "-1", class: "modal-title", "Notes for Point" }
                                         button {
                                             r#type: "button",
                                             class: "btn-close",
-                                            aria_label: "Close",
+                                            aria_label: "Close", disabled: notes_pending(),
                                             onclick: move |_| notes_modal_point_id.set(None),
                                         }
                                     }
                                     div { class: "modal-body",
+                                        if let Some(message) = notes_error() { p { class: "alert alert-danger", role: "alert", "{message}" } }
                                         match notes_modal_notes().as_ref() {
                                             None => rsx! {
                                                 div { class: "text-muted", "Loading…" }
                                             },
                                             Some(Err(e)) => rsx! {
-                                                div { class: "text-danger", "{e}" }
+                                                div { class: "text-danger", role: "alert", "{e}" }
+                                                PointNotesRetry { url: url_notes.clone(), match_id: id_notes.clone(), point_id: notes_modal_pid.clone(), selected: notes_modal_point_id, generation: notes_generation, notes: notes_modal_notes, draft: Some(notes_modal_new_text), map: point_notes_map_signal }
                                             },
                                             Some(Ok(_)) => rsx! {
-                                                label { class: "form-label", "Note for this point" }
+                                                label { class: "form-label", r#for: "run-note-text", "Note for this point" }
                                                 textarea {
+                                                    id: "run-note-text", disabled: notes_pending(),
                                                     class: "form-control",
                                                     rows: "3",
                                                     placeholder: "Enter note (optional)",
@@ -2017,37 +2201,42 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                     div { class: "modal-footer",
                                         button {
                                             r#type: "button",
-                                            class: "btn btn-secondary",
+                                            class: "btn btn-secondary", disabled: notes_pending(),
                                             onclick: move |_| notes_modal_point_id.set(None),
                                             "Close"
                                         }
                                         button {
                                             r#type: "button",
                                             class: "btn btn-primary",
-                                            disabled: !notes_modal_notes().as_ref().is_some_and(|r| r.is_ok()),
+                                            disabled: notes_pending() || !notes_modal_notes().as_ref().is_some_and(|r| r.is_ok()),
                                             onclick: move |_| {
+                                                if notes_pending() { return; }
+                                                notes_pending.set(true);
+                                                notes_error.set(None);
                                                 let text = notes_modal_new_text().trim().to_string();
                                                 let u = url_notes_submit.clone();
                                                 let id = id_notes_submit.clone();
                                                 let pid = notes_modal_pid.clone();
                                                 let mut point_notes_map_signal = point_notes_map_signal;
-                                                notes_modal_point_id.set(None);
                                                 spawn(async move {
-                                                    if api::set_point_note(&u, &id, &pid, &text).await.is_ok() {
-                                                        if let Ok(v) = api::get_point_notes(&u, &id, &pid).await {
-                                                            let notes = v.get("notes").and_then(|n| n.as_array()).cloned().unwrap_or_default();
-                                                            let mut m = point_notes_map_signal();
-                                                            m.insert(pid, notes);
-                                                            point_notes_map_signal.set(m);
+                                                    match api::set_point_note(&u, &id, &pid, &text).await {
+                                                        Ok(_) => {
+                                                            // The write is confirmed: never offer another write just because the read failed.
+                                                            match api::get_point_notes(&u, &id, &pid).await {
+                                                                Ok(v) => { point_notes_map_signal.write().insert(pid.clone(), note_rows(&v)); }
+                                                                Err(message) => { action_error.set(Some(format!("Note saved, but the list could not refresh. {message}"))); }
+                                                            }
+                                                            notes_modal_point_id.set(None);
                                                         }
+                                                        Err(message) => notes_error.set(Some(message)),
                                                     }
+                                                    notes_pending.set(false);
                                                 });
                                             },
-                                            "Save"
+                                            if notes_pending() { "Saving…" } else if notes_error().is_some() { "Retry save" } else { "Save" }
                                         }
                                     }
-                                }
-                            }
+
                         }
                     }
 
@@ -2063,12 +2252,10 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                             let u_close3 = url_notes.clone();
                             let mid_close3 = id_notes.clone();
                         rsx! {
-                        div {
-                            class: "modal show",
-                            style: "display: block; background: rgba(0,0,0,0.5);",
-                            role: "dialog",
-                            tabindex: "-1",
-                            onclick: move |_| {
+                        Modal {
+                            id: "run-penalties", labelled_by: "run-penalties-title", size: ModalSize::Large,
+                            return_focus_id: Some(format!("point-penalties-{penalties_modal_pid}")),
+                            dismissible: !penalty_pending(), on_close: move |_| {
                                 let pid = pid_close1.clone();
                                 let u = u_close1.clone();
                                 let mid = mid_close1.clone();
@@ -2083,16 +2270,13 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                     }
                                 });
                             },
-                            div {
-                                class: "modal-dialog modal-lg",
-                                onclick: move |ev| { ev.stop_propagation(); },
-                                div { class: "modal-content",
+
                                     div { class: "modal-header",
-                                        h5 { class: "modal-title", "Penalties" }
+                                        h5 { id: "run-penalties-title", tabindex: "-1", class: "modal-title", "Penalties" }
                                         button {
                                             r#type: "button",
                                             class: "btn-close",
-                                            aria_label: "Close",
+                                            aria_label: "Close", disabled: penalty_pending(),
                                             onclick: move |_| {
                                                 let pid = pid_close2.clone();
                                                 let u = u_close2.clone();
@@ -2111,6 +2295,11 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                         }
                                     }
                                     div { class: "modal-body",
+                                        if let Some(message) = penalty_error() { p { class: "alert alert-danger", role: "alert", "{message}" } }
+                                        if let Some(Err(message)) = notes_modal_notes() {
+                                            p { class: "text-danger", role: "alert", "{message}" }
+                                            PointNotesRetry { url: url_notes.clone(), match_id: id_notes.clone(), point_id: penalties_modal_pid.clone(), selected: penalties_modal_point_id, generation: penalty_generation, notes: notes_modal_notes, draft: None, map: point_notes_map_signal }
+                                        }
                                         if penalties_step() == 1 {
                                             {
                                                 let pid_fetch_team1 = penalties_modal_pid.clone();
@@ -2130,7 +2319,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                                 let point_id_hist = pid_fetch_team1.clone();
                                                                 rsx! {
                                                                     button {
-                                                                        class: "list-group-item list-group-item-action d-flex align-items-center gap-2",
+                                                                        class: "list-group-item list-group-item-action d-flex align-items-center gap-2", disabled: penalty_pending(),
                                                                         onclick: move |_| {
                                                                             penalties_selected_player_id.set(Some(pid.clone()));
                                                                             penalties_selected_player_display.set(display.clone());
@@ -2141,9 +2330,9 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                                             let point_id_for_spawn = point_id_hist.clone();
                                                                             spawn(async move {
                                                                                 if let Ok(res) = api::get_player_penalty_history(&u, &pid_fetch, &mid, &point_id_for_spawn).await {
-                                                                                    penalty_history_signal.set(Some((pid_fetch, res.penalties)));
+                                                                                    if penalties_selected_player_id().as_deref() == Some(pid_fetch.as_str()) && penalties_modal_point_id().as_deref() == Some(point_id_for_spawn.as_str()) { penalty_history_signal.set(Some((pid_fetch, res.penalties))); }
                                                                                 } else {
-                                                                                    penalty_history_signal.set(Some((pid_fetch, vec![])));
+                                                                                    if penalties_selected_player_id().as_deref() == Some(pid_fetch.as_str()) { penalty_error.set(Some("Could not load penalty history. Select the player again to retry.".into())); }
                                                                                 }
                                                                             });
                                                                         },
@@ -2176,7 +2365,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                                 let point_id_hist2 = pid_fetch_team2.clone();
                                                                 rsx! {
                                                                     button {
-                                                                        class: "list-group-item list-group-item-action d-flex align-items-center gap-2",
+                                                                        class: "list-group-item list-group-item-action d-flex align-items-center gap-2", disabled: penalty_pending(),
                                                                         onclick: move |_| {
                                                                             penalties_selected_player_id.set(Some(pid.clone()));
                                                                             penalties_selected_player_display.set(display2.clone());
@@ -2187,9 +2376,9 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                                             let point_id_for_spawn2 = point_id_hist2.clone();
                                                                             spawn(async move {
                                                                                 if let Ok(res) = api::get_player_penalty_history(&u, &pid_fetch, &mid, &point_id_for_spawn2).await {
-                                                                                    penalty_history_signal.set(Some((pid_fetch, res.penalties)));
+                                                                                    if penalties_selected_player_id().as_deref() == Some(pid_fetch.as_str()) && penalties_modal_point_id().as_deref() == Some(point_id_for_spawn2.as_str()) { penalty_history_signal.set(Some((pid_fetch, res.penalties))); }
                                                                                 } else {
-                                                                                    penalty_history_signal.set(Some((pid_fetch, vec![])));
+                                                                                    if penalties_selected_player_id().as_deref() == Some(pid_fetch.as_str()) { penalty_error.set(Some("Could not load penalty history. Select the player again to retry.".into())); }
                                                                                 }
                                                                             });
                                                                         },
@@ -2257,10 +2446,10 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                                             tr {
                                                                                 td { style: format!("border-left: 8px solid #{}; background-color: #{}22;", row_color, row_color), "{item.penalty_type_name}" }
                                                                                 td { "{item.match_name}" }
-                                                                                td { "{item.date}" }
+                                                                                td { class: "table-nowrap", "{item.date}" }
                                                                                 td {
                                                                                     if item.is_current_match {
-                                                                                        span { class: "badge bg-info", "current match" }
+                                                                                        span { class: "badge bg-info table-nowrap", "current match" }
                                                                                     }
                                                                                 }
                                                                                 td { class: "text-end align-middle",
@@ -2269,15 +2458,21 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                                                             r#type: "button",
                                                                                             class: "btn btn-sm btn-outline-danger border-danger",
                                                                                             style: "min-width: 2rem; font-size: 1.1rem; line-height: 1;",
-                                                                                            title: "Remove penalty from this point",
+                                                                                            title: "Remove penalty from this point", aria_label: "Remove penalty from this point", disabled: penalty_pending(),
                                                                                             onclick: move |_| {
+                                                                                                if penalty_pending() { return; }
+                                                                                                penalty_pending.set(true);
+                                                                                                penalty_error.set(None);
                                                                                                 let uuid = note_uuid_owned.clone();
                                                                                                 let u = u_del.clone();
                                                                                                 let mid = mid_del.clone();
                                                                                                 let pid = pid_del.clone();
                                                                                                 let pl_id = pl_id_del.clone();
                                                                                                 spawn(async move {
-                                                                                                    if api::delete_point_note(&u, &uuid).await.is_ok() {
+                                                                                                    match api::delete_point_note(&u, &uuid).await {
+                                                                                                    Ok(_) => {
+                                                                                                        if let Some(rows) = pn_sig.write().get_mut(&pid) { rows.retain(|note| note.get("uuid").and_then(Value::as_str) != Some(uuid.as_str())); }
+                                                                                                        if let Some((_, rows)) = ph_sig.write().as_mut() { rows.retain(|item| item.note_uuid.as_deref() != Some(uuid.as_str())); }
                                                                                                         if let Ok(v) = api::get_point_notes(&u, &mid, &pid).await {
                                                                                                             let notes = v.get("notes").and_then(|n| n.as_array()).cloned().unwrap_or_default();
                                                                                                             let mut m = pn_sig();
@@ -2286,8 +2481,11 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                                                                         }
                                                                                                         if let Ok(res) = api::get_player_penalty_history(&u, &pl_id, &mid, &pid).await {
                                                                                                             ph_sig.set(Some((pl_id, res.penalties)));
-                                                                                                        }
+                                                                                                        } else { penalty_error.set(Some("Penalty removed, but history could not refresh. Select the player again to reload it.".into())); }
+                                                                                                    },
+                                                                                                    Err(message) => penalty_error.set(Some(message)),
                                                                                                     }
+                                                                                                    penalty_pending.set(false);
                                                                                                 });
                                                                                             },
                                                                                             "×"
@@ -2319,7 +2517,8 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                             rsx! {
                                                                 button {
                                                                     class: if selected { "btn btn-dark" } else { "btn btn-outline-dark" },
-                                                                    style: if selected { format!("background-color: #{}; border-color: #{};", pt.color, pt.color) } else { format!("color: black; border-color: #{}; background-color: white;", pt.color) },
+                                                                    disabled: penalty_pending() || penalty_uncertain().is_some(),
+                                                                    style: if selected { format!("background-color: #{}; border-color: #{};", pt.color, pt.color) } else { format!("color: var(--ui-text); border-color: #{}; background-color: var(--ui-surface);", pt.color) },
                                                                     onclick: move |_| {
                                                                         if penalties_selected_type() == Some(pt_id) {
                                                                             penalties_selected_type.set(None);
@@ -2353,6 +2552,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                         rsx! {
                                                             button {
                                                                 class: if selected { "btn btn-secondary" } else { "btn btn-outline-secondary" },
+                                                                disabled: penalty_pending() || penalty_uncertain().is_some(),
                                                                 onclick: move |_| {
                                                                     if selected {
                                                                         penalties_other_selected.set(false);
@@ -2368,10 +2568,10 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                 }
                                                 if penalties_other_selected() {
                                                     div { class: "mb-3",
-                                                        label { "Other penalty description" }
+                                                        label { r#for: "run-penalty-other", "Other penalty description" }
                                                         input {
                                                             class: "form-control",
-                                                            value: "{penalties_other_text()}",
+                                                            id: "run-penalty-other", disabled: penalty_pending() || penalty_uncertain().is_some(), value: "{penalties_other_text()}",
                                                             oninput: move |ev| penalties_other_text.set(ev.value().clone()),
                                                             placeholder: "Describe penalty..."
                                                         }
@@ -2388,7 +2588,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                     div { class: "modal-footer",
                                         if penalties_step() == 2 {
                                             button {
-                                                class: "btn btn-outline-secondary me-auto",
+                                                class: "btn btn-outline-secondary me-auto", disabled: penalty_pending() || penalty_uncertain().is_some(),
                                                 onclick: move |_| {
                                                     penalties_step.set(1);
                                                     penalties_selected_type.set(None);
@@ -2398,54 +2598,71 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                 "Back"
                                             }
                                             button {
-                                                class: "btn btn-primary",
+                                                class: "btn btn-primary", disabled: penalty_pending() || !notes_modal_notes().as_ref().is_some_and(|r| r.is_ok()),
                                                 onclick: move |_| {
+                                                    if penalty_pending() { return; }
                                                     let selected_pt = penalties_selected_type();
                                                     let other = penalties_other_selected();
-                                                    let other_text = penalties_other_text();
+                                                    let other_text = penalties_other_text().trim().to_string();
                                                     let pid = pid_for_add.clone();
                                                     let mid = id_notes.clone();
-                                                    let pl_id = penalties_selected_player_id().clone();
                                                     let u = url_notes.clone();
-                                                    if selected_pt.is_none() && !other { return; }
-                                                    if other && other_text.trim().is_empty() { return; }
-                                                    if let Some(player_id) = pl_id {
-                                                        let u2 = u.clone();
-                                                        let mid2 = mid.clone();
-                                                        let pid2 = pid.clone();
-                                                        let mut point_notes_map_signal = point_notes_map_signal;
-                                                        let mut notes_modal_notes = notes_modal_notes;
-                                                        let mut penalty_history_signal = penalty_history_signal;
-                                                        spawn(async move {
-                                                            let ok = if let Some(pt_id) = selected_pt {
-                                                                api::add_point_note(&u2, &mid2, &pid2, "", "player", Some(&player_id), Some(pt_id)).await.is_ok()
-                                                            } else {
-                                                                api::add_point_note(&u2, &mid2, &pid2, &other_text, "player", Some(&player_id), None).await.is_ok()
-                                                            };
-                                                            if ok {
-                                                                if let Ok(v) = api::get_point_notes(&u2, &mid2, &pid2).await {
-                                                                    let notes = v.get("notes").and_then(|n| n.as_array()).cloned().unwrap_or_default();
-                                                                    let mut m = point_notes_map_signal();
-                                                                    m.insert(pid2.clone(), notes.clone());
-                                                                    point_notes_map_signal.set(m);
-                                                                    notes_modal_notes.set(Some(Ok(notes)));
-                                                                }
-                                                                if let Ok(res) = api::get_player_penalty_history(&u2, &player_id, &mid2, &pid2).await {
-                                                                    penalty_history_signal.set(Some((player_id.clone(), res.penalties)));
+                                                    let Some(player_id) = penalties_selected_player_id() else { return; };
+                                                    if selected_pt.is_none() && (!other || other_text.is_empty()) { return; }
+                                                    let checking = penalty_uncertain();
+                                                    let attempt = checking.clone().unwrap_or_else(|| PenaltyAttempt {
+                                                        before_ids: point_notes_map_signal().get(&pid).into_iter().flatten().filter_map(|n| n.get("uuid").and_then(Value::as_str).map(str::to_string)).collect(),
+                                                        player: player_id.clone(), penalty_type: selected_pt,
+                                                        text: if selected_pt.is_some() { String::new() } else { other_text.clone() },
+                                                    });
+                                                    penalty_pending.set(true);
+                                                    penalty_error.set(None);
+                                                    spawn(async move {
+                                                        let mut confirmed = false;
+                                                        if checking.is_none() {
+                                                            match api::add_point_note(&u, &mid, &pid, &attempt.text, "player", Some(&attempt.player), attempt.penalty_type).await {
+                                                                Ok(_) => { confirmed = true; }
+                                                                Err(message) => {
+                                                                    penalty_uncertain.set(Some(attempt.clone()));
+                                                                    penalty_error.set(Some(format!("Could not confirm the penalty. Check saved penalties before adding it again. {message}")));
                                                                 }
                                                             }
-                                                        });
-                                                        penalties_selected_type.set(None);
-                                                        penalties_other_selected.set(false);
-                                                        penalties_other_text.set(String::new());
-                                                    }
+                                                        }
+                                                        if confirmed || checking.is_some() {
+                                                            match api::get_point_notes(&u, &mid, &pid).await {
+                                                                Ok(v) => {
+                                                                    let notes = note_rows(&v);
+                                                                    confirmed |= attempt.found_in(&notes);
+                                                                    point_notes_map_signal.write().insert(pid.clone(), notes.clone());
+                                                                    notes_modal_notes.set(Some(Ok(notes)));
+                                                                    penalty_uncertain.set(None);
+                                                                    if !confirmed { penalty_error.set(Some("No matching new penalty was found. Review the list before adding it again.".into())); }
+                                                                }
+                                                                Err(message) => {
+                                                                    if !confirmed { penalty_uncertain.set(Some(attempt.clone())); }
+                                                                    penalty_error.set(Some(format!("{} {message}", if confirmed { "Penalty saved, but the list could not refresh." } else { "Could not check saved penalties." })));
+                                                                }
+                                                            }
+                                                        }
+                                                        if confirmed {
+                                                            penalties_selected_type.set(None);
+                                                            penalties_other_selected.set(false);
+                                                            penalties_other_text.set(String::new());
+                                                            penalty_uncertain.set(None);
+                                                            match api::get_player_penalty_history(&u, &player_id, &mid, &pid).await {
+                                                                Ok(res) => penalty_history_signal.set(Some((player_id, res.penalties))),
+                                                                Err(message) => penalty_error.set(Some(format!("Penalty saved, but history could not refresh. {message}"))),
+                                                            }
+                                                        }
+                                                        penalty_pending.set(false);
+                                                    });
                                                 },
-                                                "Add penalty"
+                                                if penalty_pending() { "Saving…" } else if penalty_uncertain().is_some() { "Check saved penalties" } else { "Add penalty" }
                                             }
                                         }
                                         button {
                                             r#type: "button",
-                                            class: "btn btn-secondary",
+                                            class: "btn btn-secondary", disabled: penalty_pending(),
                                             onclick: move |_| {
                                                 let pid = pid_close3.clone();
                                                 let u = u_close3.clone();
@@ -2466,28 +2683,23 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                         }
                                     }
                                         }
-                                    }
-                                }
-                            }
+
+                        }
                         }
                         }
                     }
                     if penalty_desc_modal().is_some() {
-                        div { class: "modal show", style: "display: block;",
-                            div { class: "modal-dialog modal-dialog-centered",
-                                div { class: "modal-content",
+                        Modal { id: "run-penalty-description", labelled_by: "run-penalty-description-title", on_close: move |_| penalty_desc_modal.set(None),
                                     div { class: "modal-header",
-                                        h5 { class: "modal-title", "Penalty description" }
-                                        button { r#type: "button", class: "btn-close", onclick: move |_| penalty_desc_modal.set(None) }
+                                        h5 { id: "run-penalty-description-title", tabindex: "-1", class: "modal-title", "Penalty description" }
+                                        button { r#type: "button", class: "btn-close", aria_label: "Close penalty description", onclick: move |_| penalty_desc_modal.set(None) }
                                     }
                                     div { class: "modal-body", "{penalty_desc_modal().as_ref().unwrap_or(&String::new())}" }
                                     div { class: "modal-footer",
                                         button { r#type: "button", class: "btn btn-secondary", onclick: move |_| penalty_desc_modal.set(None), "Close" }
                                     }
-                                }
-                            }
+
                         }
-                        div { class: "modal-backdrop show" }
                     }
                 }
             }
@@ -2535,5 +2747,56 @@ mod quick_timer_tests {
         // start mid-beat: flooring both endpoints means elapsed counts
         // global boundaries crossed, not raw elapsed / 1.5.
         assert_eq!(quick_timer_current(0.4, 5, 1.6), 4);
+    }
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::{point_action_block_reason, stone_correction_body, PenaltyAttempt};
+    use serde_json::json;
+    #[test]
+    fn point_actions_explain_each_persistence_barrier() {
+        assert!(point_action_block_reason(false, false, false, false, false, false).is_none());
+        assert_eq!(point_action_block_reason(false, true, false, false, false, false), Some("Saving the point change…"));
+        assert_eq!(point_action_block_reason(false, false, true, false, true, false), Some("Saving the stone count…"));
+        assert_eq!(point_action_block_reason(false, false, false, true, true, false), Some("Retry the stone correction or check the current count before continuing."));
+        assert_eq!(point_action_block_reason(false, false, false, false, true, false), Some("Save or cancel the stone correction before continuing."));
+        assert_eq!(point_action_block_reason(false, false, false, false, false, true), Some("Set the stone count before starting a point."));
+        assert_eq!(point_action_block_reason(true, false, false, false, false, false), Some("This match is finalized."));
+    }
+    #[test]
+    fn penalty_reconciliation_ignores_old_and_unrelated_notes() {
+        let attempt = PenaltyAttempt {
+            before_ids: vec!["old".into()],
+            player: "player".into(),
+            penalty_type: Some(3),
+            text: String::new(),
+        };
+        assert!(!attempt.found_in(&[
+            json!({"uuid":"old", "player_id":"player", "penalty_type_id":3,"text":""})
+        ]));
+        assert!(!attempt.found_in(&[
+            json!({"uuid":"new", "player_id":"other", "penalty_type_id":3,"text":""})
+        ]));
+        assert!(attempt.found_in(&[
+            json!({"uuid":"new", "player_id":"player", "penalty_type_id":3,"text":""})
+        ]));
+    }
+    #[test]
+    fn correction_carries_observation_and_expected_point_state_for_retry() {
+        let state = json!({"points":[{"uuid":"point","stones_at_start":100}]});
+        let body =
+            stone_correction_body("match", 50, 123_000, Some("point"), Some(100), Some(&state));
+        assert_eq!(body["correction"]["observed_at_ms"], 123_000);
+        assert_eq!(body["correction"]["expected_anchor"], 100);
+        assert_eq!(body["correction"]["latest_point_id"], "point");
+    }
+    #[test]
+    fn between_points_retains_latest_id_to_detect_intervening_point() {
+        let state = json!({"points":[{"uuid":"ended","end_stamp":"2026-10-24"}]});
+        let body = stone_correction_body("match", 50, 123_000, None, Some(70), Some(&state));
+        assert!(body["correction"]["point_id"].is_null());
+        assert_eq!(body["correction"]["latest_point_id"], "ended");
+        assert_eq!(body["correction"]["expected_remaining"], 70);
     }
 }

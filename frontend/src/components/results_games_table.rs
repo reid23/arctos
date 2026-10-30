@@ -144,6 +144,22 @@ fn scroll_overflows(id: &str) -> bool {
         .is_some_and(|el| el.scroll_width() > el.client_width() + 1)
 }
 
+#[cfg(target_arch = "wasm32")]
+struct ResultsResizeListener {
+    window: web_sys::Window,
+    callback: wasm_bindgen::closure::Closure<dyn FnMut()>,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Drop for ResultsResizeListener {
+    fn drop(&mut self) {
+        use wasm_bindgen::JsCast;
+        let _ = self.window.remove_event_listener_with_callback(
+            "resize", self.callback.as_ref().unchecked_ref(),
+        );
+    }
+}
+
 #[component]
 pub fn ResultsGamesTable(rows: Vec<ResultsGameRow>, max_sets: usize) -> Element {
     let scroll_id = use_hook(|| {
@@ -157,29 +173,25 @@ pub fn ResultsGamesTable(rows: Vec<ResultsGameRow>, max_sets: usize) -> Element 
 
     // Re-measure after layout and when the viewport changes. Overflow switches
     // names to shortnames; a wider viewport tries full pseudonyms again.
-    use_effect(move || {
-        #[cfg(target_arch = "wasm32")]
-        {
+    // Own the listener for exactly this mounted table. A forgotten callback
+    // would keep writing to disposed signals after collapse or ribbon changes.
+    #[cfg(target_arch = "wasm32")]
+    let _resize_listener = use_hook(move || {
             use wasm_bindgen::JsCast;
             let mut layout_tick = layout_tick;
             let mut tight = tight;
             let closure = wasm_bindgen::closure::Closure::<dyn FnMut()>::new(move || {
                 tight.set(false);
                 let current = *layout_tick.peek();
-                layout_tick.set(current + 1);
+                layout_tick.set(current.wrapping_add(1));
             });
-            if let Some(window) = web_sys::window() {
+            web_sys::window().map(|window| {
                 let _ = window.add_event_listener_with_callback(
                     "resize",
                     closure.as_ref().unchecked_ref(),
                 );
-            }
-            closure.forget();
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let _ = (layout_tick, tight);
-        }
+                std::rc::Rc::new(ResultsResizeListener { window, callback: closure })
+            })
     });
 
     let scroll_id_for_measure = scroll_id.clone();

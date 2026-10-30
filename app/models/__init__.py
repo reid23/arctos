@@ -17,6 +17,7 @@ from app.models.league import League
 from app.models.tournament import Tournament, TO, Field, Tag, ScriptVariable
 from app.models.registration import TeamRegistration, PlayerRegistration
 from app.models.match import Match, Point, MatchNote
+from app.models.schedule_item import ScheduleItem
 from app.models.bracket import BracketImage, BracketLabeledTeam, BracketPlacement, BracketText
 from app.models.penalty_type import PenaltyType
 from app.models.records import Injury, HeadRef
@@ -45,6 +46,7 @@ __all__ = [
     "TeamRegistration",
     "PlayerRegistration",
     "Match",
+    "ScheduleItem",
     "Point",
     "MatchNote",
     "BracketPlacement",

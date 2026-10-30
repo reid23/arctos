@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from app.error_values import Err, Ok, Result
+from app.error_values import Err, Ok, Result, Some
 from app.exceptions import ValidationError
 from app.utils.name_validation import match_name_char_error
 
@@ -279,9 +279,9 @@ class MatchScheduleSerializer:
         if not name:
             return Err(ValidationError("Match name cannot be empty"))
 
-        mn_err = match_name_char_error(name)
-        if mn_err:
-            return Err(ValidationError(mn_err))
+        match match_name_char_error(name):
+            case Some(error):
+                return Err(ValidationError(error))
 
         from app.utils.match_ref_resolution import (
             refs_string_to_tokens,

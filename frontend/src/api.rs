@@ -3,14 +3,78 @@ use dioxus::prelude::*;
 use reqwest::Client;
 use serde_json::Value;
 
+/// Same-origin requests work behind nginx and the Dioxus development proxy,
+/// including when a phone opens the dev server over the local network.
+/// An explicit build-time override remains available for separate API hosts.
 pub fn base_url() -> String {
-    if cfg!(debug_assertions) {
+    if let Some(base) = option_env!("ARCTOS_API_BASE").filter(|base| !base.is_empty()) {
+        return base.trim_end_matches('/').to_string();
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::window()
+            .and_then(|window| window.location().origin().ok())
+            .unwrap_or_default()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
         "http://127.0.0.1:5006".to_string()
+    }
+}
+
+/// Resolve stored upload paths and existing public file URLs against the API.
+pub fn static_file_url(path: &str) -> String {
+    static_file_url_for_base(&base_url(), path)
+}
+
+fn static_file_url_for_base(base: &str, path: &str) -> String {
+    let path = path.trim();
+    if path.starts_with("https://") || path.starts_with("http://") {
+        return path.to_string();
+    }
+    let relative = path.trim_start_matches('/');
+    let base = base.trim_end_matches('/');
+    if relative.starts_with("static/") {
+        format!("{base}/{relative}")
+    } else if relative.starts_with("uploads/") || !path.starts_with('/') {
+        format!("{base}/static/{relative}")
     } else {
-        let window = web_sys::window().unwrap();
-        let location = window.location();
-        let origin = location.origin().unwrap();
-        origin
+        // Older records can point at a public route such as /event/waiver.
+        format!("{base}/{relative}")
+    }
+}
+
+#[cfg(test)]
+mod static_file_url_tests {
+    use super::static_file_url_for_base;
+
+    #[test]
+    fn uploaded_waivers_resolve_under_static_without_duplicate_prefixes() {
+        let expected = "http://localhost:8080/static/uploads/waivers/cup/waiver.pdf";
+        for path in [
+            "uploads/waivers/cup/waiver.pdf",
+            "/uploads/waivers/cup/waiver.pdf",
+            "static/uploads/waivers/cup/waiver.pdf",
+            "/static/uploads/waivers/cup/waiver.pdf",
+        ] {
+            assert_eq!(static_file_url_for_base("http://localhost:8080/", path), expected);
+        }
+    }
+
+    #[test]
+    fn existing_public_urls_and_backend_subpaths_are_preserved() {
+        assert_eq!(
+            static_file_url_for_base("https://events.example/arctos/", "/cup/waiver"),
+            "https://events.example/arctos/cup/waiver"
+        );
+        assert_eq!(
+            static_file_url_for_base("https://events.example", "https://files.example/waiver.pdf"),
+            "https://files.example/waiver.pdf"
+        );
+        assert_eq!(
+            static_file_url_for_base("https://events.example", "//other.example/waiver.pdf"),
+            "https://events.example/other.example/waiver.pdf"
+        );
     }
 }
 
@@ -40,7 +104,7 @@ fn truncate_error_body(text: &str, max_len: usize) -> String {
     } else {
         format!(
             "{}... ({} bytes total). Check server logs for full error.",
-            &t[..max_len],
+            &t[..t.floor_char_boundary(max_len)],
             t.len()
         )
     }
@@ -100,13 +164,62 @@ async fn response_json<T: serde::de::DeserializeOwned>(
     resp.json::<T>().await.map_err(|e| e.to_string())
 }
 
-pub async fn me() -> Result<User, String> {
+/// Only an explicit 401 proves that there is no signed-in session. A failed
+/// connection or an unexpected response must not be presented as a logout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccountError {
+    Unauthenticated,
+    Unavailable,
+}
+
+impl std::fmt::Display for AccountError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Unauthenticated => "Log in to continue.",
+            Self::Unavailable => "Your account could not be checked. Try again.",
+        })
+    }
+}
+
+impl std::error::Error for AccountError {}
+
+fn account_status_error(status: u16) -> Option<AccountError> {
+    match status {
+        200..=299 => None,
+        401 => Some(AccountError::Unauthenticated),
+        _ => Some(AccountError::Unavailable),
+    }
+}
+
+pub async fn me() -> Result<User, AccountError> {
     let c = client();
     let r = with_credentials(c.get(format!("{}/_api/me", base())))
         .send()
         .await
-        .map_err(|e| e.to_string())?;
-    response_json(r).await
+        .map_err(|_| AccountError::Unavailable)?;
+    if let Some(error) = account_status_error(r.status().as_u16()) {
+        return Err(error);
+    }
+    response_json(r).await.map_err(|_| AccountError::Unavailable)
+}
+
+#[cfg(test)]
+mod account_error_tests {
+    use super::{account_status_error, AccountError};
+
+    #[test]
+    fn only_unauthorized_me_response_means_signed_out() {
+        assert_eq!(account_status_error(401), Some(AccountError::Unauthenticated));
+        for status in [302, 400, 403, 404, 408, 409, 429, 500, 502, 503, 504] {
+            assert_eq!(account_status_error(status), Some(AccountError::Unavailable));
+        }
+    }
+
+    #[test]
+    fn success_still_requires_a_valid_user_body() {
+        assert_eq!(account_status_error(200), None);
+        assert!(serde_json::from_str::<crate::types::User>("{}").is_err());
+    }
 }
 
 pub async fn login(username: &str, password: &str) -> Result<User, String> {
@@ -301,6 +414,54 @@ pub async fn update_tournament_settings(
     post_form_status(&url, params).await
 }
 
+/// Save settings and the selected waiver together. Multipart also identifies
+/// the complete-save validation contract when no new file is selected.
+pub async fn save_tournament_settings(
+    tournament_url: &str,
+    params: &[(String, String)],
+    waiver: Option<bytes::Bytes>,
+    filename: Option<String>,
+) -> Result<StatusResponse, String> {
+    let mut form = reqwest::multipart::Form::new();
+    for (key, value) in params {
+        form = form.text(key.clone(), value.clone());
+    }
+    save_settings_multipart(
+        format!("{}/_api/{}/update-settings", base(), tournament_url),
+        form, waiver, filename,
+    ).await
+}
+
+pub async fn save_league_settings(
+    league_url: &str,
+    params: &std::collections::HashMap<String, serde_json::Value>,
+    waiver: Option<bytes::Bytes>,
+    filename: Option<String>,
+) -> Result<StatusResponse, String> {
+    let form = reqwest::multipart::Form::new().text(
+        "settings", serde_json::to_string(params).map_err(|e| e.to_string())?,
+    );
+    save_settings_multipart(
+        format!("{}/_api/leagues/{}/settings", base(), league_url),
+        form, waiver, filename,
+    ).await
+}
+
+async fn save_settings_multipart(
+    url: String,
+    mut form: reqwest::multipart::Form,
+    waiver: Option<bytes::Bytes>,
+    filename: Option<String>,
+) -> Result<StatusResponse, String> {
+    if let Some(bytes) = waiver {
+        form = form.part("waiver", reqwest::multipart::Part::bytes(bytes.to_vec())
+            .file_name(filename.unwrap_or_else(|| "waiver".into())));
+    }
+    let response = with_credentials(client().post(url).multipart(form))
+        .send().await.map_err(|e| e.to_string())?;
+    response_json(response).await
+}
+
 pub async fn add_tournament_to(
     tournament_url: &str,
     user_type: &str,
@@ -450,8 +611,12 @@ pub async fn register_player_as_to(
         "waiver_legal_name_signature": waiver_legal_name_signature,
     });
     let r = with_credentials(
-        c.post(format!("{}/_api/{}/register-player-as-to", base(), tournament_url))
-            .json(&body),
+        c.post(format!(
+            "{}/_api/{}/register-player-as-to",
+            base(),
+            tournament_url
+        ))
+        .json(&body),
     )
     .send()
     .await
@@ -477,8 +642,12 @@ pub async fn register_team_as_to(
         }
     }
     let r = with_credentials(
-        c.post(format!("{}/_api/{}/register-team-as-to", base(), tournament_url))
-            .json(&body),
+        c.post(format!(
+            "{}/_api/{}/register-team-as-to",
+            base(),
+            tournament_url
+        ))
+        .json(&body),
     )
     .send()
     .await
@@ -532,9 +701,10 @@ pub async fn create_league(
     response_json(r).await
 }
 
-pub async fn leagues_list() -> Result<crate::types::LeaguesListResponse, String> {
+pub async fn leagues_list(today: chrono::NaiveDate) -> Result<crate::types::LeaguesListResponse, String> {
     let c = client();
     let r = with_credentials(c.get(format!("{}/_api/leagues", base())))
+        .query(&[("today", today.to_string())])
         .send()
         .await
         .map_err(|e| e.to_string())?;
@@ -636,7 +806,7 @@ pub async fn league_register_player(
     post_form_status(&url, &params).await
 }
 
-/// Upload or replace the tournament waiver PDF (organizers only). Call after saving settings.
+/// Independently replace a tournament waiver (legacy upload API).
 pub async fn upload_waiver(
     tournament_url: &str,
     bytes: Vec<u8>,
@@ -1228,13 +1398,6 @@ pub async fn delete_legacy_bracket(
     .send()
     .await
     .map_err(|e| e.to_string())?;
-    if !r.status().is_success() {
-        let msg = r
-            .text()
-            .await
-            .unwrap_or_else(|_| "Failed to delete legacy bracket".to_string());
-        return Err(msg);
-    }
     response_json(r).await
 }
 
@@ -1249,13 +1412,6 @@ pub async fn clear_legacy_brackets(tournament_url: &str) -> Result<BracketLayout
     .send()
     .await
     .map_err(|e| e.to_string())?;
-    if !r.status().is_success() {
-        let msg = r
-            .text()
-            .await
-            .unwrap_or_else(|_| "Failed to clear legacy brackets".to_string());
-        return Err(msg);
-    }
     response_json(r).await
 }
 
@@ -1283,16 +1439,8 @@ pub async fn set_bracket_published(
     .send()
     .await
     .map_err(|e| e.to_string())?;
-    if !r.status().is_success() {
-        let msg = r
-            .text()
-            .await
-            .unwrap_or_else(|_| "Failed to update bracket published state".to_string());
-        return Err(msg);
-    }
     response_json(r).await
 }
-
 
 /// Persist bracket canvas state (match placements + annotations) for a tournament (TO only).
 pub async fn save_bracket_placements(
@@ -1320,13 +1468,6 @@ pub async fn save_bracket_placements(
     .send()
     .await
     .map_err(|e| e.to_string())?;
-    if !r.status().is_success() {
-        let msg = r
-            .text()
-            .await
-            .unwrap_or_else(|_| "Failed to save bracket placements".to_string());
-        return Err(msg);
-    }
     response_json(r).await
 }
 
@@ -1346,9 +1487,6 @@ pub async fn add_bracket_text(
     .send()
     .await
     .map_err(|e| e.to_string())?;
-    if !r.status().is_success() {
-        return Err(r.text().await.unwrap_or_else(|_| "Failed to add text".into()));
-    }
     response_json(r).await
 }
 
@@ -1385,9 +1523,6 @@ pub async fn add_bracket_labeled_team_with(
     .send()
     .await
     .map_err(|e| e.to_string())?;
-    if !r.status().is_success() {
-        return Err(r.text().await.unwrap_or_else(|_| "Failed to add team label".into()));
-    }
     response_json(r).await
 }
 
@@ -1416,9 +1551,6 @@ pub async fn add_bracket_image_element(
     .send()
     .await
     .map_err(|e| e.to_string())?;
-    if !r.status().is_success() {
-        return Err(r.text().await.unwrap_or_else(|_| "Failed to add image".into()));
-    }
     response_json(r).await
 }
 
@@ -1439,9 +1571,6 @@ pub async fn convert_labeled_team_port(
     .send()
     .await
     .map_err(|e| e.to_string())?;
-    if !r.status().is_success() {
-        return Err(r.text().await.unwrap_or_else(|_| "Failed to convert port".into()));
-    }
     response_json(r).await
 }
 
@@ -1467,13 +1596,6 @@ pub async fn add_bracket_placement(
     .send()
     .await
     .map_err(|e| e.to_string())?;
-    if !r.status().is_success() {
-        let msg = r
-            .text()
-            .await
-            .unwrap_or_else(|_| "Failed to add match to bracket".to_string());
-        return Err(msg);
-    }
     response_json(r).await
 }
 
@@ -1499,13 +1621,6 @@ pub async fn convert_bracket_port(
     .send()
     .await
     .map_err(|e| e.to_string())?;
-    if !r.status().is_success() {
-        let msg = r
-            .text()
-            .await
-            .unwrap_or_else(|_| "Failed to convert bracket port".to_string());
-        return Err(msg);
-    }
     response_json(r).await
 }
 
@@ -1578,7 +1693,6 @@ pub async fn match_detail(
     }
     response_json(r).await
 }
-
 
 pub async fn players_list(search: &str, page: u32) -> Result<PlayersListResponse, String> {
     let c = client();
@@ -1663,7 +1777,6 @@ pub async fn stones_list() -> Result<StonesResponse, String> {
     response_json(r).await
 }
 
-
 pub async fn server_time() -> Result<ServerTimeResponse, String> {
     let c = client();
     let r = with_credentials(c.get(format!("{}/_api/server-time", base())))
@@ -1673,7 +1786,6 @@ pub async fn server_time() -> Result<ServerTimeResponse, String> {
     response_json(r).await
 }
 
-
 pub async fn scoreboard_state(
     tournament_url: &str,
     field_name: &str,
@@ -1681,13 +1793,11 @@ pub async fn scoreboard_state(
 ) -> Result<ScoreboardStateResponse, String> {
     let c = client();
     let tz_offset_minutes = tz_offset_minutes.to_string();
-    let r = with_credentials(
-        c.get(format!("{}/_api/scoreboard-state", base())).query(&[
-            ("tournament", tournament_url),
-            ("field", field_name),
-            ("tz_offset_minutes", tz_offset_minutes.as_str()),
-        ]),
-    )
+    let r = with_credentials(c.get(format!("{}/_api/scoreboard-state", base())).query(&[
+        ("tournament", tournament_url),
+        ("field", field_name),
+        ("tz_offset_minutes", tz_offset_minutes.as_str()),
+    ]))
     .send()
     .await
     .map_err(|e| e.to_string())?;
@@ -2085,6 +2195,16 @@ pub async fn update_stones(
     Ok(data)
 }
 
+/// Explicit manual correction. Retain this exact body when offering a retry.
+pub async fn correct_stones(tournament_url: &str, body: &Value) -> Result<Value, String> {
+    let r = with_credentials(client().post(format!("{}/_api/{}/match-actions/update-stones", base(), tournament_url)).json(body))
+        .send().await.map_err(|e| e.to_string())?;
+    let data: Value = response_json(r).await?;
+    if !data.get("success").and_then(Value::as_bool).unwrap_or(false) {
+        return Err(data.get("error").and_then(Value::as_str).unwrap_or("Could not save stone count").to_string());
+    }
+    Ok(data)
+}
 
 /// Upload a single bracket image as raw bytes and return its relative static path.
 #[cfg(target_arch = "wasm32")]
@@ -2125,7 +2245,6 @@ pub async fn upload_bracket_image_bytes(
             .to_string())
     }
 }
-
 
 pub async fn update_field(
     tournament_url: &str,
@@ -2340,155 +2459,78 @@ pub async fn force_start_match(
     }
 }
 
-pub async fn update_player_profile(
-    player_id: &str,
-    req: &UpdatePlayerProfileRequest,
+/// Save profile text and any locally prepared image changes in one transaction.
+pub async fn save_profile_edit(
+    kind: &str,
+    id: &str,
+    profile: &impl serde::Serialize,
+    photo: Option<bytes::Bytes>,
+    banner: Option<bytes::Bytes>,
+    remove_photo: bool,
+    remove_banner: bool,
 ) -> Result<(), String> {
-    let c = client();
-    let r = with_credentials(
-        c.put(format!("{}/_api/players/{}", base(), player_id))
-            .json(req),
+    if !matches!(kind, "players" | "teams") {
+        return Err("Unknown profile type".to_string());
+    }
+    let mut form = reqwest::multipart::Form::new().text(
+        "profile",
+        serde_json::to_string(profile).map_err(|error| error.to_string())?,
+    );
+    for (field, image, remove) in [
+        ("profile_photo", photo, remove_photo),
+        ("banner_photo", banner, remove_banner),
+    ] {
+        if image.is_some() && remove {
+            return Err("Choose either a replacement image or removal, not both.".to_string());
+        }
+        if let Some(image) = image {
+            form = form.part(
+                field,
+                reqwest::multipart::Part::bytes(image.to_vec()).file_name("image"),
+            );
+        }
+        if remove {
+            form = form.text(format!("remove_{field}"), "true");
+        }
+    }
+    let response = with_credentials(
+        client()
+            .put(format!("{}/_api/{kind}/{}", base(), urlencoding::encode(id)))
+            .multipart(form),
     )
     .send()
     .await
-    .map_err(|e| e.to_string())?;
-
-    let data: Value = response_json(r).await?;
-    if data.get("success").and_then(|v| v.as_bool()) == Some(true) {
+    .map_err(|error| error.to_string())?;
+    let data: StatusResponse = response_json(response).await?;
+    if data.success {
         Ok(())
     } else {
-        Err(data
-            .get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Unknown error")
-            .to_string())
+        Err(data.error.unwrap_or_else(|| "Your profile could not be saved.".to_string()))
     }
 }
 
-pub async fn update_team_profile(
-    team_id: &str,
-    req: &UpdateTeamProfileRequest,
-) -> Result<(), String> {
-    let c = client();
-    let r = with_credentials(
-        c.put(format!("{}/_api/teams/{}", base(), team_id))
-            .json(req),
-    )
-    .send()
-    .await
-    .map_err(|e| e.to_string())?;
+async fn upload_event_banner(kind: &str, id: &str, bytes: bytes::Bytes) -> Result<String, String> {
+    let response = with_credentials(client().post(format!(
+        "{}/_api/{}/{}/banner-photo", base(), kind, urlencoding::encode(id)
+    )).body(bytes)).send().await.map_err(|error| error.to_string())?;
+    let data: Value = response_json(response).await?;
+    if data.get("success").and_then(Value::as_bool) == Some(true) {
+        data.get("path").and_then(Value::as_str).map(str::to_string)
+            .ok_or_else(|| "No banner path returned".to_string())
+    } else {
+        Err(data.get("error").and_then(Value::as_str).unwrap_or("Banner upload failed").to_string())
+    }
+}
 
-    let data: Value = response_json(r).await?;
-    if data.get("success").and_then(|v| v.as_bool()) == Some(true) {
+async fn delete_event_banner(kind: &str, id: &str) -> Result<(), String> {
+    let response = with_credentials(client().delete(format!(
+        "{}/_api/{}/{}/banner-photo", base(), kind, urlencoding::encode(id)
+    ))).send().await.map_err(|error| error.to_string())?;
+    let data: Value = response_json(response).await?;
+    if data.get("success").and_then(Value::as_bool) == Some(true) {
         Ok(())
     } else {
-        Err(data
-            .get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Unknown error")
-            .to_string())
-    }
-}
-
-/// Upload player profile photo. Overwrites previous; backend uses predictable path.
-pub async fn upload_player_profile_photo(
-    player_id: &str,
-    bytes: bytes::Bytes,
-) -> Result<String, String> {
-    let c = client();
-    let r = with_credentials(
-        c.post(format!(
-            "{}/_api/players/{}/profile-photo",
-            base(),
-            player_id
-        ))
-        .body(bytes),
-    )
-    .send()
-    .await
-    .map_err(|e| e.to_string())?;
-    let data: Value = response_json(r).await?;
-    if data.get("success").and_then(|v| v.as_bool()) == Some(true) {
-        data.get("path")
-            .and_then(|v| v.as_str())
-            .map(String::from)
-            .ok_or_else(|| "No path in response".to_string())
-    } else {
-        Err(data
-            .get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Upload failed")
-            .to_string())
-    }
-}
-
-/// Remove player profile photo.
-pub async fn delete_player_profile_photo(player_id: &str) -> Result<(), String> {
-    let c = client();
-    let r = with_credentials(c.delete(format!(
-        "{}/_api/players/{}/profile-photo",
-        base(),
-        player_id
-    )))
-    .send()
-    .await
-    .map_err(|e| e.to_string())?;
-    let data: Value = response_json(r).await?;
-    if data.get("success").and_then(|v| v.as_bool()) == Some(true) {
-        Ok(())
-    } else {
-        Err(data
-            .get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Failed to remove photo")
-            .to_string())
-    }
-}
-
-/// Upload team profile photo. Overwrites previous; backend uses predictable path.
-pub async fn upload_team_profile_photo(
-    team_id: &str,
-    bytes: bytes::Bytes,
-) -> Result<String, String> {
-    let c = client();
-    let r = with_credentials(
-        c.post(format!("{}/_api/teams/{}/profile-photo", base(), team_id))
-            .body(bytes),
-    )
-    .send()
-    .await
-    .map_err(|e| e.to_string())?;
-    let data: Value = response_json(r).await?;
-    if data.get("success").and_then(|v| v.as_bool()) == Some(true) {
-        data.get("path")
-            .and_then(|v| v.as_str())
-            .map(String::from)
-            .ok_or_else(|| "No path in response".to_string())
-    } else {
-        Err(data
-            .get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Upload failed")
-            .to_string())
-    }
-}
-
-/// Remove team profile photo.
-pub async fn delete_team_profile_photo(team_id: &str) -> Result<(), String> {
-    let c = client();
-    let r = with_credentials(c.delete(format!("{}/_api/teams/{}/profile-photo", base(), team_id)))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    let data: Value = response_json(r).await?;
-    if data.get("success").and_then(|v| v.as_bool()) == Some(true) {
-        Ok(())
-    } else {
-        Err(data
-            .get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Failed to remove photo")
-            .to_string())
+        Err(data.get("error").and_then(Value::as_str).unwrap_or("Could not remove banner").to_string())
     }
 }
 
@@ -2809,10 +2851,14 @@ pub async fn list_event_footage(
     tournament_url: &str,
 ) -> Result<crate::types::FootageListResponse, String> {
     let c = client();
-    let r = with_credentials(c.get(format!("{}/_api/tournaments/{}/footage", base(), tournament_url)))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let r = with_credentials(c.get(format!(
+        "{}/_api/tournaments/{}/footage",
+        base(),
+        tournament_url
+    )))
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
     response_json(r).await
 }
 
@@ -3114,6 +3160,28 @@ pub async fn get_penalty_types(tournament_url: &str) -> Result<GetPenaltyTypesRe
     response_json(r).await
 }
 
+/// Reconcile an unconfirmed creation before offering another POST. Never retry
+/// a write automatically: the original response may have been lost after commit.
+pub async fn check_penalty_creation(
+    scope_url: &str,
+    league: bool,
+    known_ids: &[i32],
+    name: &str,
+    color: &str,
+    desc: &str,
+) -> Result<bool, String> {
+    let scope = if league { format!("leagues/{}", scope_url) } else { scope_url.to_string() };
+    let response = with_credentials(client().get(format!("{}/_api/{}/penalty-types", base(), scope)))
+        .header("Cache-Control", "no-cache")
+        .send().await.map_err(|e| e.to_string())?;
+    let data: GetPenaltyTypesResponse = response_json(response).await?;
+    Ok(data.penalty_types.iter().any(|penalty| {
+        !known_ids.contains(&penalty.id) && penalty.name == name
+            && penalty.color.eq_ignore_ascii_case(color)
+            && penalty.desc.as_deref().unwrap_or("") == desc
+    }))
+}
+
 pub async fn create_penalty_type(
     tournament_url: &str,
     name: &str,
@@ -3356,8 +3424,12 @@ pub async fn sidecomp_update_registration(comp_id: i32, weapon: &str) -> Result<
     let c = client();
     let body = serde_json::json!({"weapon": weapon});
     let r = with_credentials(
-        c.patch(format!("{}/_api/sidecomps/{}/registration", base(), comp_id))
-            .json(&body),
+        c.patch(format!(
+            "{}/_api/sidecomps/{}/registration",
+            base(),
+            comp_id
+        ))
+        .json(&body),
     )
     .send()
     .await
@@ -3367,14 +3439,10 @@ pub async fn sidecomp_update_registration(comp_id: i32, weapon: &str) -> Result<
 
 pub async fn sidecomp_deregister(comp_id: i32) -> Result<Value, String> {
     let c = client();
-    let r = with_credentials(c.post(format!(
-        "{}/_api/sidecomps/{}/deregister",
-        base(),
-        comp_id
-    )))
-    .send()
-    .await
-    .map_err(|e| e.to_string())?;
+    let r = with_credentials(c.post(format!("{}/_api/sidecomps/{}/deregister", base(), comp_id)))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
     response_json(r).await
 }
 
@@ -3386,8 +3454,12 @@ pub async fn sidecomp_to_register_player_as_to(
     let c = client();
     let body = serde_json::json!({"player_id": player_id, "weapon": weapon});
     let r = with_credentials(
-        c.post(format!("{}/_api/sidecomps/{}/register-player-as-to", base(), comp_id))
-            .json(&body),
+        c.post(format!(
+            "{}/_api/sidecomps/{}/register-player-as-to",
+            base(),
+            comp_id
+        ))
+        .json(&body),
     )
     .send()
     .await
@@ -3403,8 +3475,12 @@ pub async fn sidecomp_to_update_player_as_to(
     let c = client();
     let body = serde_json::json!({"player_id": player_id, "weapon": weapon});
     let r = with_credentials(
-        c.post(format!("{}/_api/sidecomps/{}/update-player-as-to", base(), comp_id))
-            .json(&body),
+        c.post(format!(
+            "{}/_api/sidecomps/{}/update-player-as-to",
+            base(),
+            comp_id
+        ))
+        .json(&body),
     )
     .send()
     .await
@@ -3481,7 +3557,10 @@ pub async fn sidecomp_log_result(
     response_json(r).await
 }
 
-pub async fn sidecomp_flag_result(result_uuid: &str, flagged: bool) -> Result<SideCompResultEntry, String> {
+pub async fn sidecomp_flag_result(
+    result_uuid: &str,
+    flagged: bool,
+) -> Result<SideCompResultEntry, String> {
     let c = client();
     let body = serde_json::json!({ "flagged": flagged });
     let r = with_credentials(
@@ -3496,10 +3575,11 @@ pub async fn sidecomp_flag_result(result_uuid: &str, flagged: bool) -> Result<Si
 
 pub async fn sidecomp_delete_result(result_uuid: &str) -> Result<Value, String> {
     let c = client();
-    let r = with_credentials(c.delete(format!("{}/_api/sidecomps/results/{}", base(), result_uuid)))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let r =
+        with_credentials(c.delete(format!("{}/_api/sidecomps/results/{}", base(), result_uuid)))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
     response_json(r).await
 }
 
@@ -3541,17 +3621,49 @@ pub async fn sidecomp_finalize(comp_id: i32) -> Result<Value, String> {
     response_json(r).await
 }
 
-pub async fn sidecomp_standings(comp_id: i32) -> Result<SideCompStandings, String> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StandingsError {
+    NoAccess,
+    Request(String),
+}
+
+impl std::fmt::Display for StandingsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoAccess => write!(f, "These standings are unavailable or you no longer have access."),
+            Self::Request(message) => write!(f, "{message}"),
+        }
+    }
+}
+
+pub async fn sidecomp_standings(
+    comp_id: i32,
+    table: Option<&str>,
+    weapon: Option<&str>,
+    sort: Option<&str>,
+) -> Result<SideCompStandings, StandingsError> {
+    let mut selection = Vec::new();
+    if let Some(table) = table {
+        selection.push(("table", table));
+    }
+    if let Some(weapon) = weapon {
+        selection.push(("weapon", weapon));
+    }
+    if let Some(sort) = sort {
+        selection.push(("sort", sort));
+    }
     let c = client();
-    let r = with_credentials(c.get(format!(
-        "{}/_api/sidecomps/{}/standings",
-        base(),
-        comp_id
-    )))
+    let r = with_credentials(
+        c.get(format!("{}/_api/sidecomps/{}/standings", base(), comp_id))
+            .query(&selection),
+    )
     .send()
     .await
-    .map_err(|e| e.to_string())?;
-    response_json(r).await
+    .map_err(|error| StandingsError::Request(error.to_string()))?;
+    if matches!(r.status().as_u16(), 401 | 403 | 404) {
+        return Err(StandingsError::NoAccess);
+    }
+    response_json(r).await.map_err(StandingsError::Request)
 }
 
 #[derive(serde::Deserialize)]
@@ -3600,7 +3712,9 @@ pub async fn oauth_decide(query: &str, approve: bool) -> Result<String, String> 
     .send()
     .await
     .map_err(|e| e.to_string())?;
-    response_json::<RedirectResponse>(r).await.map(|response| response.redirect)
+    response_json::<RedirectResponse>(r)
+        .await
+        .map(|response| response.redirect)
 }
 
 pub async fn oauth_clients() -> Result<Vec<OAuthClient>, String> {
@@ -3608,7 +3722,9 @@ pub async fn oauth_clients() -> Result<Vec<OAuthClient>, String> {
         .send()
         .await
         .map_err(|e| e.to_string())?;
-    response_json::<OAuthClientsResponse>(r).await.map(|response| response.clients)
+    response_json::<OAuthClientsResponse>(r)
+        .await
+        .map(|response| response.clients)
 }
 
 pub async fn create_oauth_client(
@@ -3623,10 +3739,14 @@ pub async fn create_oauth_client(
         "redirect_uris": redirect_uris,
         "confidential": confidential,
     });
-    let r = with_credentials(client().post(format!("{}/_api/oauth/clients", base())).json(&body))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let r = with_credentials(
+        client()
+            .post(format!("{}/_api/oauth/clients", base()))
+            .json(&body),
+    )
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
     response_json(r).await
 }
 
@@ -3649,22 +3769,31 @@ pub async fn update_oauth_client(
     .send()
     .await
     .map_err(|e| e.to_string())?;
-    response_json::<OAuthClientResponse>(r).await.map(|response| response.client)
+    response_json::<OAuthClientResponse>(r)
+        .await
+        .map(|response| response.client)
 }
 
 pub async fn rotate_oauth_client_secret(client_id: &str) -> Result<String, String> {
-    let r = with_credentials(client().post(format!("{}/_api/oauth/clients/{}/secret", base(), client_id)))
-        .send()
+    let r = with_credentials(client().post(format!(
+        "{}/_api/oauth/clients/{}/secret",
+        base(),
+        client_id
+    )))
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    response_json::<ClientSecretResponse>(r)
         .await
-        .map_err(|e| e.to_string())?;
-    response_json::<ClientSecretResponse>(r).await.map(|response| response.client_secret)
+        .map(|response| response.client_secret)
 }
 
 pub async fn delete_oauth_client(client_id: &str) -> Result<(), String> {
-    let r = with_credentials(client().delete(format!("{}/_api/oauth/clients/{}", base(), client_id)))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let r =
+        with_credentials(client().delete(format!("{}/_api/oauth/clients/{}", base(), client_id)))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
     response_json::<Value>(r).await.map(|_| ())
 }
 
@@ -3673,13 +3802,98 @@ pub async fn connected_apps() -> Result<Vec<ConnectedApp>, String> {
         .send()
         .await
         .map_err(|e| e.to_string())?;
-    response_json::<ConnectedAppsResponse>(r).await.map(|response| response.apps)
+    response_json::<ConnectedAppsResponse>(r)
+        .await
+        .map(|response| response.apps)
 }
 
 pub async fn disconnect_app(client_id: &str) -> Result<(), String> {
-    let r = with_credentials(client().delete(format!("{}/_api/oauth/connected-apps/{}", base(), client_id)))
+    let r = with_credentials(client().delete(format!(
+        "{}/_api/oauth/connected-apps/{}",
+        base(),
+        client_id
+    )))
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    response_json::<Value>(r).await.map(|_| ())
+}
+
+pub async fn upload_tournament_banner_photo(id: &str, bytes: bytes::Bytes) -> Result<String, String> {
+    upload_event_banner("tournaments", id, bytes).await
+}
+
+pub async fn delete_tournament_banner_photo(id: &str) -> Result<(), String> {
+    delete_event_banner("tournaments", id).await
+}
+
+pub async fn upload_league_banner_photo(id: &str, bytes: bytes::Bytes) -> Result<String, String> {
+    upload_event_banner("leagues", id, bytes).await
+}
+
+pub async fn delete_league_banner_photo(id: &str) -> Result<(), String> {
+    delete_event_banner("leagues", id).await
+}
+
+
+pub async fn schedule_item(tournament_url: &str, id: i32) -> Result<ScheduleItemData, String> {
+    let r = with_credentials(client().get(format!(
+        "{}/_api/tournaments/{tournament_url}/schedule-items/{id}",
+        base()
+    )))
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
+pub async fn save_schedule_item(
+    tournament_url: &str,
+    id: Option<i32>,
+    body: &SaveScheduleItem,
+) -> Result<ScheduleItemData, String> {
+    let url = format!(
+        "{}/_api/tournaments/{tournament_url}/schedule-items",
+        base()
+    );
+    let request = if let Some(id) = id {
+        client().put(format!("{url}/{id}"))
+    } else {
+        client().post(url)
+    };
+    let r = with_credentials(request.json(body))
         .send()
         .await
         .map_err(|e| e.to_string())?;
-    response_json::<Value>(r).await.map(|_| ())
+    response_json(r).await
+}
+
+pub async fn delete_schedule_item(tournament_url: &str, id: i32) -> Result<Value, String> {
+    let r = with_credentials(client().delete(format!(
+        "{}/_api/tournaments/{tournament_url}/schedule-items/{id}",
+        base()
+    )))
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
+pub async fn create_scheduled_sidecomp(
+    tournament_url: &str,
+    name: &str,
+    kind: &str,
+    description: &str,
+    schedule: &SaveScheduleItem,
+) -> Result<Value, String> {
+    let body = serde_json::json!({ "name": name, "type": kind, "description": description, "schedule": schedule });
+    let r = with_credentials(
+        client()
+            .post(format!("{}/_api/{tournament_url}/sidecomps", base()))
+            .json(&body),
+    )
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+    response_json(r).await
 }

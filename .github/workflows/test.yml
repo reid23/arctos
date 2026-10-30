@@ -33,11 +33,16 @@ jobs:
       - name: Run linter
         run: just lint
 
+      - name: Check typed Python APIs
+        run: just typecheck
+
       - name: Run format checker
         run: uv run ruff format --check .
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
 
       - name: Cache frontend Cargo
         uses: Swatinem/rust-cache@v2
@@ -46,3 +51,6 @@ jobs:
 
       - name: Run frontend unit tests
         run: just frontend-test
+
+      - name: Check browser target
+        run: cd frontend && cargo check --locked --target wasm32-unknown-unknown

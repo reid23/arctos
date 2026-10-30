@@ -1,6 +1,7 @@
 //! Pompfen / weapon role helpers and registration modal for side competitions.
 
 use crate::api;
+use crate::components::Modal;
 use dioxus::prelude::*;
 
 /// All pompfen options in display order.
@@ -163,6 +164,10 @@ pub fn SideCompWeaponModal(
     on_close: EventHandler<()>,
     on_submit: EventHandler<String>,
     #[props(default)] on_deregister: EventHandler<()>,
+    #[props(default)] busy: bool,
+    #[props(default)] error: Option<String>,
+    #[props(default)] needs_check: bool,
+    #[props(default)] on_check: EventHandler<()>,
 ) -> Element {
     let options: Vec<&PompfenOption> = ALL_POMPFEN
         .iter()
@@ -174,112 +179,65 @@ pub fn SideCompWeaponModal(
         .or_else(|| options.first().map(|o| o.id.to_string()))
         .unwrap_or_default();
     let mut selected = use_signal(|| initial);
-    let mut busy = use_signal(|| false);
-    let mut error = use_signal(|| None::<String>);
+    let mut validation_error = use_signal(|| None::<String>);
 
     let submit_label = match mode {
-        SideCompRegistrationMode::Register => "Submit",
+        SideCompRegistrationMode::Register => "Register",
         SideCompRegistrationMode::Edit => "Save",
     };
 
     rsx! {
-        div {
-            class: "modal show d-block",
-            style: "background: rgba(0,0,0,0.5);",
-            tabindex: "-1",
-            role: "dialog",
-            onclick: move |_| on_close.call(()),
-            div {
-                class: "modal-dialog modal-dialog-centered",
-                onclick: move |ev: Event<MouseData>| { ev.stop_propagation(); },
-                div { class: "modal-content",
-                    div { class: "modal-header",
-                        h5 { class: "modal-title", "{title}" }
-                        button {
-                            r#type: "button",
-                            class: "btn-close",
-                            aria_label: "Close",
-                            onclick: move |_| on_close.call(()),
-                        }
-                    }
-                    div { class: "modal-body",
-                        p { "What will you be playing?" }
-                        if options.is_empty() {
-                            p { class: "text-muted", "No weapons are enabled for this side competition." }
-                        } else {
-                            div { class: "d-flex flex-column gap-2",
-                                for opt in options.iter() {
-                                    {
-                                        let id = opt.id.to_string();
-                                        let id_label = opt.id.to_string();
-                                        rsx! {
-                                            div { class: "form-check d-flex align-items-center gap-2",
-                                                input {
-                                                    class: "form-check-input",
-                                                    r#type: "radio",
-                                                    name: "sidecomp-weapon",
-                                                    id: "reg-weapon-{opt.id}",
-                                                    checked: selected() == id,
-                                                    onchange: move |_| selected.set(id.clone()),
-                                                }
-                                                label {
-                                                    class: "form-check-label d-flex align-items-center gap-2",
-                                                    r#for: "reg-weapon-{opt.id}",
-                                                    PompfenIcon { weapon: id_label, size: "1.5em".to_string() }
-                                                    "{opt.label}"
-                                                }
-                                            }
+        Modal {
+            id: "sidecomp-registration-dialog", labelled_by: "sidecomp-registration-title",
+            initial_focus_id: "sidecomp-registration-title", dismissible: !busy,
+            on_close: move |_| { if !busy { on_close.call(()); } },
+            div { class: "modal-header",
+                h2 { class: "modal-title h5", id: "sidecomp-registration-title", tabindex: "-1", "{title}" }
+                button { r#type: "button", class: "btn-close", aria_label: "Close", disabled: busy,
+                    onclick: move |_| { if !busy { on_close.call(()); } } }
+            }
+            div { class: "modal-body",
+                p { id: "sidecomp-weapon-label", "What will you be playing?" }
+                if options.is_empty() { p { class: "text-muted", "No weapons are enabled for this side competition." } }
+                else {
+                    fieldset { disabled: busy || needs_check, aria_labelledby: "sidecomp-weapon-label", class: "border-0 p-0 m-0",
+                        div { class: "d-flex flex-column gap-2",
+                            for opt in options.iter() {
+                                {
+                                    let id = opt.id.to_string();
+                                    rsx! {
+                                        div { class: "form-check d-flex align-items-center gap-2",
+                                            input { class: "form-check-input", r#type: "radio", name: "sidecomp-weapon", id: "reg-weapon-{opt.id}",
+                                                checked: selected() == id, onchange: move |_| selected.set(id.clone()) }
+                                            label { class: "form-check-label d-flex align-items-center gap-2", r#for: "reg-weapon-{opt.id}",
+                                                PompfenIcon { weapon: opt.id.to_string(), size: "1.5em".to_string() } "{opt.label}" }
                                         }
                                     }
                                 }
                             }
                         }
-                        if let Some(err) = error() {
-                            div { class: "alert alert-danger mt-3 mb-0", "{err}" }
-                        }
                     }
-                    div { class: "modal-footer d-flex justify-content-between",
-                        div {
-                            if show_deregister {
-                                button {
-                                    r#type: "button",
-                                    class: "btn btn-outline-danger",
-                                    disabled: busy(),
-                                    onclick: move |_| {
-                                        busy.set(true);
-                                        error.set(None);
-                                        on_deregister.call(());
-                                    },
-                                    "Deregister"
-                                }
-                            }
-                        }
-                        div { class: "d-flex gap-2",
-                            button {
-                                r#type: "button",
-                                class: "btn btn-secondary",
-                                disabled: busy(),
-                                onclick: move |_| on_close.call(()),
-                                "Cancel"
-                            }
-                            button {
-                                r#type: "button",
-                                class: "btn btn-primary",
-                                disabled: busy() || selected().is_empty(),
-                                onclick: move |_| {
-                                    let w = selected();
-                                    if w.is_empty() {
-                                        error.set(Some("Please select a weapon.".to_string()));
-                                        return;
-                                    }
-                                    busy.set(true);
-                                    error.set(None);
-                                    on_submit.call(w);
-                                },
-                                "{submit_label}"
-                            }
-                        }
-                    }
+                }
+                if let Some(message) = error.or_else(|| validation_error()) { p { class: "text-danger mt-3 mb-0", role: "alert", "{message}" } }
+                if busy { p { role: "status", class: "small text-muted", "Saving and checking registration…" } }
+                if needs_check { button { r#type: "button", class: "btn btn-outline-secondary mt-2", disabled: busy, onclick: move |_| on_check.call(()), "Check registration status" } }
+            }
+            div { class: "modal-footer",
+                if show_deregister {
+                    button { r#type: "button", class: "btn btn-outline-danger me-auto", disabled: busy || needs_check,
+                        onclick: move |_| { if !busy && !needs_check { on_deregister.call(()); } }, "Deregister" }
+                }
+                button { r#type: "button", class: "btn btn-outline-secondary", disabled: busy,
+                    onclick: move |_| { if !busy { on_close.call(()); } }, "Cancel" }
+                button { r#type: "button", class: "btn btn-primary", disabled: busy || needs_check || selected().is_empty(),
+                    onclick: move |_| {
+                        if busy || needs_check { return; }
+                        let weapon = selected();
+                        if weapon.is_empty() { validation_error.set(Some("Please select a weapon.".into())); return; }
+                        validation_error.set(None);
+                        on_submit.call(weapon);
+                    },
+                    if busy { "Saving…" } else { "{submit_label}" }
                 }
             }
         }

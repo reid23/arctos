@@ -42,8 +42,11 @@ class Player(UserMixin, db.Model):
             inbox).
         phone: Optional contact phone number.
         profile_photo: Server-relative path to the uploaded profile image.
+        banner_photo: Server-relative path to the optional profile banner.
         bio: Free-text biography.
         location: Player's city or region.
+        pronouns: Optional publicly displayed pronouns.
+        pompfen: Canonical names of the player's selected pompfen roles.
     """
 
     __tablename__ = "players"
@@ -55,8 +58,11 @@ class Player(UserMixin, db.Model):
     email = db.Column(db.String(AUTH_STRING_LEN), nullable=True)
     phone = db.Column(db.String(PHONE_LEN))
     profile_photo = db.Column(db.String(AUTH_STRING_LEN))
+    banner_photo = db.Column(db.String(AUTH_STRING_LEN), nullable=True)
     bio = db.Column(db.Text)
     location = db.Column(db.String(SHORT_NAME_LEN))
+    pronouns = db.Column(db.String(64), nullable=True)
+    pompfen = db.Column(db.JSON, nullable=False, default=list, server_default="[]")
 
     def set_password(self, password: str) -> None:
         """Hash *password* and store it in :attr:`pw_hash`.
@@ -95,12 +101,13 @@ class Team(UserMixin, db.Model):
         pw_hash: Werkzeug password hash; ``None`` for OAuth-only accounts.
         google_id: Google OAuth subject identifier.
         phone: Optional contact phone number.
-        email: Contact email address (may come from Google OAuth).
+        email: Public contact email address, provided by the team owner.
             Never used to authenticate the team — login is by ``id`` +
             password or by ``google_id``. Not unique: multiple teams in
             the same club may share an inbox.
         icon: Base64-encoded team icon image.
         profile_photo: Server-relative path to the uploaded profile photo.
+        banner_photo: Server-relative path to the optional profile banner.
         socials: Free-text social media links.
         website: Team website URL.
         location: Team's city or region.
@@ -117,6 +124,7 @@ class Team(UserMixin, db.Model):
     email = db.Column(db.String(AUTH_STRING_LEN), nullable=True)
     icon = db.Column(db.Text)  # base64 image
     profile_photo = db.Column(db.String(AUTH_STRING_LEN))  # Path to uploaded photo
+    banner_photo = db.Column(db.String(AUTH_STRING_LEN), nullable=True)
     socials = db.Column(db.Text)
     website = db.Column(db.String(LONG_NAME_LEN))
     location = db.Column(db.String(SHORT_NAME_LEN))

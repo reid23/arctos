@@ -4,6 +4,7 @@ TOML parsing and writing utilities for schedule import/export.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any
 
@@ -83,8 +84,13 @@ def parse_toml_schedule(content: str) -> Result[dict[str, Any], ArctosError]:
         if not isinstance(entry, dict):
             return Err(ValidationError(f"'matches[{i}]' must be a table"))
 
+    items = data.get("schedule_items")
+    if items is not None and (not isinstance(items, list) or any(not isinstance(item, dict) for item in items)):
+        return Err(ValidationError("'schedule_items' must be an array of tables"))
+
     return Ok(
         {
+            "schedule_items": items,
             "event": event,
             "variables": variables,
             "tags": tags,
@@ -101,6 +107,7 @@ def write_toml_schedule(
     *,
     variables: list[dict[str, Any]] | None = None,
     metadata: dict[str, Any] | None = None,
+    schedule_items: list[dict[str, Any]] | None = None,
 ) -> str:
     """Serialise a tournament schedule to a TOML string.
 
@@ -131,6 +138,22 @@ def write_toml_schedule(
         for key, value in metadata.items():
             lines.append(f"# {key}: {value}")
         lines.append("")
+
+    # Keep an explicit empty list distinct from files that do not edit activities.
+    if schedule_items is not None:
+        if not schedule_items:
+            lines.extend(["schedule_items = []", ""])
+        for item in schedule_items:
+            lines.append("[[schedule_items]]")
+            for key in ("id", "sidecomp_id", "title", "description", "start_time", "end_time", "field", "location"):
+                value = item.get(key)
+                if value is None:
+                    continue
+                if key in ("id", "sidecomp_id"):
+                    lines.append(f"{key} = {value}")
+                else:
+                    lines.append(f'{key} = "{_escape_toml_string(value)}"')
+            lines.append("")
 
     # Script variables (before tags: tag expressions may reference them)
     if variables:
@@ -232,9 +255,4 @@ def write_toml_schedule(
 
 def _escape_toml_string(s: str) -> str:
     """Escape special characters in TOML strings."""
-    s = str(s)
-    s = s.replace("\\", "\\\\")
-    s = s.replace('"', '\\"')
-    s = s.replace("\n", "\\n")
-    s = s.replace("\t", "\\t")
-    return s
+    return json.dumps(str(s), ensure_ascii=False)[1:-1]

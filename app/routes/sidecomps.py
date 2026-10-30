@@ -1,12 +1,13 @@
 """Side competition routes."""
 
-from flask import Blueprint, g, jsonify, request
+from flask import Blueprint, after_this_request, g, jsonify, request
 from flask_login import login_required, current_user  # type: ignore[import-untyped]
 
 from app.services._common import current_user_type
 from app.services.permission_service import PermissionService
 from app.services.sidecomp_service import SideCompService
 from app.utils.decorators import require_json_body
+from app.utils.responses import json_error
 from app.utils.result_helpers import json_from_result
 from app.utils.user_helpers import is_player
 
@@ -107,7 +108,22 @@ def _detail_payload(sc, registrants):
                 event_reg = SideCompService._eligible_player_registration_for_tournament(sc.event, current_user.id)
                 viewer_can_register = event_reg is not None
 
+    from models import ScheduleItem, Tournament
+    from app.services.schedule_item_service import schedule_item_payload
+
+    tournament = Tournament.query.get(sc.event)
+    schedule_visible = (
+        tournament is not None
+        and PermissionService.can_view_tournament(sc.event, current_user)
+        and PermissionService.can_view_schedule(tournament, current_user)
+    )
     return {
+        "schedule_items": [
+            schedule_item_payload(item)
+            for item in ScheduleItem.query.filter_by(sidecomp_id=sc.id).order_by(ScheduleItem.start_time).all()
+        ]
+        if schedule_visible
+        else [],
         **_sc_payload(sc),
         "registrants": [
             {
@@ -153,6 +169,7 @@ def create(tournament_url: str):
         description=data.get("description"),
         allowed_weapons=data.get("allowed_weapons"),
         only_show_top_n_results=data.get("only_show_top_n_results"),
+        schedule=data.get("schedule"),
     )
     return json_from_result(res, ok_to_payload=_sc_payload)
 
@@ -552,13 +569,35 @@ def finalize(comp_id: int):
 
 @bp.route("/sidecomps/<int:comp_id>/standings", methods=["GET"])
 def standings(comp_id: int):
-    """Standings tables. Organizers see every ranked player; everyone else gets the top-N cut."""
+    """Return public leaders and the signed-in player's own standing.
+
+    Organizers receive complete standings and can preview unpublished
+    tournaments. Optional ``table``, ``weapon``, and ``sort`` parameters select
+    the ranking. The server determines which rows the viewer may see.
+    """
     from models import SideComp
 
-    include_below_cut = False
-    if current_user.is_authenticated:
-        sc = SideComp.query.get(comp_id)
-        if sc is not None and PermissionService.is_tournament_organizer(sc.event, current_user):
-            include_below_cut = True
-    res = SideCompService.standings(comp_id, include_below_cut=include_below_cut)
+    @after_this_request
+    def prevent_standings_cache(response):
+        response.cache_control.private = True
+        response.cache_control.no_store = True
+        return response
+
+    sc = SideComp.query.get(comp_id)
+    if sc is None or not PermissionService.can_view_tournament(sc.event, current_user):
+        return json_error("Side competition not found", status_code=404)
+
+    if "view" in request.args:
+        return json_error("Invalid standings view", status_code=400)
+
+    viewer_player_id = current_user.id if current_user.is_authenticated and is_player(current_user) else None
+    res = SideCompService.standings(
+        comp_id,
+        include_below_cut=PermissionService.is_tournament_organizer(sc.event, current_user),
+        viewer_player_id=viewer_player_id,
+        application_view=True,
+        table_id=request.args.get("table"),
+        weapon=request.args.get("weapon"),
+        sort_by=request.args.get("sort"),
+    )
     return json_from_result(res, ok_to_payload=lambda payload: payload)

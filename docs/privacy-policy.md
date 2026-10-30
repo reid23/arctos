@@ -1,6 +1,6 @@
 # Arctos Privacy Policy
 
-Updated: Jan 9, 2026
+Updated: Oct 24, 2026
 
 This policy describes generally speaking what we do with data we
 generically collect from you. For more information on specifically
@@ -15,7 +15,7 @@ incorporated by reference into this policy.
  - We collect your information only with your consent
  - We only collect the minimum amount of personal information that is
    necessary to fulfill the purpose of your interaction with us
- - We do not sell data to to third parties.
+ - We do not sell data to third parties.
  - We only use your data as described in this policy.
 
 Read on for more technical details.
@@ -35,20 +35,29 @@ monitor and protect the security of the website.
 ### Information from users with accounts
 
 If you use Google to sign in to Arctos, we are given access to your
-email address, but not your password or any other personal
-information. We do not share or sell your email address to third
-parties. If you do not use Google to sign in, we are only given
+email address, a Google account identifier and profile information used
+to suggest a display name, but not your Google password. A player's
+Google email is not displayed on their public profile. New team accounts
+do not automatically publish the Google email; a team owner can choose
+to add a public contact address. If you do not use Google to sign in, we are only given
 information you explicitly enter-- your username, display name,
-etc. We do not have access to your password.
+etc. Password-based accounts store a password hash rather than the
+plaintext password.
 
 We use your display name and username to personalize your experience
 with Arctos and to identify you across devices and sessions.
 
-### What information Arctos does not collect
+### Injury information and other sensitive data
 
-We do not intentionally collect any sensitive personal information,
-such as social security numbers, genetic data, health information, or
-religious information.  
+Players can choose to record injury information. New injury records are
+private by default, but active injuries remain available to authorized
+match referees during match setup at events the player is registered for.
+Players can explicitly make an injury public. The
+[data accessibility guide](data-accessibility-guide.md#injuries) explains
+these audiences and the treatment of injury information.
+
+Arctos does not ask for social security numbers, genetic data or
+religious information.
 
 If you're a child under the age of 13, you may
 not have an account on Arctos. Arctos does not knowingly collect
@@ -59,8 +68,12 @@ account.
 
 ### How we share the information we collect
 
-We **do not** share, sell, rent, or trade any user personal
-information with third parties.
+We do not sell, rent or trade personal information. Information entered
+for public profiles is visible to other visitors, including a team's
+public contact email and injuries explicitly marked Public. Event and
+match workflows also make some information available to authorized
+organizers and referees, as described in the
+[data accessibility guide](data-accessibility-guide.md).
 
 ## Our use of cookies and tracking
 

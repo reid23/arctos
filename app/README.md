@@ -58,7 +58,8 @@ Walk-through of [`__init__.py`](__init__.py), top to bottom:
 ## Error Values
 
 Most service methods return `Result[T, ArctosError]` from
-[`error_values.py`](error_values.py). Routes pattern-match on it:
+[`error_values.py`](error_values.py). `Ok(value)` carries success and
+`Err(error)` carries an expected failure. Routes pattern-match on the result:
 
 ```python
 from app.error_values import Ok, Err
@@ -71,10 +72,61 @@ match res:
         return jsonify({"success": False, "error": public_error_message(err)}), 400
 ```
 
-Inside services, the `.Q()` method is a Rust-style `?` operator:
-short-circuits the function with the contained `Err`, but only when the
-function is wrapped in `@allow_Q`. Don't call `.Q()` outside such a
-function.
+Use `Option[T]` for an optional value: `Some(value)` carries a value and
+`Null()` represents absence. At database and framework boundaries,
+`option(value)` converts a nullable Python value to an `Option`. It preserves
+`0`, `False`, empty strings, and empty collections as present values.
+
+```python
+from app.error_values import Some
+from app.utils.name_validation import match_name_char_error
+
+match match_name_char_error(name):
+    case Some(message):
+        return jsonify({"success": False, "error": message}), 400
+```
+
+### Transforming and propagating values
+
+| Method | Use |
+| --- | --- |
+| `map(function)` | Transform a present or successful value. |
+| `map_err(function)` | Transform a `Result` error. |
+| `and_then(function)` | Continue with a function that returns an `Option` or `Result` of the same family. |
+| `ok_or(error)` / `ok_or_else(factory)` | Convert an `Option` into a `Result`. |
+| `unwrap_or(default)` | Supply a deliberate fallback for absence or failure. |
+
+Callbacks run only for the variant they handle. A `Result.and_then` callback
+uses the same error type as the original result.
+
+Inside a function decorated with `@allow_Q`, `.Q()` extracts the contained
+value and returns early on `Err` or `Null`. Every `.Q()` call must propagate
+the function's declared return family and error type. Type checkers verify
+the decorated signature; the developer is responsible for matching the
+exception-carried value to that signature.
+
+Reserve `unwrap()` and `expect()` for established invariants whose violation
+is a programming error. Handle expected missing values and validation
+failures through pattern matching, combinators, or `.Q()`. Keep a brief
+explanation next to an invariant assertion when its guarantee needs context.
+
+### Boolean conditions
+
+Conditions should express the intended question:
+
+- Use `is_some()`, `is_null()`, `is_ok()`, `is_err()`, or pattern matching
+  to inspect a wrapper's variant.
+- Use `value is None` for nullable values at external boundaries.
+- Use `len(items) == 0` for an empty collection and `text == ""` for an
+  empty string.
+- Compare numeric values against the relevant threshold.
+- Use a known boolean directly.
+
+`Option` and `Result` raise `TypeError` when used as boolean conditions or
+passed to `bool()`. Their payloads have independent meaning. JSON nulls,
+nullable database columns, and framework callback signatures retain their
+native representations at those boundaries. `Result[None, E]` represents
+successful completion without a payload.
 
 ## Adding a new endpoint
 

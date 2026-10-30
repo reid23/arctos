@@ -10,7 +10,7 @@ instead of owning one directly.
 from __future__ import annotations
 
 from app.models.base import db
-from app.models.constants import LONG_NAME_LEN, URL_SLUG_LEN
+from app.models.constants import AUTH_STRING_LEN, LONG_NAME_LEN, URL_SLUG_LEN
 
 
 class League(db.Model):
@@ -25,6 +25,7 @@ class League(db.Model):
     Attributes:
         url: URL slug used as the primary key and public identifier.
         name: Human-readable league name.
+        banner_photo: Static-relative path to an optional organizer-uploaded banner.
         about: Markdown description shown on the league homepage.
         published: Whether the league is publicly visible.
         registrable_config_id: FK to the shared
@@ -36,6 +37,7 @@ class League(db.Model):
 
     url = db.Column(db.String(URL_SLUG_LEN), primary_key=True)
     name = db.Column(db.String(LONG_NAME_LEN), nullable=False)
+    banner_photo = db.Column(db.String(AUTH_STRING_LEN), nullable=True)
     about = db.Column(db.Text)
     published = db.Column(db.Boolean, default=False, nullable=False)
 

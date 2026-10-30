@@ -5,17 +5,20 @@ Arctos database. Read it top to bottom once; keep it open during a deploy.
 
 ## One-time setup (per database)
 
-The first time alembic is introduced to a database that was previously
-managed by `db.create_all()`, stamp it at the current baseline so
-subsequent migrations can be applied normally:
+Before introducing Alembic to an unversioned database, back it up and inspect
+its schema. Stamp the revision that matches the columns and tables already
+present, then apply the remaining migrations:
 
 ```bash
-just db-baseline
+uv run alembic stamp <matching_revision>
+just db-migrate
 ```
 
-This only inserts a row into the `alembic_version` table; it does not
-modify any data. **Run this once per database, ever.** After this point,
-every schema change goes through `just db-migrate`.
+Stamping records a revision; it does not add missing columns or transform data.
+Use `just db-baseline` only when the verified schema already matches the current
+head. For a database that already has an Alembic revision, use `just db-current`
+and `just db-migrate` without stamping. See
+[the migration guide](../migrations/README.md) for known schema transitions.
 
 ## Scoreboard overlay rendering
 
@@ -199,7 +202,7 @@ was taken at) and a smoke test before considering the rollback complete.
 
 | Command | Purpose |
 |---|---|
-| `just db-baseline` | One-shot — stamp alembic baseline on a DB that has never had alembic |
+| `just db-baseline` | Record head only for an unversioned DB whose schema has been verified to match head |
 | `just db-backup [tag]` | Snapshot to `backups/tournament-<tag>-<unix_ts>.db` |
 | `just db-check-duplicates` | Report rows that would block a future UNIQUE constraint |
 | `just db-migrate` | Apply all pending migrations (`alembic upgrade head`) |

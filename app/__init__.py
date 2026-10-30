@@ -125,6 +125,7 @@ def create_app(config: dict | None = None) -> Flask:
     # Google OAuth configuration
     app.config["GOOGLE_CLIENT_ID"] = os.environ.get("GOOGLE_CLIENT_ID", "")
     app.config["GOOGLE_CLIENT_SECRET"] = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+    app.config["GOOGLE_REDIRECT_URI"] = os.environ.get("GOOGLE_REDIRECT_URI", "")
 
     # Handle subpath deployment
     if "SCRIPT_NAME" in os.environ:

@@ -1,46 +1,64 @@
-# Side Comps
+# Side competitions
 
-Side comps are currently implemented in a very rudimentary state. They
-are currently able to run chain pits and bear pits, and just track the
-number of wins each player has.
+Side competitions track individual results within a tournament or league event.
+Players register with a weapon enabled by the organizer. Each player keeps the
+same entry number across side competitions in a standalone tournament or league.
 
-When players register for a side comp, they are given a number as
-their ID, and they must choose a pompf to play. The available pompfen
-are the normal weapons plus skull or unarmed (for extensibility to
-qwik competitions in the future). TOs have the option to
-enable/disable any of the pompf choices when configuring the side
-comp.
+Players registered for the event can join while side competition registration
+is open. Players awaiting team approval compete as unattached until approved.
+Organizers can also register players and update their weapon selections.
 
-Any player registered for the tournament can register for its side
-comps, including players whose team hasn't approved their request
-yet. Until the team approves them, they compete in side comps as
-unattached (shown as a merc).
+## Organizer settings
 
-TOs have three other settings: 
-1. registration open (can people register)
-2. active (can people submit results)
-3. number of results to make public
+Organizers control registration, active scoring, enabled weapons, loss tracking,
+and results display. Chain/breaking has separate loss settings for
+chains and breakers.
 
-If the side comp is active, anyone who is logged in can submit results
-to the side comp. After the side comp is over, TOs may look through
-the results manually and invalidate any as they see fit. the user who
-submitted each score is recorded.
+The public result limit controls publication:
 
-While the side comp is in progress, the results page will update live
-with (unofficial) results. It nominally will show everyone, unless the
-TOs have restricted the view to only some top $n$ players.
+- **Three:** publish the top three with **All weapons** selected. This is the initial value in
+  the creation form.
+- **Another positive number:** publish that many leaders with **All weapons** selected.
+- **Blank:** publish every ranked player.
+- **Zero:** hide results, including personal results.
 
-### Running a Side Comp
+Organizers can see complete standings when results are enabled. Finalizing a
+competition preserves its publication settings.
 
-During the side comp, refs are presented with a screen where they can
-enter player's ID numbers and increment or decrement their score. A
-history of recent actions is shown so that refs can see, for example,
-how many points in a row the last person has scored. Refs may click on
-entries in this history bar to flag them for review later.
+## Standings
 
-The philosophy here is that we should just get all the data and fix it
-later. if the ref adds an extra point on accident, they can just
-remove a point and it's fine. but anything more complicated than that
-is probably going to be more complicated and controversial than I want
-to deal with right now, so we can just have the TOs figure it out
-according to whatever rules they'd like.
+The results page shows one standings table. Chain Pits use **Chain/breaking**;
+select the **Chains** or **Breaks** tab above the table. Bear Pits use **Dueling**.
+
+**All weapons** shows the configured number of leaders, starting at three.
+Choosing a weapon shows its top player. Organizers can see every matching player;
+a blank public limit also publishes every matching player.
+
+The **Weapon** dropdown includes weapons used by complete entries with at least
+one valid result. A recorded loss counts as participation. Available categories
+are Chain, Long, Q-Tip, Staff, Board, Florentine, Skull, and Unarmed. A weapon
+appears when its first valid result is recorded. If the selected weapon has no
+valid results, the view returns to **All weapons**.
+
+Rank numbers apply to the selected weapon or group. Standings use wins, or win
+percentage when losses are tracked. Select **Wins** or **Win %** to change the
+ranking. Percentage ties use wins, then entry number; wins ties use entry number.
+Unplayed entries follow played entries when ranking by percentage.
+
+Signed-in players see **Your result** above the table, including their overall
+or group rank and scores. This card uses the default ranking and stays visible
+while filtering. Their rows carry a **You** label.
+
+Results update while the page is open and remain unofficial until finalized.
+
+## Recording and reviewing results
+
+Signed-in users can record results while scoring is active. Open **Enter
+results**, enter the player's entry number, and record a win or a tracked loss.
+Each result records its submitter. Use **Undo** to remove the latest entry from
+the current scoring history, or flag an entry for organizer review.
+
+Organizers use **Manage results** to review submissions and decide which results
+are valid. Valid results count toward standings, including flagged results
+awaiting review. Incomplete registrations appear in standings after a weapon is
+selected. Deactivate scoring before finalizing; finalized results are locked.
