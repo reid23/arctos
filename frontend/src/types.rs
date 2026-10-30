@@ -1193,6 +1193,8 @@ pub struct PlayerRegItem {
     pub waiver_required: bool,
     #[serde(default)]
     pub waiver_status: Option<String>,
+    #[serde(default)]
+    pub historical: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -271,6 +271,12 @@ pub fn PlayerProfile(id: Signal<String>, tab: String) -> Element {
                                                             Link { to: Route::LeagueHome { league_url: league_url.clone() }, "League: {league_url}" }
                                                         } else {
                                                             Link { to: Route::TournamentHome { url: ev.clone() }, "{ev}" }
+                                                            if r.historical {
+                                                                span { class: "badge arctos-badge-neutral ms-2", title: "Historical tournament",
+                                                                    i { class: "fas fa-history", aria_hidden: "true" }
+                                                                    span { class: "visually-hidden", "Historical" }
+                                                                }
+                                                            }
                                                         }
                                                     }
                                                     td { class: "table-copy", "data-label": "Team",

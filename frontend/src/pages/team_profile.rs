@@ -47,6 +47,7 @@ fn RegistrationRow(
                     if registration.historical {
                         span { class: "badge arctos-badge-neutral ms-2", title: "Historical tournament",
                             i { class: "fas fa-history", aria_hidden: "true" }
+                            span { class: "visually-hidden", "Historical" }
                         }
                     }
                 }

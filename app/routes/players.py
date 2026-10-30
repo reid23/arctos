@@ -296,6 +296,7 @@ def player_profile(player_id):
                 "amount_paid": r.amount_paid or 0.0,
                 "waiver_required": w["waiver_required"],
                 "waiver_status": w["waiver_status"],
+                "historical": r.event in historical_events,
             }
         )
 

@@ -246,8 +246,14 @@ def test_unpublished_records_stay_off_profiles(client, historical_url, real_team
     [request] = client.get("/_api/me/invitations").get_json()["incoming_roster_requests"]
     approved = client.post(f"/_api/tournaments/{historical_url}/rosters/rigor/requests/{request['id']}/approve")
     assert approved.status_code == 200
-    assert any(row["event"] == historical_url for row in client.get("/_api/teams/rigor").get_json()["registrations"])
-    assert any(row["event"] == historical_url for row in client.get("/_api/players/runner").get_json()["registrations"])
+    assert any(
+        row["event"] == historical_url and row["historical"]
+        for row in client.get("/_api/teams/rigor").get_json()["registrations"]
+    )
+    assert any(
+        row["event"] == historical_url and row["historical"]
+        for row in client.get("/_api/players/runner").get_json()["registrations"]
+    )
 
     login_as(client, Player.query.get("organizer"))
     unpublished = client.put(
