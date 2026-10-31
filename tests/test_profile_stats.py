@@ -56,8 +56,8 @@ def test_past_events_require_confirmation_publication_and_finished_date(tourname
     for slug, start, end, published, status in cases:
         add_event(tournament.registrable_config_id, slug, start=start, end=end, published=published)
         add_registration(kind, owner, event_id=slug, status=status)
-    # Repeated records and retrospective registration do not inflate the count.
-    add_registration(kind, owner, event_id="past", registered_day=10)
+    # A cancelled repeat of a counted event stays out of the total.
+    add_registration(kind, owner, event_id="past", status="CANCELLED", registered_day=10)
     db.session.commit()
     assert past_event_counts(kind, [owner, "no-registrations"], today=TODAY) == {owner: 2, "no-registrations": 0}
 

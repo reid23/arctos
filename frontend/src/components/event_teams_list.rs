@@ -121,6 +121,9 @@ fn EventTeamRow(
                     Link { to: Route::TeamProfilePage { id: team.team_id.clone() }, class: "roster-name",
                         strong { "{team_name}" }
                     }
+                    if team.placeholder {
+                        span { class: "badge arctos-badge-neutral ms-2", "Unclaimed" }
+                    }
                 }
             }
             td { class: "table-number event-team-count", "data-label": "Players",

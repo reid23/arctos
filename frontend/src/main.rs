@@ -52,9 +52,6 @@ enum Route {
     #[route("/leagues")]
     LeaguesIndex {},
 
-    #[route("/create-event")]
-    CreateEvent {},
-
     #[route("/leagues/new")]
     NewLeague {},
 
@@ -140,6 +137,12 @@ enum Route {
     #[route("/:url/invitations")]
     Invitations { url: String },
 
+    #[route("/:url/records")]
+    HistoricalRecords { url: String },
+
+    #[route("/:url/rosters/:team_id")]
+    HistoricalRoster { url: String, team_id: String },
+
     #[route("/:url/start-match/:match_id")]
     StartMatch { url: String, match_id: String },
 
@@ -205,6 +208,9 @@ enum Route {
 
     #[route("/new-tournament")]
     NewTournament {},
+
+    #[route("/new-historical-tournament")]
+    NewHistoricalTournament {},
 
     #[route("/thanks")]
     Thanks {},

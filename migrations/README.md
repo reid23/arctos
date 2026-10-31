@@ -67,6 +67,16 @@ The current profile fields are introduced by these migrations:
 | `0024_event_banners` | Nullable `banner_photo` columns on `tournaments` and `leagues` |
 | `0025_player_profile_details` | Optional player `pronouns` and a `pompfen` JSON list, initially empty |
 
+## Historical tournaments
+
+These follow `generic_schedule_items`, so the history stays a single line:
+
+| Revision | Addition |
+|---|---|
+| `0026_historical_tournaments` | Historical tournament records, placeholder teams, and claim invitations |
+| `0027_team_claim_requests` | Requests from a real team to claim a historical placeholder |
+| `0028_roster_request_beside_invitation` | A historical roster request can sit beside an invitation |
+
 These migrations preserve existing rows and avatar paths. Optional profile
 fields start empty. Back up the database, install dependencies with `uv sync`,
 and apply pending migrations to the intended database before starting Flask:

@@ -48,6 +48,11 @@ class Tournament(db.Model):
         bracket: TOML string defining bracket visualisation config.
         about: Markdown description shown on the tournament homepage.
         published: Whether the tournament is publicly visible.
+        historical: Whether this is a record of a past tournament whose
+            results were entered after the fact, rather than one run live
+            in Arctos. Historical tournaments never open registration;
+            their teams start as placeholder :class:`~app.models.user.Team`
+            rows that real teams can claim.
         registrable_config_id: FK to the registration config for standalone
             tournaments.
         registrable_config: Relationship to the
@@ -73,6 +78,7 @@ class Tournament(db.Model):
     # Per-event fields (every tournament)
     about = db.Column(db.Text)
     published = db.Column(db.Boolean, default=False, nullable=False)
+    historical = db.Column(db.Boolean, default=False, nullable=False)
 
     # Registration config: used only when league_id is null (standalone tournament).
     # When league_id is set, use league's config. Mutual exclusivity enforced by constraint.

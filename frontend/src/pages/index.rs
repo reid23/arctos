@@ -1,6 +1,6 @@
 use super::directory_state::{use_directory, use_directory_scroll, Directory};
 use crate::api;
-use crate::components::{OrganizeContext, OrganizeMenu, PageIntro, PaymentStatusBadge, RegistrationStatusBadge, WaiverStatusBadge};
+use crate::components::{OrganizeContext, OrganizeMenu, PageIntro, PaymentStatusBadge, PendingInvitations, RegistrationStatusBadge, WaiverStatusBadge};
 use crate::types::{Tournament, UserRegStatus};
 use crate::Route;
 use chrono::{Local, NaiveDate};
@@ -61,6 +61,7 @@ pub fn Index() -> Element {
             a { href: "https://en.wikipedia.org/wiki/Jugger", "jugger" }
             " tournaments and results."
         }
+        PendingInvitations { on_respond: move |_| tournaments.restart() }
         section { id: "event-discovery", class: "arctos-discovery", aria_label: "Find an event", tabindex: "-1",
             div { class: "arctos-discovery-toolbar",
                 div { class: "arctos-discovery-actions",
@@ -178,7 +179,12 @@ fn TournamentCard(
             div { class: "card-body",
                 div { class: "arctos-card-statuses",
                     if !tournament.published { span { class: "badge bg-warning text-dark", "Unpublished" } }
-                    if past {
+                    if tournament.historical {
+                        span { class: "badge arctos-badge-neutral", title: "Results recorded after the tournament took place",
+                            i { class: "fas fa-history me-1", aria_hidden: "true" }
+                            "Historical"
+                        }
+                    } else if past {
                         span { class: "badge arctos-badge-neutral", "Past event" }
                     } else {
                         span { class: if teams_open || players_open { "badge arctos-badge-success" } else { "badge arctos-badge-neutral" }, "{registration_label}" }
@@ -200,12 +206,14 @@ fn TournamentCard(
                     li { i { class: "far fa-calendar-alt", aria_hidden: "true" } "{format_date_display(&tournament.start_date, tournament.end_date.as_ref())}" }
                     li {
                         i { class: "fas fa-users", aria_hidden: "true" }
-                        if let Some(max) = tournament.n_max_teams {
+                        if tournament.historical {
+                            "{team_count} teams"
+                        } else if let Some(max) = tournament.n_max_teams {
                             "{team_count} / {max} teams registered"
                         } else { "{team_count} teams registered" }
                     }
                 }
-                if let Some(urs) = user_reg_status {
+                if let Some(urs) = user_reg_status.filter(|_| !tournament.historical) {
                     div { class: "arctos-registration-summary", aria_label: "Your registration", UserRegBadges { urs } }
                 }
             }

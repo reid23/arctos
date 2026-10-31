@@ -60,6 +60,12 @@ class RegistrationStatus(StrEnum):
     CONFIRMED = "CONFIRMED"
     REJECTED = "REJECTED"
     CANCELLED = "CANCELLED"
+    # Historical tournaments only: a team or TO added the player to a roster
+    # and the player has not yet accepted.
+    INVITED = "INVITED"
+    # Historical tournaments only: the player asked to be on a roster, and a
+    # TO or the claimed team has not yet approved.
+    REQUESTED = "REQUESTED"
 
 
 class UserType(StrEnum):

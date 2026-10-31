@@ -1791,6 +1791,7 @@ fn MatchPageContent(url: String, match_id: Option<String>, match_name: Option<St
                                     "{url}"
                                 }
                             }
+                            if !d.historical {
                             li { class: "breadcrumb-item",
                                 if d.can_view_schedule {
                                     Link {
@@ -1807,6 +1808,7 @@ fn MatchPageContent(url: String, match_id: Option<String>, match_name: Option<St
                                         if d.schedule_published { "Schedule unavailable" } else { "Schedule not posted" }
                                     }
                                 }
+                            }
                             }
                             li { class: "breadcrumb-item active", "{d.match_data.name}" }
                         }
@@ -1912,6 +1914,7 @@ fn MatchPageContent(url: String, match_id: Option<String>, match_name: Option<St
                                             span { "{field}" }
                                         }
                                     }
+                                    if !d.historical {
                                     // Planned start is always the published contract of the day (#196).
                                     div { class: "d-flex align-items-center mb-2",
                                         strong { class: "me-2", "Planned start:" }
@@ -1971,6 +1974,7 @@ fn MatchPageContent(url: String, match_id: Option<String>, match_name: Option<St
                                                 }
                                             }
                                         }
+                                    }
                                     }
                                 }
                                 div { class: "col-md-4" }
@@ -2203,6 +2207,7 @@ fn MatchPageContent(url: String, match_id: Option<String>, match_name: Option<St
                         }
                     }
 
+                    if !d.historical {
                     // Points Table - update from state
                     div { class: "card data-section mt-3",
                         div { class: "card-header",
@@ -2325,6 +2330,7 @@ fn MatchPageContent(url: String, match_id: Option<String>, match_name: Option<St
                                 }
                             }
                         }
+                    }
                     }
 
                     // Match Footage Section (rendered via footage_section above)

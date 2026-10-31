@@ -337,6 +337,27 @@ def resolve_match_winner_loser_ref(initial: str, tournament_url: str) -> str | N
     return None
 
 
+def unpublished_historical_urls(urls) -> set[str]:
+    """URLs among *urls* that are historical tournaments and not published.
+
+    Those records are visible to their organisers on the tournament itself,
+    and nowhere else: not on profiles, and not as invitations.
+    """
+    from models import Tournament
+
+    urls = [url for url in urls if url]
+    if not urls:
+        return set()
+    return {
+        tournament.url
+        for tournament in Tournament.query.filter(
+            Tournament.url.in_(urls),
+            Tournament.historical.is_(True),
+            Tournament.published.is_(False),
+        ).all()
+    }
+
+
 def check_tournament_access(tournament_url: str):
     """Check whether the current Flask user may view a tournament.
 

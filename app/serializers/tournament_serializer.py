@@ -57,6 +57,7 @@ def tournament_to_dict(t) -> dict:
         "end_date": end,
         "location": t.location,
         "published": t.published,
+        "historical": bool(t.historical),
         "n_max_teams": getattr(cfg, "n_max_teams", None) if cfg else None,
         "schedule_published": getattr(t, "schedule_published", False),
         "bracket_published": bool(getattr(t, "bracket_published", False)),

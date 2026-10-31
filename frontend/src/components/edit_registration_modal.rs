@@ -33,6 +33,7 @@ enum RegistrationMutation {
 pub fn EditRegistrationModal(
     context: EditRegistrationContext,
     user_type: String,
+    #[props(default = false)] historical: bool,
     on_close: EventHandler<()>,
     on_success: EventHandler<()>,
 ) -> Element {
@@ -69,7 +70,9 @@ pub fn EditRegistrationModal(
                 if is_team {
                     EditTeamRegistrationContent { context: context.clone(), load, mutation, save_error, on_close, on_success }
                 } else {
-                    EditPlayerRegistrationContent { context: context.clone(), load, mutation, save_error, on_close, on_success }
+                    EditPlayerRegistrationContent {
+                        context: context.clone(), historical, load, mutation, save_error, on_close, on_success,
+                    }
                 }
                 if load() == RegistrationLoad::Ready {
                     div { class: "registration-withdraw-section",
@@ -84,13 +87,19 @@ pub fn EditRegistrationModal(
                                     show_deregister_confirm.set(true);
                                 }
                             },
-                            if is_team { "Withdraw team" } else { "Withdraw registration" }
+                            if historical {
+                                "Un-claim"
+                            } else if is_team {
+                                "Withdraw team"
+                            } else {
+                                "Withdraw registration"
+                            }
                         }
                     }
                 }
                 if show_deregister_confirm() {
                     DeregisterConfirmOverlay {
-                        context: context.clone(), mutation, is_team, on_close, on_success,
+                        context: context.clone(), mutation, is_team, historical, on_close, on_success,
                         on_cancel: move |_| show_deregister_confirm.set(false),
                     }
                 }
@@ -129,19 +138,35 @@ pub fn EditRegistrationModal(
 fn DeregisterConfirmOverlay(
     context: EditRegistrationContext,
     is_team: bool,
+    historical: bool,
     mut mutation: Signal<RegistrationMutation>,
     on_close: EventHandler<()>,
     on_success: EventHandler<()>,
     on_cancel: EventHandler<()>,
 ) -> Element {
     let mut deregister_error = use_signal(|| None::<String>);
-    let scope_description = match &context {
-        EditRegistrationContext::League { .. } => {
-            "This changes your registration for the entire league season."
+    let scope_description = if historical && is_team {
+        "The results stay, listed again as an unclaimed team, and your account is no longer linked to them."
+    } else if historical {
+        "You will be removed from the roster."
+    } else {
+        match &context {
+            EditRegistrationContext::League { .. } => {
+                "This changes your registration for the entire league season."
+            }
+            EditRegistrationContext::Tournament { .. } => {
+                "This changes your registration for this tournament."
+            }
         }
-        EditRegistrationContext::Tournament { .. } => {
-            "This changes your registration for this tournament."
-        }
+    };
+    let confirm_title = if historical && is_team {
+        "Un-claim this team?"
+    } else if historical {
+        "Leave this roster?"
+    } else if is_team {
+        "Withdraw your team?"
+    } else {
+        "Withdraw your registration?"
     };
     let pending = mutation() != RegistrationMutation::Idle;
     rsx! {
@@ -155,11 +180,13 @@ fn DeregisterConfirmOverlay(
             dismissible: !pending,
             on_close: move |_| { if mutation() == RegistrationMutation::Idle { on_cancel.call(()); } },
             div { class: "modal-header",
-                h5 { class: "modal-title", id: "deregister-title", if is_team { "Withdraw your team?" } else { "Withdraw your registration?" } }
+                h5 { class: "modal-title", id: "deregister-title", "{confirm_title}" }
             }
             div { class: "modal-body",
                 p { id: "deregister-description", "{scope_description}" }
-                p { class: "small text-muted", "Registration must be open to register again. Contact an organizer about any payment or refund." }
+                if !historical {
+                    p { class: "small text-muted", "Registration must be open to register again. Contact an organizer about any payment or refund." }
+                }
                 if let Some(ref err) = deregister_error() {
                     div { class: "alert alert-danger small py-2 mb-0", role: "alert", "{err}" }
                 }
@@ -190,7 +217,13 @@ fn DeregisterConfirmOverlay(
                             }
                         });
                     },
-                    if pending { "Withdrawing…" } else { "Withdraw registration" }
+                    if pending {
+                        "Withdrawing…"
+                    } else if historical {
+                        "Un-claim"
+                    } else {
+                        "Withdraw registration"
+                    }
                 }
             }
         }
@@ -200,6 +233,7 @@ fn DeregisterConfirmOverlay(
 #[component]
 fn EditPlayerRegistrationContent(
     context: EditRegistrationContext,
+    historical: bool,
     mut load: Signal<RegistrationLoad>,
     mut mutation: Signal<RegistrationMutation>,
     mut save_error: Signal<Option<String>>,
@@ -371,6 +405,7 @@ fn EditPlayerRegistrationContent(
                         oninput: move |e| jersey_number.set(e.value())
                     }
                 }
+                if !historical {
                 div { class: "mb-3",
                     label { class: "form-label", r#for: "edit-registration-team", "Team" }
                     select {
@@ -393,6 +428,7 @@ fn EditPlayerRegistrationContent(
                         br {}
                         "If you change teams, your new team must approve your request."
                     }
+                }
                 }
                 if waiver_required() {
                     div { class: "mb-3",

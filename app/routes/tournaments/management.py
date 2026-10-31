@@ -232,6 +232,8 @@ def create_league():
 def update_tournament_settings(tournament_url):
     """Update tournament settings."""
     tournament = Tournament.query.filter_by(url=tournament_url).first_or_404()
+    if tournament.historical:
+        return jsonify({"success": False, "error": "Edit historical tournaments from the records editor."}), 400
 
     try:
         save_tournament_settings(tournament)
@@ -305,6 +307,15 @@ def delete_tournament(tournament_url):
     BracketText.query.filter_by(event=tournament_url).delete(synchronize_session=False)
     BracketLabeledTeam.query.filter_by(event=tournament_url).delete(synchronize_session=False)
     BracketImage.query.filter_by(event=tournament_url).delete(synchronize_session=False)
+    # Historical tournaments: unclaimed placeholder teams go with the tournament.
+    from models import TeamClaimInvitation
+
+    placeholder_ids = [t.id for t in Team.query.filter_by(placeholder_event=tournament_url).all()]
+    if placeholder_ids:
+        TeamClaimInvitation.query.filter(TeamClaimInvitation.placeholder_team.in_(placeholder_ids)).delete(
+            synchronize_session=False
+        )
+        Team.query.filter(Team.id.in_(placeholder_ids)).delete(synchronize_session=False)
     rc_id = tournament.registrable_config_id if not tournament.league_id else None
     db.session.delete(tournament)
     if rc_id:

@@ -20,7 +20,7 @@ from sqlalchemy import and_, or_
 from app.domain.enums import RegistrationStatus
 from app.services.profile_stats_service import past_event_counts
 from app.utils.datetime_helpers import dt_iso
-from app.utils.helpers import can_head_ref_match
+from app.utils.helpers import can_head_ref_match, check_tournament_access, unpublished_historical_urls
 from app.utils.profile_banner_helpers import (
     BannerUploadError,
     read_banner_upload,
@@ -51,12 +51,12 @@ bp = Blueprint("teams", __name__, url_prefix="/_api")
 
 @bp.route("/teams", methods=["GET"])
 def teams_list():
-    """List teams with optional search."""
+    """List team accounts (not historical placeholders) with optional search."""
     search = request.args.get("search", "").strip()
+    query = Team.query.filter(Team.placeholder_event.is_(None))
     if search:
-        teams = Team.query.filter(Team.name.contains(search) | Team.id.contains(search)).all()
-    else:
-        teams = Team.query.all()
+        query = query.filter(Team.name.contains(search) | Team.id.contains(search))
+    teams = query.all()
     event_counts = past_event_counts("team", (team.id for team in teams))
     return jsonify(
         {
@@ -133,10 +133,17 @@ def team_profile(team_id):
     team = Team.query.get(team_id)
     if not team:
         return jsonify({"error": "Not found"}), 404
+    if team.placeholder_event:
+        has_access, _tournament = check_tournament_access(team.placeholder_event)
+        if not has_access:
+            return jsonify({"error": "Not found"}), 404
     regs = TeamRegistration.query.filter_by(team=team_id, status=RegistrationStatus.CONFIRMED).all()
+    hidden_events = unpublished_historical_urls(r.event for r in regs)
+    regs = [r for r in regs if r.event not in hidden_events]
     event_urls = [r.event for r in regs if r.event]
     tournaments = Tournament.query.filter(Tournament.url.in_(event_urls)).all() if event_urls else []
     tournament_start = {t.url: t.start_date for t in tournaments}
+    historical_events = {t.url for t in tournaments if t.historical}
 
     tournament_players = {}
     if current_user.is_authenticated and current_user.id == team_id and is_team(current_user):
@@ -218,10 +225,11 @@ def team_profile(team_id):
             matches_by_id = (
                 {m.uuid: m for m in Match.query.filter(Match.uuid.in_(match_ids)).all()} if match_ids else {}
             )
+            hidden_note_events = unpublished_historical_urls(m.event for m in matches_by_id.values())
             match_to_points = {}
             for n in candidate_notes:
                 m = matches_by_id.get(n.match)
-                if not m:
+                if not m or m.event in hidden_note_events:
                     continue
 
                 can_see_note = False
@@ -271,6 +279,7 @@ def team_profile(team_id):
                 "email": team.email,
                 "website": team.website,
                 "about": team.about,
+                "placeholder_event": team.placeholder_event,
             },
             "past_event_count": past_event_counts("team", [team_id])[team_id],
             "registrations": [
@@ -281,6 +290,7 @@ def team_profile(team_id):
                     "paid": bool(r.paid),
                     "amount_paid": r.amount_paid,
                     "start_date": (dt_iso(tournament_start.get(r.event)) if r.event else None),
+                    "historical": r.event in historical_events,
                 }
                 for r in regs
             ],

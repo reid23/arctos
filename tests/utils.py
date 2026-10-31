@@ -1,3 +1,5 @@
+from flask import g
+
 from models import RegistrableConfig, db
 
 
@@ -20,10 +22,14 @@ def make_registrable_config(**kwargs) -> RegistrableConfig:
 def login_as(client, user):
     """
     Log in a user for tests using Flask-Login's session keys.
+
+    Requests share the test's app context, so Flask-Login's per-context user
+    cache is cleared to let later requests load the new user.
     """
     with client.session_transaction() as sess:
         sess["_user_id"] = user.get_id()
         sess["_fresh"] = True
+    g.pop("_login_user", None)
 
 
 def issue_access_token(user=None, scope: str = "", client_name: str = "Test App") -> str:

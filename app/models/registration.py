@@ -11,6 +11,7 @@ transparently.
 
 from __future__ import annotations
 
+import sqlalchemy as sa
 
 from app.models.base import db
 from app.utils.datetime_helpers import now_utc_naive
@@ -160,5 +161,22 @@ class PlayerRegistration(db.Model):  # type: ignore[misc]
         db.CheckConstraint(
             "(event IS NOT NULL AND league_id IS NULL) OR (event IS NULL     AND league_id IS NOT NULL)",
             name="ck_player_registrations_event_league_mutual_exclusive",
+        ),
+        # One settled or invited roster spot per event. A historical player may
+        # also have a single REQUESTED row beside an invitation. Rejected and
+        # cancelled rows are kept and are not unique.
+        db.Index(
+            "uq_player_registrations_player_event",
+            "player",
+            "event",
+            unique=True,
+            sqlite_where=sa.text("status NOT IN ('REQUESTED', 'REJECTED', 'CANCELLED')"),
+        ),
+        db.Index(
+            "uq_player_registrations_player_event_requested",
+            "player",
+            "event",
+            unique=True,
+            sqlite_where=sa.text("status = 'REQUESTED'"),
         ),
     )

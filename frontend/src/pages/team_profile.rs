@@ -15,6 +15,7 @@ fn RegistrationRow(
     is_expanded: bool,
     on_toggle: EventHandler<()>,
     is_own_team: bool,
+    team_id: String,
     backend: String,
     players_cache: Signal<PlayersCache>,
 ) -> Element {
@@ -43,6 +44,12 @@ fn RegistrationRow(
                     Link { to: Route::LeagueHome { league_url: league_url.clone() }, "League: {league_url}" }
                 } else {
                     Link { to: Route::TournamentHome { url: event_key.clone() }, "{event_key}" }
+                    if registration.historical {
+                        span { class: "badge arctos-badge-neutral ms-2", title: "Historical tournament",
+                            i { class: "fas fa-history", aria_hidden: "true" }
+                            span { class: "visually-hidden", "Historical" }
+                        }
+                    }
                 }
             }
             td { class: "table-copy", "data-label": "Team name", strong { "{registration.pseudonym.as_deref().unwrap_or(\"-\")}" } }
@@ -57,7 +64,9 @@ fn RegistrationRow(
                 RegistrationStatusBadge { status: registration.status.clone() }
             }
             td { class: "table-nowrap", "data-label": "Payment",
-                if registration.paid {
+                if registration.historical {
+                    span { class: "text-muted", "-" }
+                } else if registration.paid {
                     PaymentStatusBadge { paid: true }
                     if registration.amount_paid > 0.0 {
                         { let amt = format!("${:.2}", registration.amount_paid); rsx! { small { class: "text-muted ms-1", "{amt}" } } }
@@ -72,6 +81,12 @@ fn RegistrationRow(
                     if is_league {
                         Link {
                             to: Route::LeagueInvitations { league_url: league_url.clone() },
+                            class: "btn btn-sm btn-outline-primary",
+                            "Manage Roster"
+                        }
+                    } else if registration.historical {
+                        Link {
+                            to: Route::HistoricalRoster { url: event_key.clone(), team_id: team_id.clone() },
                             class: "btn btn-sm btn-outline-primary",
                             "Manage Roster"
                         }
@@ -234,6 +249,16 @@ pub fn TeamProfile(id: Signal<String>, tab: String) -> Element {
                 past_count: d.past_event_count,
                 edit_route: own_profile.then(|| Route::EditTeamProfile { team_id: d.team.id.clone() }),
             }
+            if let Some(event) = d.team.placeholder_event.as_ref() {
+                div { class: "container-wide",
+                    div { class: "alert alert-secondary", role: "status",
+                        i { class: "fas fa-history me-2", aria_hidden: "true" }
+                        "This team is listed in the historical tournament "
+                        Link { to: Route::TournamentHome { url: event.clone() }, "{event}" }
+                        " but hasn't been claimed by a team account yet."
+                    }
+                }
+            }
             EventTabs { prefix: "team".to_string(), label: "Team sections".to_string(), active: active_tab.to_string(), tabs }
             div { class: "profile-detail-content",
                     section { id: "team-section-info", class: "profile-section", hidden: active_tab != "info", aria_labelledby: "team-tab-info",
@@ -297,6 +322,7 @@ pub fn TeamProfile(id: Signal<String>, tab: String) -> Element {
                                                                 expanded_event.set(if is_expanded { None } else { Some(ev_for_toggle.clone()) });
                                                             },
                                                             is_own_team: is_own,
+                                                            team_id: d.team.id.clone(),
                                                             backend: backend.clone(),
                                                             players_cache,
                                                         }

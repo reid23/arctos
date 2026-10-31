@@ -122,6 +122,8 @@ pub struct EventHeaderProps {
     pub registration_open: bool,
     pub badge_league_url: Option<String>,
     pub badge_name: Option<String>,
+    #[props(default)]
+    pub historical: bool,
     pub children: Element,
 }
 
@@ -157,7 +159,12 @@ pub fn EventHeader(props: EventHeaderProps) -> Element {
                     }
                 }
                 div { class: "event-hero-badges",
-                    if props.registration_open {
+                    if props.historical {
+                        span { class: "badge arctos-badge-neutral", title: "Results recorded after the tournament took place",
+                            i { class: "fas fa-history me-1", aria_hidden: "true" }
+                            "Historical"
+                        }
+                    } else if props.registration_open {
                         span { class: "event-registration-badge", i { class: "fas fa-circle-check", aria_hidden: "true" } "Registration open" }
                     }
                     if let (Some(url), Some(name)) = (props.badge_league_url, props.badge_name) {

@@ -69,6 +69,7 @@ def tournament_json(tournament) -> dict:
         "location": tournament.location,
         "about": tournament.about,
         "published": bool(tournament.published),
+        "historical": bool(tournament.historical),
         "schedule_published": bool(tournament.schedule_published),
         "bracket_published": bool(tournament.bracket_published),
         "league": _reference(league),

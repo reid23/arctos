@@ -373,6 +373,8 @@ class RegistrationService:
         actor = resolve_actor(actor_user_id, actor_user_type)
         if not PermissionService.is_tournament_organizer_of(tournament, actor):
             return Err(UnauthorizedError("Only tournament organizers can register players on behalf"))
+        if tournament.historical:
+            return Err(ValidationError("Add players to a historical tournament from a team's roster"))
 
         target = Player.query.get(player_id)
         if target is None:
@@ -469,6 +471,8 @@ class RegistrationService:
         actor = resolve_actor(actor_user_id, actor_user_type)
         if not PermissionService.is_tournament_organizer_of(tournament, actor):
             return Err(UnauthorizedError("Only tournament organizers can register teams"))
+        if tournament.historical:
+            return Err(ValidationError("Add teams to a historical tournament from the records editor"))
 
         team = Team.query.get(team_id)
         if team is None:
