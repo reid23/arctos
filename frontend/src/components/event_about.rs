@@ -19,6 +19,8 @@ pub struct EventAboutProps {
     pub waiver_required: bool,
     pub terms_link: Option<String>,
     pub league_url: Option<String>,
+    #[props(default = true)]
+    pub show_registration: bool,
 }
 
 #[component]
@@ -55,6 +57,7 @@ pub fn EventAbout(props: EventAboutProps) -> Element {
                     }
                 }
             }
+            if props.show_registration {
             section { class: "card event-registration-card",
                 div { class: "card-header", h2 { i { class: "fas fa-clipboard-list", aria_hidden: "true" } "Registration details" } }
                 div { class: "card-body",
@@ -84,6 +87,7 @@ pub fn EventAbout(props: EventAboutProps) -> Element {
                         div { dt { "Players on field" } dd { "{limit(props.max_field)}" } }
                     }
                 }
+            }
             }
         }
     }

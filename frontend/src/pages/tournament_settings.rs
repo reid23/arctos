@@ -1,5 +1,6 @@
 use crate::api;
 use crate::components::{BannerAccountKind, BannerUpload, EventBannerPhoto, SettingsSaveActions, SettingsSaveJump, ToolPageHeader};
+use crate::types::Tournament;
 use crate::Route;
 use dioxus::prelude::*;
 use std::collections::HashMap;
@@ -33,6 +34,10 @@ fn get_form_textarea(id: &str) -> String {
         .and_then(|e| e.dyn_into::<web_sys::HtmlTextAreaElement>().ok())
         .map(|e| e.value())
         .unwrap_or_default()
+}
+
+fn date_part(value: &str) -> String {
+    value.split('T').next().unwrap_or(value).to_string()
 }
 
 fn get_form_check(id: &str) -> bool {
@@ -555,6 +560,167 @@ fn ToRow(
 }
 
 #[component]
+fn HistoricalSettings(
+    url: String,
+    tournament: Tournament,
+    banner_photo: Signal<Option<String>>,
+    banner_busy: Signal<bool>,
+) -> Element {
+    let navigator = use_navigator();
+    let published = tournament.published;
+    let mut name = use_signal(|| tournament.name.clone());
+    let mut location = use_signal(|| tournament.location.clone().unwrap_or_default());
+    let mut start_date = use_signal(|| date_part(&tournament.start_date));
+    let mut end_date = use_signal(|| tournament.end_date.as_deref().map(date_part).unwrap_or_default());
+    let mut about = use_signal(|| tournament.about.clone().unwrap_or_default());
+    let mut saving = use_signal(|| false);
+    let mut save_error = use_signal(|| None::<String>);
+
+    rsx! {
+        div { class: "penalty-settings-wrap organizer-settings",
+            ToolPageHeader { title: "Settings", actions: rsx! { SettingsSaveJump {} } }
+            div { class: "row",
+                div { class: "col-12",
+                    div { class: "edit-section ordinary-form-rail",
+                        div { class: "edit-section-heading",
+                            h3 { class: "h5 mb-0", "Tournament information" }
+                        }
+                        div { class: "edit-section-body",
+                            BannerUpload {
+                                kind: BannerAccountKind::Tournament,
+                                account_id: url.clone(),
+                                photo: banner_photo,
+                                busy: banner_busy,
+                            }
+                            form {
+                                id: "tournament-settings-form",
+                                onsubmit: move |ev| {
+                                    ev.prevent_default();
+                                    if saving() || banner_busy() {
+                                        return;
+                                    }
+                                    let name_value = get_form_value("name");
+                                    let start_value = get_form_value("start_date");
+                                    if name_value.trim().is_empty() {
+                                        save_error.set(Some("Name is required.".into()));
+                                        return;
+                                    }
+                                    if start_value.is_empty() {
+                                        save_error.set(Some("Start date is required.".into()));
+                                        return;
+                                    }
+                                    saving.set(true);
+                                    save_error.set(None);
+                                    let location_value = get_form_value("location");
+                                    let end_value = get_form_value("end_date");
+                                    let about_value = get_form_textarea("about");
+                                    let url_submit = url.clone();
+                                    let nav = navigator.clone();
+                                    spawn(async move {
+                                        match api::historical_update_details(
+                                            &url_submit,
+                                            name_value.trim(),
+                                            location_value.trim(),
+                                            &start_value,
+                                            &end_value,
+                                            &about_value,
+                                            published,
+                                        )
+                                        .await
+                                        {
+                                            Ok(_) => {
+                                                nav.push(Route::TournamentHome { url: url_submit });
+                                            }
+                                            Err(error) => save_error.set(Some(error)),
+                                        }
+                                        saving.set(false);
+                                    });
+                                },
+                                fieldset { disabled: saving(), class: "border-0 p-0 m-0",
+                                    div { class: "row",
+                                        div { class: "col-md-6",
+                                            div { class: "mb-3",
+                                                label { r#for: "name", class: "form-label", "Tournament Name" }
+                                                input {
+                                                    r#type: "text", class: "form-control", id: "name", name: "name", required: true,
+                                                    value: "{name}",
+                                                    oninput: move |event| name.set(event.value()),
+                                                }
+                                            }
+                                        }
+                                        div { class: "col-md-6",
+                                            div { class: "mb-3",
+                                                label { r#for: "location", class: "form-label", "Location" }
+                                                input {
+                                                    r#type: "text", class: "form-control", id: "location", name: "location",
+                                                    value: "{location}",
+                                                    oninput: move |event| location.set(event.value()),
+                                                }
+                                            }
+                                        }
+                                    }
+                                    div { class: "row",
+                                        div { class: "col-md-6",
+                                            div { class: "mb-3",
+                                                label { r#for: "start_date", class: "form-label", "Start Date" }
+                                                input {
+                                                    r#type: "date", class: "form-control", id: "start_date", name: "start_date", required: true,
+                                                    value: "{start_date}",
+                                                    oninput: move |event| start_date.set(event.value()),
+                                                }
+                                            }
+                                        }
+                                        div { class: "col-md-6",
+                                            div { class: "mb-3",
+                                                label { r#for: "end_date", class: "form-label", "End Date" }
+                                                input {
+                                                    r#type: "date", class: "form-control", id: "end_date", name: "end_date",
+                                                    min: "{start_date}",
+                                                    value: "{end_date}",
+                                                    oninput: move |event| end_date.set(event.value()),
+                                                }
+                                            }
+                                        }
+                                    }
+                                    div { class: "mb-3",
+                                        label { r#for: "about", class: "form-label", "About" }
+                                        textarea {
+                                            class: "form-control", id: "about", aria_describedby: "about-help", name: "about", rows: "4",
+                                            value: "{about}",
+                                            oninput: move |event| about.set(event.value()),
+                                        }
+                                        div { id: "about-help", class: "form-text",
+                                            "supports "
+                                            a { href: "https://www.markdownguide.org/basic-syntax/", "markdown" }
+                                            ", including most of the "
+                                            a { href: "https://www.markdownguide.org/extended-syntax/", "extended syntax" }
+                                            ". Images can be inserted with "
+                                            code { "![alt text](https://image_url)" }
+                                            ", and links with "
+                                            code { "[text](link)" }
+                                            "."
+                                        }
+                                    }
+                                    SettingsSaveActions {
+                                        saving: saving(),
+                                        error: save_error(),
+                                        blocked_reason: if banner_busy() {
+                                            Some("Finish or cancel the banner change before saving settings.".into())
+                                        } else {
+                                            None
+                                        },
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
 pub fn TournamentSettings(url: String) -> Element {
     let navigator = use_navigator();
     let url_for_data = url.clone();
@@ -640,6 +806,14 @@ pub fn TournamentSettings(url: String) -> Element {
     rsx! {
         style { {include_str!("../components/organizer_tools.css")} }
         if let Some(Ok(d)) = val.read().as_ref() {
+            if d.tournament.historical {
+                HistoricalSettings {
+                    url: url.clone(),
+                    tournament: d.tournament.clone(),
+                    banner_photo,
+                    banner_busy,
+                }
+            } else {
             div { class: "penalty-settings-wrap organizer-settings",
                 ToolPageHeader { title: "Settings", actions: rsx! { SettingsSaveJump {} } }
 
@@ -1124,6 +1298,7 @@ pub fn TournamentSettings(url: String) -> Element {
                     }
                     }
                 }
+            }
             }
             }
         } else if let Some(Err(e)) = val.read().as_ref() {

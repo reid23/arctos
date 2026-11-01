@@ -284,6 +284,7 @@ Visible tournaments, by start date. Query parameters:
       "location": "Central Park",
       "about": "Our annual open.",
       "published": true,
+      "historical": false,
       "schedule_published": true,
       "bracket_published": false,
       "league": {"id": "metro-league", "name": "Metro League"},
@@ -301,7 +302,10 @@ Visible tournaments, by start date. Query parameters:
 }
 ```
 
-`league` is `null` for standalone tournaments.
+`league` is `null` for standalone tournaments. `historical` is `true` for
+records of past tournaments whose results were entered after the event;
+their matches carry no real start or end times. An unpublished historical
+tournament is visible only to its organizers.
 
 #### `GET /tournaments/{tournament_id}`
 

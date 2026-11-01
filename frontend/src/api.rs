@@ -3819,6 +3819,342 @@ pub async fn disconnect_app(client_id: &str) -> Result<(), String> {
     response_json::<Value>(r).await.map(|_| ())
 }
 
+// Historical tournaments
+
+pub async fn create_historical_tournament(
+    name: &str,
+    url_slug: &str,
+    location: &str,
+    start_date: &str,
+    end_date: &str,
+    teams: &[(String, String)],
+) -> Result<CreateTournamentResponse, String> {
+    let teams_json: Vec<_> = teams
+        .iter()
+        .map(|(team_name, shortname)| serde_json::json!({ "name": team_name, "shortname": shortname }))
+        .collect();
+    let body = serde_json::json!({
+        "name": name,
+        "url": url_slug,
+        "location": location,
+        "start_date": start_date,
+        "end_date": end_date,
+        "teams": teams_json,
+    });
+    let r = with_credentials(client().post(format!("{}/_api/create-historical-tournament", base())).json(&body))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
+fn historical_records_url(tournament_url: &str, path: &str) -> String {
+    format!("{}/_api/tournaments/{}/records{}", base(), tournament_url, path)
+}
+
+pub async fn historical_records(tournament_url: &str) -> Result<HistoricalRecordsResponse, String> {
+    let r = with_credentials(client().get(historical_records_url(tournament_url, "")))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
+pub async fn historical_update_details(
+    tournament_url: &str,
+    name: &str,
+    location: &str,
+    start_date: &str,
+    end_date: &str,
+    about: &str,
+    published: bool,
+) -> Result<HistoricalRecordsResponse, String> {
+    let body = serde_json::json!({
+        "name": name,
+        "location": location,
+        "start_date": start_date,
+        "end_date": end_date,
+        "about": about,
+        "published": published,
+    });
+    let r = with_credentials(client().put(historical_records_url(tournament_url, "/details")).json(&body))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
+pub async fn historical_add_teams(
+    tournament_url: &str,
+    teams: impl serde::Serialize,
+) -> Result<HistoricalRecordsResponse, String> {
+    let body = serde_json::json!({ "teams": teams });
+    let r = with_credentials(client().post(historical_records_url(tournament_url, "/teams")).json(&body))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
+pub async fn historical_rename_team(
+    tournament_url: &str,
+    team_id: &str,
+    name: &str,
+    shortname: &str,
+) -> Result<HistoricalRecordsResponse, String> {
+    let body = serde_json::json!({ "name": name, "shortname": shortname });
+    let url = historical_records_url(tournament_url, &format!("/teams/{}", team_id));
+    let r = with_credentials(client().put(url).json(&body))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
+pub async fn historical_remove_team(
+    tournament_url: &str,
+    team_id: &str,
+) -> Result<HistoricalRecordsResponse, String> {
+    let url = historical_records_url(tournament_url, &format!("/teams/{}", team_id));
+    let r = with_credentials(client().delete(url))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
+pub async fn historical_invite_team_to_claim(
+    tournament_url: &str,
+    placeholder_team_id: &str,
+    invited_team_id: &str,
+) -> Result<HistoricalRecordsResponse, String> {
+    let body = serde_json::json!({ "team_id": invited_team_id });
+    let url = historical_records_url(tournament_url, &format!("/teams/{}/claim-invitation", placeholder_team_id));
+    let r = with_credentials(client().put(url).json(&body))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
+pub async fn historical_cancel_claim_invitation(
+    tournament_url: &str,
+    placeholder_team_id: &str,
+) -> Result<HistoricalRecordsResponse, String> {
+    let url = historical_records_url(tournament_url, &format!("/teams/{}/claim-invitation", placeholder_team_id));
+    let r = with_credentials(client().delete(url))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
+/// Creates the match when `match_uuid` is `None`, otherwise replaces it.
+pub async fn historical_save_match(
+    tournament_url: &str,
+    match_uuid: Option<&str>,
+    input: &HistoricalMatchInput,
+) -> Result<HistoricalRecordsResponse, String> {
+    let request = match match_uuid {
+        Some(uuid) => client().put(historical_records_url(tournament_url, &format!("/matches/{}", uuid))),
+        None => client().post(historical_records_url(tournament_url, "/matches")),
+    };
+    let r = with_credentials(request.json(input))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
+pub async fn historical_delete_match(
+    tournament_url: &str,
+    match_uuid: &str,
+) -> Result<HistoricalRecordsResponse, String> {
+    let url = historical_records_url(tournament_url, &format!("/matches/{}", match_uuid));
+    let r = with_credentials(client().delete(url))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
+fn historical_roster_url(tournament_url: &str, team_id: &str, path: &str) -> String {
+    format!("{}/_api/tournaments/{}/rosters/{}{}", base(), tournament_url, team_id, path)
+}
+
+pub async fn historical_roster(tournament_url: &str, team_id: &str) -> Result<HistoricalRosterResponse, String> {
+    let r = with_credentials(client().get(historical_roster_url(tournament_url, team_id, "")))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
+pub async fn historical_invite_player(
+    tournament_url: &str,
+    team_id: &str,
+    player_id: &str,
+    jersey_name: &str,
+    jersey_number: &str,
+) -> Result<HistoricalRosterResponse, String> {
+    let body = serde_json::json!({
+        "player_id": player_id,
+        "jersey_name": jersey_name,
+        "jersey_number": jersey_number,
+    });
+    let url = historical_roster_url(tournament_url, team_id, "/players");
+    let r = with_credentials(client().post(url).json(&body))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
+pub async fn historical_remove_player(
+    tournament_url: &str,
+    team_id: &str,
+    player_id: &str,
+) -> Result<HistoricalRosterResponse, String> {
+    let url = historical_roster_url(tournament_url, team_id, &format!("/players/{}", player_id));
+    let r = with_credentials(client().delete(url))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
+/// Open claim invitations (for a team) or roster invitations (for a player),
+/// optionally only those for one tournament.
+pub async fn my_invitations(tournament_url: Option<&str>) -> Result<MyInvitationsResponse, String> {
+    let mut request = client().get(format!("{}/_api/me/invitations", base()));
+    if let Some(url) = tournament_url {
+        request = request.query(&[("tournament", url)]);
+    }
+    let r = with_credentials(request)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
+pub async fn respond_to_claim_invitation(invitation_id: u32, accept: bool) -> Result<(), String> {
+    let action = if accept { "accept" } else { "decline" };
+    let url = format!("{}/_api/me/invitations/claims/{}/{}", base(), invitation_id, action);
+    let r = with_credentials(client().post(url))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    response_json::<Value>(r).await.map(|_| ())
+}
+
+pub async fn historical_unclaim_team(
+    tournament_url: &str,
+    team_id: &str,
+) -> Result<HistoricalRecordsResponse, String> {
+    let url = historical_records_url(tournament_url, &format!("/teams/{}/unclaim", team_id));
+    let r = with_credentials(client().post(url))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
+pub async fn historical_decide_claim_request(
+    tournament_url: &str,
+    request_id: u32,
+    approve: bool,
+) -> Result<HistoricalRecordsResponse, String> {
+    let action = if approve { "approve" } else { "decline" };
+    let url = format!(
+        "{}/_api/tournaments/{}/claim-requests/{}/{}",
+        base(),
+        tournament_url,
+        request_id,
+        action
+    );
+    let r = with_credentials(client().post(url))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
+pub async fn historical_request_claim(tournament_url: &str, placeholder_team_id: &str) -> Result<(), String> {
+    let body = serde_json::json!({ "placeholder_team_id": placeholder_team_id });
+    let url = format!("{}/_api/tournaments/{}/claim-requests", base(), tournament_url);
+    let r = with_credentials(client().post(url).json(&body))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    response_json::<Value>(r).await.map(|_| ())
+}
+
+pub async fn historical_withdraw_claim_request(tournament_url: &str) -> Result<(), String> {
+    let url = format!("{}/_api/tournaments/{}/claim-requests/mine", base(), tournament_url);
+    let r = with_credentials(client().delete(url))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    response_json::<Value>(r).await.map(|_| ())
+}
+
+pub async fn historical_request_roster(
+    tournament_url: &str,
+    team_id: &str,
+    jersey_name: &str,
+    jersey_number: &str,
+) -> Result<(), String> {
+    let body = serde_json::json!({
+        "team_id": team_id,
+        "jersey_name": jersey_name,
+        "jersey_number": jersey_number,
+    });
+    let url = format!("{}/_api/tournaments/{}/roster-requests", base(), tournament_url);
+    let r = with_credentials(client().post(url).json(&body))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    response_json::<Value>(r).await.map(|_| ())
+}
+
+pub async fn historical_withdraw_roster_request(tournament_url: &str) -> Result<(), String> {
+    let url = format!("{}/_api/tournaments/{}/roster-requests/mine", base(), tournament_url);
+    let r = with_credentials(client().delete(url))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    response_json::<Value>(r).await.map(|_| ())
+}
+
+pub async fn historical_decide_roster_request(
+    tournament_url: &str,
+    team_id: &str,
+    registration_id: u32,
+    approve: bool,
+) -> Result<HistoricalRosterResponse, String> {
+    let action = if approve { "approve" } else { "decline" };
+    let url = historical_roster_url(
+        tournament_url,
+        team_id,
+        &format!("/requests/{}/{}", registration_id, action),
+    );
+    let r = with_credentials(client().post(url))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
+pub async fn respond_to_roster_invitation(registration_id: u32, accept: bool) -> Result<(), String> {
+    let action = if accept { "accept" } else { "decline" };
+    let url = format!("{}/_api/me/invitations/rosters/{}/{}", base(), registration_id, action);
+    let r = with_credentials(client().post(url))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    response_json::<Value>(r).await.map(|_| ())
+}
+
 pub async fn upload_tournament_banner_photo(id: &str, bytes: bytes::Bytes) -> Result<String, String> {
     upload_event_banner("tournaments", id, bytes).await
 }

@@ -68,7 +68,6 @@ PUBLIC_SCREENS = (
 )
 
 AUTH_SCREENS = (
-    Screen("create-event", "/create-event", "main h1"),
     Screen("new-tournament", "/new-tournament", "#name"),
     Screen("new-league", "/leagues/new", "#league_name"),
     Screen("league-new-event", "/leagues/demo-coast-league/new-tournament", "#name"),
@@ -399,9 +398,9 @@ class SmokeCheck:
         try:
             for width in (320, 360):
                 await page.set_viewport_size({"width": width, "height": 900})
-                for path, label, destination in (
-                    ("/", "Create an Event", "/new-tournament"),
-                    ("/leagues", "Create a league", "/leagues/new"),
+                for path, label, destination, heading in (
+                    ("/", "Create new Event", "/new-tournament", "Create an Event"),
+                    ("/leagues", "Create a league", "/leagues/new", "Create a league"),
                 ):
                     await page.goto(self.base_url + path, wait_until="domcontentloaded")
                     nav = page.get_by_role("navigation", name="Main navigation")
@@ -422,19 +421,29 @@ class SmokeCheck:
                     options = page.locator("#organize-options")
                     await expect(options).to_be_hidden()
                     await expect(
-                        page.get_by_role("link", name=re.compile(r"^Create (?:an Event|a league)"))
+                        page.get_by_role(
+                            "link", name=re.compile(r"^(?:Create new Event|Create a league|Log past Event)$")
+                        )
                     ).to_have_count(0)
                     await trigger.focus()
                     await page.keyboard.press("Enter")
                     await expect(trigger).to_have_attribute("aria-expanded", "true")
                     await expect(trigger).to_be_focused()
-                    other = "Create a league" if path == "/" else "Create an Event"
-                    await expect(options.get_by_role("link", name=label, exact=True)).to_be_visible()
-                    await expect(options.get_by_role("link", name=other, exact=True)).to_have_count(0)
+                    if path == "/":
+                        await expect(options.get_by_role("link", name="Create new Event", exact=True)).to_be_visible()
+                        past = options.get_by_role("link", name="Log past Event", exact=True)
+                        await expect(past).to_be_visible()
+                        await expect(past).to_have_attribute("href", "/new-historical-tournament")
+                        await expect(options.get_by_role("link", name="Create a league", exact=True)).to_have_count(0)
+                    else:
+                        await expect(options.get_by_role("link", name="Create a league", exact=True)).to_be_visible()
+                        await expect(options.get_by_role("link", name="Create new Event", exact=True)).to_have_count(0)
+                        await expect(options.get_by_role("link", name="Log past Event", exact=True)).to_have_count(0)
                     links = await options.get_by_role("link").evaluate_all("""els => els.map(el => {
                         const r=el.getBoundingClientRect(); return {width:r.width,height:r.height,left:r.left,right:r.right};
                     })""")
-                    assert len(links) == 1 and all(
+                    expected_links = 2 if path == "/" else 1
+                    assert len(links) == expected_links and all(
                         link["width"] >= 44
                         and link["height"] >= 44
                         and link["left"] >= 0
@@ -458,7 +467,7 @@ class SmokeCheck:
                     await create.focus()
                     await page.keyboard.press("Enter")
                     await expect(page).to_have_url(self.base_url + destination)
-                    await expect(page.get_by_role("heading", name=label, exact=True)).to_be_visible()
+                    await expect(page.get_by_role("heading", name=heading, exact=True)).to_be_visible()
                     login = page.get_by_role("link", name="Log in to continue", exact=True)
                     href = urlsplit(await login.get_attribute("href"))
                     assert href.path == "/login" and parse_qs(href.query).get("next") == [destination], href

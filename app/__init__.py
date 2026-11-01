@@ -241,6 +241,7 @@ def create_app(config: dict | None = None) -> Flask:
     from app.routes.notes import bp as notes_bp
     from app.routes.registration import bp as registration_bp
     from app.routes.sidecomps import bp as sidecomps_bp
+    from app.routes.historical import bp as historical_bp
     from app.routes.content import bp as content_bp
     from app.routes.leagues import bp as leagues_bp
     from app.routes.penalty_types import bp as penalty_types_bp
@@ -255,6 +256,7 @@ def create_app(config: dict | None = None) -> Flask:
     app.register_blueprint(notes_bp)
     app.register_blueprint(registration_bp)
     app.register_blueprint(sidecomps_bp)
+    app.register_blueprint(historical_bp)
     app.register_blueprint(content_bp)
     app.register_blueprint(leagues_bp)
     app.register_blueprint(penalty_types_bp)
