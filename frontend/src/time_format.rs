@@ -47,7 +47,7 @@ pub fn format_match_display_local(iso: &str) -> String {
     let Some(utc_dt) = parse_iso_utc_naive(iso) else {
         return iso.to_string();
     };
-    let local = utc_dt + chrono::Duration::minutes(browser_tz_offset_minutes());
+    let local = local_datetime_at(utc_dt);
     local.format("%m/%d %I:%M %p").to_string()
 }
 
@@ -135,6 +135,52 @@ pub fn format_record_timestamp(iso: &str) -> String {
 /// Compatibility alias for existing registration and payment tables.
 pub fn format_registration_timestamp(iso: &str) -> String {
     format_record_timestamp(iso)
+}
+
+/// Native date inputs use the timezone offset at the selected date.
+pub fn datetime_local_input(iso: &str) -> String {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let date = js_sys::Date::new(&wasm_bindgen::JsValue::from_str(iso));
+        if date.get_time().is_finite() {
+            return format!(
+                "{:04}-{:02}-{:02}T{:02}:{:02}",
+                date.get_full_year(),
+                date.get_month() + 1,
+                date.get_date(),
+                date.get_hours(),
+                date.get_minutes()
+            );
+        }
+    }
+    chrono::DateTime::parse_from_rfc3339(iso)
+        .map(|dt| dt.naive_utc().format("%Y-%m-%dT%H:%M").to_string())
+        .unwrap_or_default()
+}
+
+pub fn datetime_local_to_utc(value: &str) -> Option<String> {
+    let parsed = chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M").ok()?;
+    #[cfg(target_arch = "wasm32")]
+    {
+        let date = js_sys::Date::new(&wasm_bindgen::JsValue::from_str(value));
+        if !date.get_time().is_finite() {
+            return None;
+        }
+        let iso: String = date.to_iso_string().into();
+        // Reject skipped local times at the spring daylight saving change.
+        if datetime_local_input(&iso) != value {
+            return None;
+        }
+        let _ = parsed;
+        Some(iso)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    Some(parsed.and_utc().to_rfc3339())
+}
+
+/// Convert a UTC timestamp using the browser offset at that instant.
+pub fn local_datetime_at(utc: NaiveDateTime) -> NaiveDateTime {
+    utc + chrono::Duration::minutes(timestamp_offset_minutes(utc))
 }
 
 #[cfg(test)]
@@ -262,4 +308,17 @@ mod timestamp_tests {
             "Jan 15, 2026 · 10:30 AM"
         );
     }
+}
+
+/// Offset for a calendar day, used when shifting that day's match schedule.
+pub fn calendar_day_offset_minutes(day: &str) -> i32 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let date = js_sys::Date::new(&wasm_bindgen::JsValue::from_str(&format!("{day}T12:00")));
+        if date.get_time().is_finite() {
+            return -date.get_timezone_offset() as i32;
+        }
+    }
+    let _ = day;
+    0
 }

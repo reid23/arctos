@@ -1,8 +1,8 @@
 use super::directory_state::{use_directory, use_directory_scroll, Directory, DirectoryState};
 use crate::api;
 use crate::components::{
-    OrganizeContext, OrganizeMenu, PageIntro, PaymentStatusBadge, RegistrationStatusBadge,
-    WaiverStatusBadge,
+    OrganizeContext, OrganizeMenu, PageIntro, PaymentStatusBadge, PendingInvitations,
+    RegistrationStatusBadge, WaiverStatusBadge,
 };
 use crate::types::{PublicEventCard, PublicRegistrationSummary, UserRegStatus};
 use crate::Route;
@@ -79,6 +79,7 @@ pub fn Index() -> Element {
             a { href: "https://en.wikipedia.org/wiki/Jugger", "jugger" }
             " tournaments and results."
         }
+        PendingInvitations { on_respond: move |_| directory.restart() }
         section { id: "event-discovery", class: "arctos-discovery", aria_label: "Find an event", tabindex: "-1",
             div { class: "arctos-discovery-toolbar",
                 div { class: "arctos-discovery-actions",
@@ -180,7 +181,12 @@ fn PublicTournamentCard(card: PublicEventCard, past: bool) -> Element {
             div { class: "card-body",
                 div { class: "arctos-card-statuses",
                     if !card.published { span { class: "badge bg-warning text-dark", title: "Draft · Only visible to organizers", "Unpublished" } }
-                    if past {
+                    if card.historical {
+                        span { class: "badge arctos-badge-neutral", title: "Results recorded after the tournament took place",
+                            i { class: "fas fa-history me-1", aria_hidden: "true" }
+                            "Historical"
+                        }
+                    } else if past {
                         span { class: "badge arctos-badge-neutral", "Past event" }
                     } else {
                         span { class: if card.registration_open { "badge arctos-badge-success" } else { "badge arctos-badge-neutral" }, "{card.registration_label}" }
@@ -204,13 +210,20 @@ fn PublicTournamentCard(card: PublicEventCard, past: bool) -> Element {
                         }
                     }
                     li { i { class: "fas fa-users", aria_hidden: "true" }
-                        span { "{card.team_count}"
-                            if let Some(max) = card.max_teams { " / {max}" }
-                            " teams registered"
+                        span {
+                            if card.historical {
+                                "{card.team_count} teams"
+                            } else {
+                                "{card.team_count}"
+                                if let Some(max) = card.max_teams { " / {max}" }
+                                " teams registered"
+                            }
                         }
                     }
                 }
-                if let Some(status) = &card.account_status { PublicRegistrationBadges { status: status.clone() } }
+                if !card.historical {
+                    if let Some(status) = &card.account_status { PublicRegistrationBadges { status: status.clone() } }
+                }
             }
             div { class: "arctos-card-footer",
                 Link { to: app_target(&card.url), class: "btn btn-outline-secondary w-100",

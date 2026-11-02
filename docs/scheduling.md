@@ -1,5 +1,18 @@
 # Scheduling Algorithm
 
+## Timed activities
+
+`ScheduleItem` stores activities alongside the match schedule. Each item belongs
+to a tournament and has a fixed UTC start and end time, an optional field, and
+an optional location. Generic activities store a title and description.
+An item linked to a side competition reads its name and description from that
+competition on each request.
+
+Activities are independent of `MatchGraph`: they do not reserve playing or
+referee teams, block a field, affect results, or move during either scheduling
+pass. Use a match break when a pause must constrain subsequent matches.
+Public reads use the tournament and schedule visibility checks.
+
 ## Two timelines
 
 Every match has **two** start-time fields. They look similar and are easy to

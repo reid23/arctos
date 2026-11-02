@@ -64,6 +64,17 @@ def test_home_contains_useful_html_before_background_app_startup(public_client, 
     assert "Cookie" in response.headers["Vary"]
 
 
+def test_public_organize_menus_link_to_current_creation_workflows(public_client):
+    event_links = {link.get("href") for link in Elements(public_client.get("/").get_data(as_text=True)).all("a")}
+    league_links = {
+        link.get("href") for link in Elements(public_client.get("/leagues").get_data(as_text=True)).all("a")
+    }
+    assert {"/new-tournament", "/new-historical-tournament"} <= event_links
+    assert "/leagues/new" in league_links
+    assert "/create-event" not in event_links | league_links
+    assert public_client.get("/create-event").status_code == 404
+
+
 def test_public_html_remains_usable_without_a_prepared_application(
     public_client, app, monkeypatch, tournament, tmp_path
 ):
@@ -81,6 +92,27 @@ def test_directory_html_and_api_read_current_data(public_client, tournament):
     assert tournament.name in public_client.get("/").get_data(as_text=True)
     cards = public_client.get("/_api/public/events").get_json()["cards"]
     assert next(card for card in cards if card["url"] == f"/{tournament.url}")["name"] == tournament.name
+
+
+def test_historical_event_documents_show_recorded_results_without_registration(public_client, tournament):
+    tournament.historical = True
+    tournament.start_date = datetime(2020, 6, 15)
+    tournament.end_date = datetime(2020, 6, 16)
+    tournament.registrable_config.team_registration_open = True
+    db.session.commit()
+
+    directory = public_client.get("/?view=past").get_data(as_text=True)
+    assert "Historical" in directory
+    assert "teams registered" not in directory
+    card = public_client.get("/_api/public/events?view=past").get_json()["cards"][0]
+    assert card["historical"] is True
+    assert card["registration_open"] is False
+
+    detail = public_client.get(f"/{tournament.url}").get_data(as_text=True)
+    assert "These results were entered after the tournament took place." in detail
+    assert "Log in to claim a spot" in detail
+    assert "Registration details" not in detail
+    assert "Team limits" not in detail
 
 
 def test_interactive_directory_shares_html_search_pagination_and_privacy(public_client):
@@ -172,6 +204,18 @@ def test_info_query_stays_public_and_registration_has_contextual_shell(public_cl
     assert f'href="/{tournament.url}"' in html
     assert 'data-workflow="registration"' in html.lower()
     assert "boot.js" in html
+
+
+@pytest.mark.parametrize("suffix", ["records", "rosters/test-team"])
+def test_historical_event_workflows_require_an_accessible_event(public_client, tournament, suffix):
+    response = public_client.get(f"/{tournament.url}/{suffix}")
+    assert response.status_code == 200
+    assert "boot.js" in response.get_data(as_text=True)
+    assert_robots(response, noindex=True)
+
+    tournament.published = False
+    db.session.commit()
+    assert public_client.get(f"/{tournament.url}/{suffix}").status_code == 404
 
 
 def test_private_event_and_unknown_page_have_same_real_404(public_client, tournament):
@@ -267,7 +311,8 @@ def test_missing_api_and_static_requests_never_receive_public_or_app_document(pu
         "/players",
         "/teams",
         "/stones",
-        "/create-event",
+        "/new-tournament",
+        "/new-historical-tournament",
         "/docs.md",
         "/developers/apps",
         "/oauth/authorize",

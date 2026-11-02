@@ -52,6 +52,7 @@ For tournament organizers
     - [Head Ref Options](#head-ref-options)
     - [Visibility and Access Control](#visibility-and-access-control)
  - [Match Schedule Setup](#match-schedule-setup)
+    - [Activities and Side Competitions](#activities-and-side-competitions)
     - [Tags and References: Specifying Teams](#tags-and-references-specifying-teams)
     - [Static Scheduling](#static-scheduling)
     - [Dynamic Matches](#dynamic-matches)
@@ -579,8 +580,10 @@ Break matches represent dynamically scheduled breaks in the
 tournament. They just reserve time (ie, for a lunch break) on a field
 in a way that can be pulled forward if matches finish early.
 
-If you want a non-dynamic break, just use static matches before and
-after the break, and leave the break empty.
+Choose **Static break** for a break with a fixed start time. Breaks and joins
+control match timing and appear in the field view, not the team view. For a
+lunch announcement that everyone should see, add an [activity](#activities-and-side-competitions)
+as well as any breaks needed to pause matches.
 
 ### Joins
 
@@ -630,17 +633,53 @@ called Arctos Schedule Script (ASS).
 
 You can see the full ASS docs [here](arctos-schedule-script.md).
 
+### Activities and Side Competitions
+
+Open **Add** in the schedule editor and choose **Activity or announcement** for
+announcements, check-in, awards, or other activities. The same menu includes
+matches, breaks, joins, and **Side competition**. On a computer, clicking an
+empty part of the timeline fills in the start time; dragging selects a time
+range. Choose the entry type, then review and save its details.
+
+For an activity, enter a name, start and end time, and any description or
+location players need. You can choose a field as its location, but the activity
+still appears throughout the schedule. Each entry can span up to 31 days.
+
+Choose a side competition to schedule one that already exists, or create a new
+competition from the same form. You can also schedule a competition from its
+own page. Its schedule entry uses the competition's current name and description.
+Players can tap the entry to read the details or open the competition.
+
+**By team** shows every activity and scheduled side competition alongside the
+selected team's matches. Activities are visible even before a team is selected;
+they are not filtered by side competition entries. **By field** shows all
+activities alongside that field's matches. In the editor's **All fields** view,
+each field displays the same activity. Select any copy to edit the one saved
+entry. The table shows each activity once.
+
+Activity times stay fixed when matches run early or late. They do not delay
+matches, reserve a field, or check for overlaps with matches. **Push back day…**
+leaves activity times unchanged. Use a [break](#breaks) in the match schedule
+when following matches must wait. Activities follow the event's schedule
+publication setting and can be used before any matches or fields have been added.
+
 ### Exporting and Importing Schedules
 
 The schedule editor offers **Export TOML** and **Import TOML**. An export contains
 schedule definitions: fields, tags, script variables, match types, planned times,
-and team/referee references. It is not a backup of scores, points, or footage.
+team/referee references, and activities. It is not a backup of scores, points,
+or footage.
 
 An import is authoritative for the destination schedule. Fields, tags, variables,
 and matches omitted from the file can be removed. Export the current schedule
 and back up important event data before replacing it. Review import warnings and
 resolved team/tag references before using the result. Do not treat an exported
 schedule as a complete event backup.
+
+The `schedule_items` collection contains activities. Importing that collection
+replaces the event's activities; `schedule_items = []` clears them. Files without
+`schedule_items` leave existing activities in place. A linked side competition
+must belong to the destination event.
 
 ## Side Comps
 

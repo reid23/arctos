@@ -64,6 +64,7 @@ class EventCard:
     registration_open: bool
     registration_label: str
     published: bool
+    historical: bool
     account_status: RegistrationSummary | None
 
 
@@ -255,7 +256,7 @@ def _card(event, leagues, counts, personal, user, organized_leagues, prefix) -> 
     league = leagues.get(event.league_id)
     # A published event does not publish the parent league's private title.
     visible_league = league if league and (league.published or league.url in organized_leagues) else None
-    visible_registration = bool(cfg and (not event.league_id or visible_league))
+    visible_registration = bool(not event.historical and cfg and (not event.league_id or visible_league))
     team_open = bool(visible_registration and cfg.team_registration_open)
     player_open = bool(visible_registration and cfg.player_registration_open)
     start = event.start_date.date()
@@ -270,7 +271,7 @@ def _card(event, leagues, counts, personal, user, organized_leagues, prefix) -> 
         league_name=visible_league.name if visible_league else None,
         league_url=local_url(f"leagues/{quote(visible_league.url, safe='')}", prefix) if visible_league else None,
         team_count=int(counts.get(_event_scope(event), 0)),
-        max_teams=cfg.n_max_teams if cfg else None,
+        max_teams=cfg.n_max_teams if cfg and not event.historical else None,
         registration_open=team_open or player_open,
         registration_label=(
             "Registration open"
@@ -282,7 +283,10 @@ def _card(event, leagues, counts, personal, user, organized_leagues, prefix) -> 
             else "Registration closed"
         ),
         published=bool(event.published),
-        account_status=_registration_summary(personal.get(_event_scope(event)), cfg, user),
+        historical=bool(event.historical),
+        account_status=None
+        if event.historical
+        else _registration_summary(personal.get(_event_scope(event)), cfg, user),
     )
 
 
@@ -379,6 +383,7 @@ class PublicPageService:
                     Tournament.league_id,
                     Tournament.registrable_config_id,
                     Tournament.published,
+                    Tournament.historical,
                 ),
                 joinedload(Tournament.registrable_config),
             )
@@ -437,7 +442,17 @@ class PublicPageService:
             )
         )
         scope_visible = not event.league_id or card.league_url is not None
-        if not scope_visible:
+        if event.historical:
+            action = (
+                Link(
+                    "Log in to claim a spot",
+                    local_url("login", prefix) + "?" + urlencode({"next": event_url}),
+                )
+                if not authenticated
+                else None
+            )
+            message = ""
+        elif not scope_visible:
             action = None
             message = "Registration is not available yet."
         elif registered:
@@ -462,20 +477,29 @@ class PublicPageService:
             )
         schedule_available = PermissionService.can_view_schedule(event, user)
         nav = [Link("Info", event_url), Link("Teams", f"{event_url}?tab=teams")]
-        if schedule_available:
+        if schedule_available and not event.historical:
             nav.append(Link("Schedule", f"{event_url}/schedule"))
         nav.append(Link("Results", f"{event_url}/results"))
         if event.bracket_published or organizer:
             nav.append(Link("Bracket", f"{event_url}/bracket"))
-        nav.append(Link("Side events", f"{event_url}?tab=sidecomps"))
+        if not event.historical:
+            nav.append(Link("Side events", f"{event_url}?tab=sidecomps"))
         organizer_links = ()
         if organizer:
             organizer_links = (
-                Link("Event settings", f"{event_url}/settings"),
-                Link("Edit schedule", f"{event_url}/schedule/edit"),
-                Link("Manage registrations", f"{scope_url}/manage"),
-                Link("Manage footage", f"{event_url}/manage-footage"),
-                Link("All organizer tools", f"{event_url}?tab=app"),
+                (
+                    Link("Event settings", f"{event_url}/settings"),
+                    Link("Edit records", f"{event_url}/records"),
+                    Link("Manage footage", f"{event_url}/manage-footage"),
+                )
+                if event.historical
+                else (
+                    Link("Event settings", f"{event_url}/settings"),
+                    Link("Edit schedule", f"{event_url}/schedule/edit"),
+                    Link("Manage registrations", f"{scope_url}/manage"),
+                    Link("Manage footage", f"{event_url}/manage-footage"),
+                    Link("All organizer tools", f"{event_url}?tab=app"),
+                )
             )
         # Banners are static-relative uploaded paths; never permit a script URL or
         # arbitrary remote origin to become part of this public document.
@@ -485,29 +509,37 @@ class PublicPageService:
             if not path.startswith("/") and ":" not in path and "\\" not in path and ".." not in path.split("/"):
                 banner_url = local_url("static/" + quote(path, safe="/"), prefix)
         facts = (
-            LabelValue(
-                "Team registration",
-                "Not available yet"
-                if not scope_visible
-                else "Open"
-                if cfg and cfg.team_registration_open
-                else "Closed",
-            ),
-            LabelValue(
-                "Player registration",
-                "Not available yet"
-                if not scope_visible
-                else "Open"
-                if cfg and cfg.player_registration_open
-                else "Closed",
-            ),
-            LabelValue("Team fee", _fee(cfg.team_reg_fee if cfg else None)),
-            LabelValue("Player fee", _fee(cfg.player_reg_fee if cfg else None)),
+            ()
+            if event.historical
+            else (
+                LabelValue(
+                    "Team registration",
+                    "Not available yet"
+                    if not scope_visible
+                    else "Open"
+                    if cfg and cfg.team_registration_open
+                    else "Closed",
+                ),
+                LabelValue(
+                    "Player registration",
+                    "Not available yet"
+                    if not scope_visible
+                    else "Open"
+                    if cfg and cfg.player_registration_open
+                    else "Closed",
+                ),
+                LabelValue("Team fee", _fee(cfg.team_reg_fee if cfg else None)),
+                LabelValue("Player fee", _fee(cfg.player_reg_fee if cfg else None)),
+            )
         )
         limits = (
-            LabelValue("Team capacity", _limit(cfg.n_max_teams if cfg else None)),
-            LabelValue("Players per roster", _limit(cfg.max_team_size_roster if cfg else None)),
-            LabelValue("Players on field", _limit(cfg.max_team_size_field if cfg else None)),
+            ()
+            if event.historical
+            else (
+                LabelValue("Team capacity", _limit(cfg.n_max_teams if cfg else None)),
+                LabelValue("Players per roster", _limit(cfg.max_team_size_roster if cfg else None)),
+                LabelValue("Players on field", _limit(cfg.max_team_size_field if cfg else None)),
+            )
         )
         return Ok(
             EventPage(
@@ -520,17 +552,18 @@ class PublicPageService:
                 message,
                 status,
                 Link("Manage roster", f"{scope_url}/invitations")
-                if registered and is_team(user) and scope_visible
+                if registered and is_team(user) and scope_visible and not event.historical
                 else None,
                 organizer_links,
-                bool(cfg and cfg.waiver_filepath),
-                safe_terms_url(cfg.terms_link if cfg else None),
-                bool(event.league_id),
+                bool(not event.historical and cfg and cfg.waiver_filepath),
+                safe_terms_url(cfg.terms_link if cfg and not event.historical else None),
+                bool(event.league_id and not event.historical),
                 banner_url,
                 schedule_available,
                 tuple(
-                    ["info", "teams", "sidecomps", "results"]
-                    + (["schedule"] if event.schedule_published else [])
+                    ["info", "teams", "results"]
+                    + (["sidecomps"] if not event.historical else [])
+                    + (["schedule"] if event.schedule_published and not event.historical else [])
                     + (["bracket"] if event.bracket_published else [])
                 )
                 if event.published

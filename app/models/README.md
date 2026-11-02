@@ -76,6 +76,21 @@ set_match_referees_from_csv(match, "Alice,Bob,Charlie")
 The helpers handle invariants (slot ordering, orphan-FK behaviour,
 unique constraints) so callers don't have to.
 
+### Placeholder teams
+
+A historical tournament (`Tournament.historical`) is entered after the
+fact, so its teams start as placeholder `Team` rows: no credentials, an
+id starting with `_`, and `placeholder_event` set to the tournament. They
+let matches and registrations use the normal `teams.id` foreign keys.
+
+- Lists of team accounts must filter `Team.placeholder_event.is_(None)`.
+- When a real team accepts a `TeamClaimInvitation`, or an organiser
+  approves a `TeamClaimRequest`, the placeholder is merged into that team
+  and deleted (`HistoricalClaimsService._merge_placeholder`). Un-claim
+  creates a new placeholder and moves this tournament's rows back onto it.
+- An unpublished historical tournament is visible only to its organisers.
+  It is omitted from profiles and from invitation lists.
+
 ## Creating a `Tournament`
 
 `Tournament` requires either `league_id` or `registrable_config_id`.

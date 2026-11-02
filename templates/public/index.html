@@ -20,7 +20,7 @@
         </nav>
         <details class="organize-menu">
           <summary class="organize-trigger" id="organize-trigger">Organize <i aria-hidden="true">{{ icon('chevron-down') }}</i></summary>
-          <div class="organize-dropdown" id="organize-options"><a class="dropdown-item" href="{{ request.script_root }}/create-event">Create an event</a><a class="dropdown-item" href="{{ request.script_root }}/leagues/new">Create a league</a></div>
+          <div class="organize-dropdown" id="organize-options"><a class="dropdown-item" href="{{ request.script_root }}/new-tournament">Create new Event</a><a class="dropdown-item" href="{{ request.script_root }}/new-historical-tournament">Log past Event</a></div>
         </details>
       </div>
       <form data-public-reading class="arctos-event-search" method="get" action="{{ home_url }}" role="search">
@@ -39,16 +39,16 @@
         <div class="card-body">
           <div class="arctos-card-statuses">
             {% if not card.published %}<span class="badge bg-warning text-dark" title="Draft · Only visible to organizers">Unpublished</span>{% endif %}
-            {% if page.view == 'past' %}<span class="badge arctos-badge-neutral">Past event</span>{% else %}<span class="badge {{ 'arctos-badge-success' if card.registration_open else 'arctos-badge-neutral' }}">{{ card.registration_label }}</span>{% endif %}
+            {% if card.historical %}<span class="badge arctos-badge-neutral" title="Results recorded after the tournament took place"><i aria-hidden="true">{{ icon('clock') }}</i>Historical</span>{% elif page.view == 'past' %}<span class="badge arctos-badge-neutral">Past event</span>{% else %}<span class="badge {{ 'arctos-badge-success' if card.registration_open else 'arctos-badge-neutral' }}">{{ card.registration_label }}</span>{% endif %}
           </div>
           <h2 class="arctos-card-title"><a data-public-reading href="{{ card.url }}">{{ card.name }}</a></h2>
           {% if card.league_name %}<a class="arctos-league-link" data-public-reading href="{{ card.league_url }}"><i aria-hidden="true">{{ icon('trophy') }}</i>{{ card.league_name }}</a>{% endif %}
           <ul class="arctos-meta-list">
             <li><i aria-hidden="true">{{ icon('location') }}</i><span>{{ card.location }}</span></li>
             <li><i aria-hidden="true">{{ icon('calendar') }}</i><span>{{ dates(card) }}</span></li>
-            <li><i aria-hidden="true">{{ icon('users') }}</i><span>{{ card.team_count }}{% if card.max_teams is not none %} / {{ card.max_teams }}{% endif %} teams registered</span></li>
+            <li><i aria-hidden="true">{{ icon('users') }}</i><span>{{ card.team_count }}{% if not card.historical %}{% if card.max_teams is not none %} / {{ card.max_teams }}{% endif %} teams registered{% else %} teams{% endif %}</span></li>
           </ul>
-          {{ personal_status(card.account_status) }}
+          {% if not card.historical %}{{ personal_status(card.account_status) }}{% endif %}
         </div>
         <div class="arctos-card-footer"><a class="btn btn-outline-secondary w-100" data-public-reading href="{{ card.url }}">{{ 'Preview event' if not card.published else 'View event' }} <i aria-hidden="true">{{ icon('arrow-right') }}</i></a></div>
       </article>

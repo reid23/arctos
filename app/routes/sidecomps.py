@@ -108,7 +108,22 @@ def _detail_payload(sc, registrants):
                 event_reg = SideCompService._eligible_player_registration_for_tournament(sc.event, current_user.id)
                 viewer_can_register = event_reg is not None
 
+    from models import ScheduleItem, Tournament
+    from app.services.schedule_item_service import schedule_item_payload
+
+    tournament = Tournament.query.get(sc.event)
+    schedule_visible = (
+        tournament is not None
+        and PermissionService.can_view_tournament(sc.event, current_user)
+        and PermissionService.can_view_schedule(tournament, current_user)
+    )
     return {
+        "schedule_items": [
+            schedule_item_payload(item)
+            for item in ScheduleItem.query.filter_by(sidecomp_id=sc.id).order_by(ScheduleItem.start_time).all()
+        ]
+        if schedule_visible
+        else [],
         **_sc_payload(sc),
         "registrants": [
             {
@@ -154,6 +169,7 @@ def create(tournament_url: str):
         description=data.get("description"),
         allowed_weapons=data.get("allowed_weapons"),
         only_show_top_n_results=data.get("only_show_top_n_results"),
+        schedule=data.get("schedule"),
     )
     return json_from_result(res, ok_to_payload=_sc_payload)
 

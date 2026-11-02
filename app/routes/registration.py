@@ -156,6 +156,22 @@ def deregister_team_from_tournament(tournament_url: str):
             403,
         )
 
+    tournament = Tournament.query.get(tournament_url)
+    if tournament is not None and tournament.historical:
+        from app.services.historical_claims_service import HistoricalClaimsService
+
+        result = HistoricalClaimsService.unclaim_team(
+            tournament_url,
+            current_user.id,
+            actor_user_id=current_user.id,
+            actor_user_type=current_user_type(),
+        )
+        return json_from_result(
+            result,
+            ok_to_payload=lambda _: {"message": "Spot un-claimed"},
+            err_status_code=400,
+        )
+
     res = RegistrationService.deregister_team(Scope.event(tournament_url), current_user.id)
     return json_from_result(
         res,
@@ -188,6 +204,17 @@ def deregister_player_from_tournament(tournament_url: str):
                 }
             ),
             403,
+        )
+
+    tournament = Tournament.query.get(tournament_url)
+    if tournament is not None and tournament.historical:
+        from app.services.historical_claims_service import HistoricalClaimsService
+
+        result = HistoricalClaimsService.unclaim_player(tournament_url, current_user.id)
+        return json_from_result(
+            result,
+            ok_to_payload=lambda _: {"message": "Spot un-claimed"},
+            err_status_code=400,
         )
 
     res = RegistrationService.deregister_player(Scope.event(tournament_url), current_user.id)
@@ -1180,10 +1207,11 @@ def update_my_player_registration(tournament_url):
         return jsonify({"error": "Only players can edit their registration"}), 400
 
     tournament = Tournament.query.filter_by(url=tournament_url).first_or_404()
-    cfg = get_registrable_config(tournament)
-    reg_open = bool(cfg.player_registration_open) if cfg else False
-    if not reg_open:
-        return jsonify({"error": "Registration changes are locked"}), 403
+    if not tournament.historical:
+        cfg = get_registrable_config(tournament)
+        reg_open = bool(cfg.player_registration_open) if cfg else False
+        if not reg_open:
+            return jsonify({"error": "Registration changes are locked"}), 403
 
     reg = player_registration_for_tournament(tournament, current_user.id)
 
@@ -1193,6 +1221,14 @@ def update_my_player_registration(tournament_url):
     data = request.get_json()
     if not data:
         return jsonify({"error": "Invalid JSON"}), 400
+
+    if tournament.historical:
+        if "jersey_name" in data:
+            reg.jersey_name = data["jersey_name"]
+        if "jersey_number" in data:
+            reg.jersey_number = data["jersey_number"]
+        db.session.commit()
+        return jsonify({"success": True})
 
     if "jersey_name" in data:
         reg.jersey_name = data["jersey_name"]
@@ -1261,10 +1297,11 @@ def update_my_team_registration(tournament_url):
         return jsonify({"error": "Only teams can edit their registration"}), 400
 
     tournament = Tournament.query.filter_by(url=tournament_url).first_or_404()
-    cfg = get_registrable_config(tournament)
-    reg_open = bool(cfg.team_registration_open) if cfg else False
-    if not reg_open:
-        return jsonify({"error": "Registration changes are locked"}), 403
+    if not tournament.historical:
+        cfg = get_registrable_config(tournament)
+        reg_open = bool(cfg.team_registration_open) if cfg else False
+        if not reg_open:
+            return jsonify({"error": "Registration changes are locked"}), 403
 
     reg = team_registration_for_tournament(tournament, current_user.id)
 

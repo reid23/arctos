@@ -19,6 +19,7 @@ from app.models.constants import (
     LONG_NAME_LEN,
     PHONE_LEN,
     SHORT_NAME_LEN,
+    URL_SLUG_LEN,
     USER_ID_LEN,
 )
 
@@ -112,6 +113,11 @@ class Team(UserMixin, db.Model):
         website: Team website URL.
         location: Team's city or region.
         about: Free-text team biography / description.
+        placeholder_event: For a placeholder team, the URL slug of the
+            historical tournament it stands in for; ``None`` for real team
+            accounts. Placeholders have no credentials, ids that start with
+            ``_`` (which real usernames cannot), and are merged into a real
+            team when it claims them.
     """
 
     __tablename__ = "teams"
@@ -129,6 +135,12 @@ class Team(UserMixin, db.Model):
     website = db.Column(db.String(LONG_NAME_LEN))
     location = db.Column(db.String(SHORT_NAME_LEN))
     about = db.Column(db.Text)
+    placeholder_event = db.Column(
+        db.String(URL_SLUG_LEN),
+        db.ForeignKey("tournaments.url"),
+        nullable=True,
+        index=True,
+    )
 
     def set_password(self, password: str) -> None:
         """Hash *password* and store it in :attr:`pw_hash`.

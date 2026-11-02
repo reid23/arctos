@@ -23,6 +23,9 @@ pub struct Tournament {
     pub end_date: Option<String>,
     pub location: Option<String>,
     pub published: bool,
+    /// A record of a past tournament whose results were entered after the event.
+    #[serde(default)]
+    pub historical: bool,
     pub n_max_teams: Option<u32>,
     #[serde(default)]
     pub schedule_published: bool,
@@ -70,13 +73,6 @@ pub struct LeagueRef {
     pub player_reg_fee: Option<f64>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TournamentsResponse {
-    pub tournaments: Vec<Tournament>,
-    pub team_counts: std::collections::HashMap<String, u32>,
-    pub user_reg_status: std::collections::HashMap<String, UserRegStatus>,
-}
-
 /// The same permission-filtered projection Flask renders into the public
 /// directory. Pagination, search, ordering and calendar boundaries stay on the
 /// server when the visitor enters the interactive application.
@@ -112,6 +108,8 @@ pub struct PublicEventCard {
     pub registration_open: bool,
     pub registration_label: String,
     pub published: bool,
+    #[serde(default)]
+    pub historical: bool,
     pub account_status: Option<PublicRegistrationSummary>,
 }
 
@@ -154,6 +152,7 @@ mod public_events_response_tests {
         assert_eq!(page.cards[0].date_label, "Jan 2, 2026");
         assert_eq!(page.cards[0].account_status.as_ref().unwrap().waiver_status.as_deref(), Some("Needs updating"));
         assert!(page.cards[0].max_teams.is_none());
+        assert!(!page.cards[0].historical);
     }
 }
 
@@ -186,6 +185,9 @@ pub struct TeamWithCount {
     pub player_count: u32,
     pub registered_at: Option<String>,
     pub profile_photo: Option<String>,
+    /// An unclaimed stand-in for a team at a historical tournament.
+    #[serde(default)]
+    pub placeholder: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -426,6 +428,8 @@ pub struct BracketTournamentBrief {
     pub name: String,
     #[serde(default)]
     pub bracket_published: bool,
+    #[serde(default)]
+    pub historical: bool,
 }
 
 /// Canvas layout only — ``GET /tournaments/:url/bracket`` and mutation responses.
@@ -735,6 +739,9 @@ pub struct TeamOption {
     pub shortname: Option<String>,
     #[serde(default)]
     pub profile_photo: Option<String>,
+    /// Placeholder ids are internal, so they are not shown next to the name.
+    #[serde(default)]
+    pub placeholder: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1030,6 +1037,8 @@ pub struct MatchDetailResponse {
     pub match_players: Vec<MatchPlayerForNotes>,
     #[serde(default)]
     pub penalty_types: Vec<PenaltyType>,
+    #[serde(default)]
+    pub historical: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -1260,6 +1269,8 @@ pub struct PlayerRegItem {
     pub waiver_required: bool,
     #[serde(default)]
     pub waiver_status: Option<String>,
+    #[serde(default)]
+    pub historical: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1310,6 +1321,9 @@ pub struct TeamProfileData {
     pub email: Option<String>,
     pub website: Option<String>,
     pub about: Option<String>,
+    /// Set when this is an unclaimed placeholder for a team at a historical tournament.
+    #[serde(default)]
+    pub placeholder_event: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1334,6 +1348,8 @@ pub struct TeamRegItem {
     pub paid: bool,
     pub amount_paid: f64,
     pub start_date: Option<String>,
+    #[serde(default)]
+    pub historical: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1551,6 +1567,8 @@ pub struct UpdateTeamRegistrationRequest {
 pub struct ScheduleSetupResponse {
     pub tournament: Tournament,
     pub matches: Vec<MatchSetupData>,
+    #[serde(default)]
+    pub schedule_items: Vec<ScheduleItemData>,
     pub fields: Vec<FieldSetupData>,
     pub tags: Vec<TagSetupData>,
     #[serde(default)]
@@ -1877,6 +1895,8 @@ pub struct SideCompRegistrant {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SideCompDetail {
+    #[serde(default)]
+    pub schedule_items: Vec<ScheduleItemData>,
     pub id: i32,
     pub event: String,
     pub name: String,
@@ -2142,4 +2162,205 @@ pub struct ConnectedApp {
     pub homepage_url: Option<String>,
     pub scopes: Vec<OAuthScope>,
     pub last_used_at: Option<String>,
+}
+
+// Historical tournaments
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ClaimInvitationTarget {
+    pub team_id: String,
+    pub team_name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HistoricalTeam {
+    pub id: String,
+    /// The name the team is listed under in this tournament.
+    pub name: String,
+    #[serde(default)]
+    pub shortname: Option<String>,
+    pub placeholder: bool,
+    /// The claiming team account's own name, once claimed.
+    pub account_name: Option<String>,
+    pub profile_photo: Option<String>,
+    pub match_count: u32,
+    pub roster_size: u32,
+    #[serde(default)]
+    pub roster_request_count: u32,
+    pub claim_invitation: Option<ClaimInvitationTarget>,
+    #[serde(default)]
+    pub claim_requests: Vec<ClaimRequest>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ClaimRequest {
+    pub id: u32,
+    pub team_id: String,
+    pub team_name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HistoricalReferee {
+    pub team_id: Option<String>,
+    pub initial: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HistoricalPoint {
+    pub set: u32,
+    /// `TEAM1` or `TEAM2`.
+    pub winner: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HistoricalMatch {
+    pub uuid: String,
+    pub name: String,
+    pub team1: Option<String>,
+    pub team2: Option<String>,
+    pub team1_initial: Option<String>,
+    pub team2_initial: Option<String>,
+    pub referees: Vec<HistoricalReferee>,
+    pub winner: Option<String>,
+    /// `SETS` or `STONES`.
+    #[serde(default)]
+    pub set_type: Option<String>,
+    pub points: Vec<HistoricalPoint>,
+}
+
+/// Body for creating or replacing a historical match. Team and referee
+/// slots are team ids or `Match::winner` / `Match::loser` references.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct HistoricalMatchInput {
+    pub name: String,
+    pub team1: String,
+    pub team2: String,
+    pub referees: Vec<String>,
+    pub winner: String,
+    /// `SETS` or `STONES`.
+    pub set_type: String,
+    pub points: Vec<HistoricalPoint>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct HistoricalRecordsResponse {
+    pub tournament: Tournament,
+    pub teams: Vec<HistoricalTeam>,
+    pub matches: Vec<HistoricalMatch>,
+    /// The match just created or saved, for match saves.
+    #[serde(default)]
+    pub match_uuid: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct HistoricalRosterPlayer {
+    pub id: u32,
+    pub player_id: String,
+    pub player_name: String,
+    pub profile_photo: Option<String>,
+    pub jersey_name: Option<String>,
+    pub jersey_number: Option<String>,
+    /// `CONFIRMED`, or `INVITED` until the player accepts.
+    pub status: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct HistoricalRosterResponse {
+    pub tournament: Tournament,
+    pub team_id: String,
+    pub team_name: String,
+    pub players: Vec<HistoricalRosterPlayer>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct InvitationTournament {
+    pub url: String,
+    pub name: String,
+    pub start_date: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct TeamClaimInvitationItem {
+    pub id: u32,
+    pub placeholder_name: String,
+    pub tournament: InvitationTournament,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct RosterInvitationItem {
+    pub id: u32,
+    pub team_id: String,
+    pub team_name: String,
+    pub jersey_name: Option<String>,
+    pub jersey_number: Option<String>,
+    pub tournament: InvitationTournament,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct OutgoingTeamClaimRequest {
+    pub id: u32,
+    pub placeholder_team_id: String,
+    pub placeholder_name: String,
+    pub tournament: InvitationTournament,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct OutgoingRosterRequest {
+    pub id: u32,
+    pub team_id: String,
+    pub team_name: String,
+    pub jersey_name: Option<String>,
+    pub jersey_number: Option<String>,
+    pub tournament: InvitationTournament,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct IncomingRosterRequest {
+    pub id: u32,
+    pub player_id: String,
+    pub player_name: String,
+    pub team_id: String,
+    pub team_name: String,
+    pub jersey_name: Option<String>,
+    pub jersey_number: Option<String>,
+    pub tournament: InvitationTournament,
+}
+
+#[derive(Clone, Debug, PartialEq, Default, Deserialize)]
+pub struct MyInvitationsResponse {
+    #[serde(default)]
+    pub team_claims: Vec<TeamClaimInvitationItem>,
+    #[serde(default)]
+    pub roster_invitations: Vec<RosterInvitationItem>,
+    #[serde(default)]
+    pub outgoing_team_requests: Vec<OutgoingTeamClaimRequest>,
+    #[serde(default)]
+    pub outgoing_roster_requests: Vec<OutgoingRosterRequest>,
+    #[serde(default)]
+    pub incoming_roster_requests: Vec<IncomingRosterRequest>,
+}
+
+/// A fixed-time activity or linked side competition, separate from match results.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ScheduleItemData {
+    pub id: i32,
+    pub sidecomp_id: Option<i32>,
+    pub title: String,
+    pub description: Option<String>,
+    pub start_time: String,
+    pub end_time: String,
+    pub field: Option<String>,
+    pub location: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SaveScheduleItem {
+    pub request_id: String,
+    pub sidecomp_id: Option<i32>,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub start_time: String,
+    pub end_time: String,
+    pub field: Option<String>,
+    pub location: Option<String>,
 }

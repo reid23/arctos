@@ -31,13 +31,13 @@ _APP_TOP_LEVEL = frozenset(
         "login",
         "register",
         "leagues",
-        "create-event",
         "players",
         "teams",
         "stones",
         "scoreboard-render",
         "about",
         "new-tournament",
+        "new-historical-tournament",
         "thanks",
         "docs.md",
         "privacy-policy.md",
@@ -56,7 +56,8 @@ _APP_NESTED = re.compile(
 )
 _EVENT_WORKFLOW = re.compile(
     r"^(?P<slug>[^/]+)/(?P<workflow>schedule(?:/edit)?|results|bracket|legacy-bracket|settings|register|"
-    r"manage|manage-footage|invitations|(?:start-match|run-match|finalize-match)/[^/]+|scoreboard|"
+    r"manage|manage-footage|invitations|records|rosters/[^/]+|"
+    r"(?:start-match|run-match|finalize-match)/[^/]+|scoreboard|"
     r"match(?:/[^/]+)?|sidecomps/(?:new|[0-9]+(?:/(?:edit|register-player-as-to|enter-results|results|"
     r"manage-results))?))$"
 )
@@ -70,7 +71,9 @@ def _common_context(*, anonymous: bool = False) -> dict:
     first = path.split("/", 1)[0]
     active_section = {"leagues": "Leagues", "teams": "Teams", "players": "Players", "stones": "Stones"}.get(first)
     if active_section is None and (
-        not path or first in {"create-event", "new-tournament"} or first not in _APP_TOP_LEVEL | _RESERVED_PREFIXES
+        not path
+        or first in {"new-tournament", "new-historical-tournament"}
+        or first not in _APP_TOP_LEVEL | _RESERVED_PREFIXES
     ):
         active_section = "Events"
     return {
@@ -97,7 +100,6 @@ def _common_context(*, anonymous: bool = False) -> dict:
         )
         if authenticated
         else local_url("login", prefix),
-        "create_event_url": local_url("create-event", prefix),
     }
 
 

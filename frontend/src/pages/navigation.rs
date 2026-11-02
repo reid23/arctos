@@ -17,7 +17,6 @@ pub(super) fn main_section(route: &Route) -> Option<MainSection> {
     match route {
         Route::Index { .. }
         | Route::IndexWithQuery { .. }
-        | Route::CreateEvent { .. }
         | Route::NewTournament { .. }
         | Route::TournamentHome { .. }
         | Route::TournamentHomeWithTab { .. }
@@ -31,6 +30,9 @@ pub(super) fn main_section(route: &Route) -> Option<MainSection> {
         | Route::Manage { .. }
         | Route::ManageFootage { .. }
         | Route::Invitations { .. }
+        | Route::HistoricalRecords { .. }
+        | Route::HistoricalRoster { .. }
+        | Route::NewHistoricalTournament { .. }
         | Route::StartMatch { .. }
         | Route::RunMatch { .. }
         | Route::FinalizeMatch { .. }
@@ -145,6 +147,9 @@ mod tests {
             Route::Manage { url: url.clone() },
             Route::ManageFootage { url: url.clone() },
             Route::Invitations { url: url.clone() },
+            Route::HistoricalRecords { url: url.clone() },
+            Route::HistoricalRoster { url: url.clone(), team_id: "otters".into() },
+            Route::NewHistoricalTournament {},
             Route::SideCompEdit {
                 url: url.clone(),
                 comp_id: 4,

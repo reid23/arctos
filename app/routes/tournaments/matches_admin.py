@@ -43,6 +43,7 @@ from app.utils.scheduling import (
 )
 from models import (
     Field,
+    ScheduleItem,
     Match,
     ScriptVariable,
     Tag,
@@ -509,6 +510,7 @@ def update_field_api(tournament_url, field_id):
     field.name = new_field_name
 
     if old_field_name != new_field_name:
+        ScheduleItem.query.filter_by(event=tournament_url, field=old_field_name).update({"field": new_field_name})
         matches_to_update = Match.query.filter_by(event=tournament_url, field=old_field_name).all()
         for match in matches_to_update:
             match.field = new_field_name
@@ -1293,6 +1295,7 @@ def delete_field_api(tournament_url, field_id):
     if Match.query.filter_by(event=tournament_url, field=field.name).first():
         return jsonify({"error": "Cannot delete field with matches"}), 400
 
+    ScheduleItem.query.filter_by(event=tournament_url, field=field.name).update({"field": None})
     db.session.delete(field)
     db.session.commit()
     return jsonify({"success": True})

@@ -1667,6 +1667,7 @@ fn BracketContent(url: String) -> Element {
     let mut bracket_published = use_signal(|| false);
     let mut team_options_sig = use_signal(|| Vec::<TeamOption>::new());
     let mut tags_sig = use_signal(|| Vec::<TagSetupData>::new());
+    let mut historical_sig = use_signal(|| false);
     let mut is_to_sig = use_signal(|| false);
     let mut interaction = use_signal(Interaction::default);
     // Hold-H hand tool: pointer motion pans without a button (trackpad-friendly).
@@ -1811,6 +1812,7 @@ fn BracketContent(url: String) -> Element {
             drop(borrow);
             team_options_sig.set(matches_resp.team_options.clone());
             tags_sig.set(matches_resp.tags.clone());
+            historical_sig.set(layout.tournament.historical);
             is_to_sig.set(layout.is_to);
             legacy_brackets.set(layout.legacy_brackets.clone());
             bracket_published.set(layout.bracket_published || layout.tournament.bracket_published);
@@ -2028,6 +2030,7 @@ fn BracketContent(url: String) -> Element {
                 let is_to = is_to_sig();
                 let team_options = team_options_sig();
                 let tags = tags_sig();
+                let historical = historical_sig();
                 let tournament_url = url.clone();
 
                 let matches_snap = local_matches();
@@ -2473,6 +2476,15 @@ fn BracketContent(url: String) -> Element {
                         }
                         div { class: "row",
                             div { class: "col-12",
+                                if historical {
+                                    p { class: "text-muted small mb-2",
+                                        "Wires follow the links entered with each match: "
+                                        code { "Semifinal 1 winner" }
+                                        " and "
+                                        code { "Semifinal 1 loser" }
+                                        ". Drag the matches to arrange the diagram. That does not change the matches."
+                                    }
+                                }
                                 div { class: "bracket-page-toolbar",
                                     if is_to {
                                         div { class: "form-check form-switch mb-0 ms-2",

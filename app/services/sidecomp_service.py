@@ -6,6 +6,8 @@ registration. Mirrors the style of :class:`~app.services.registration_service.Re
 
 from __future__ import annotations
 
+from sqlalchemy.exc import IntegrityError
+
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, List, Optional
 
@@ -252,6 +254,7 @@ class SideCompService:
         description: Optional[str] = None,
         allowed_weapons: Optional[list] = None,
         only_show_top_n_results: Optional[int] = None,
+        schedule: Optional[dict] = None,
     ) -> Result["SideComp", ArctosError]:
         """Create a new side competition for *tournament_url*.
 
@@ -268,6 +271,8 @@ class SideCompService:
             only_show_top_n_results: Optional public standings limit.
                 ``None`` means show all; ``0`` hides results. A selected
                 weapon shows its leader when public results are limited.
+            schedule: Optional start/end times, field, and location. The
+                competition and its schedule entry are saved together.
 
         Returns:
             :class:`~app.error_values.Ok` wrapping the persisted
@@ -306,6 +311,45 @@ class SideCompService:
             return top_n_res
         top_n_value = top_n_res.unwrap()
 
+        schedule_values = None
+        if schedule is not None:
+            from app.services.schedule_item_service import validate_schedule_item, schedule_item_matches
+
+            try:
+                schedule_values = validate_schedule_item(tournament_url, schedule, linked=True)
+            except ValueError as error:
+                return Err(ValidationError(str(error)))
+            from models import ScheduleItem
+
+            request_id = schedule_values.get("request_id")
+            existing_item = (
+                ScheduleItem.query.filter_by(event=tournament_url, request_id=request_id).first()
+                if request_id
+                else None
+            )
+
+            def creation_replay(item):
+                comp = item.sidecomp
+                if not (
+                    comp is not None
+                    and schedule_item_matches(item, schedule_values, new_sidecomp=True)
+                    and comp.name == name_value
+                    and comp.type == parsed_type
+                    and comp.description == description_value
+                    and comp.get_allowed_weapons() == parsed_weapons
+                    and comp.only_show_top_n_results == top_n_value
+                ):
+                    return Err(
+                        ValidationError(
+                            "This activity was already saved. Close this form and edit it from the schedule.",
+                            status_code=409,
+                        )
+                    )
+                return Ok(comp)
+
+            if existing_item:
+                return creation_replay(existing_item)
+
         sc = SideComp(
             event=tournament_url,
             name=name_value,
@@ -315,7 +359,25 @@ class SideCompService:
         )
         sc.set_allowed_weapons(parsed_weapons)
         db.session.add(sc)
-        db.session.commit()
+        if schedule_values is not None:
+            from models import ScheduleItem
+
+            db.session.flush()
+            schedule_values["sidecomp_id"] = sc.id
+            db.session.add(ScheduleItem(event=tournament_url, created_sidecomp=True, **schedule_values))
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            request_id = schedule_values.get("request_id") if schedule_values else None
+            existing_item = (
+                ScheduleItem.query.filter_by(event=tournament_url, request_id=request_id).first()
+                if request_id
+                else None
+            )
+            if existing_item:
+                return creation_replay(existing_item)
+            raise
         return Ok(sc)
 
     @staticmethod
@@ -529,8 +591,11 @@ class SideCompService:
 
         SideCompService._require_to(sc.event, actor_user_id, actor_user_type).Q()
 
-        SideCompRegistration.query.filter_by(comp=comp_id).delete(synchronize_session=False)
+        from models import ScheduleItem
+
+        ScheduleItem.query.filter_by(sidecomp_id=comp_id).delete(synchronize_session=False)
         SideCompResult.query.filter_by(comp=comp_id).delete(synchronize_session=False)
+        SideCompRegistration.query.filter_by(comp=comp_id).delete(synchronize_session=False)
         db.session.delete(sc)
         db.session.commit()
         return Ok(None)

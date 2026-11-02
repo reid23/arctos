@@ -175,8 +175,8 @@ def render_application_shell(context: dict | None = None) -> Response:
             "leagues": "Leagues",
             "stones": "Stones",
             "about": "About Arctos",
-            "create-event": "Create event",
             "new-tournament": "Create event",
+            "new-historical-tournament": "Log past event",
             "docs.md": "Documentation",
             "privacy-policy.md": "Privacy policy",
         }.get(request.path.strip("/").split("/", 1)[0], "Arctos")

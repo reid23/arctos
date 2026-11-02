@@ -216,6 +216,6 @@ and device coverage limits. Choose checks for the changed behavior instead of
 repeating every browser suite after a cosmetic edit.
 
 If requests fail, confirm Flask is listening on `127.0.0.1:5006` and that the
-browser requests `/_api/tournaments` through the frontend origin. Restart
+Events directory requests `/_api/public/events` through the frontend origin. Restart
 `dx serve` after proxy changes. For the normal proxy, leave `ARCTOS_CORS_DEV`
 unset or `0`; an HTTP LAN address cannot use secure cross-origin cookies.

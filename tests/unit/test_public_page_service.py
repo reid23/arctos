@@ -109,6 +109,33 @@ def test_directory_calendar_days_and_deterministic_order(test_db):
 
 
 @pytest.mark.unit
+def test_historical_event_projection_has_results_without_registration_controls(test_db, team, player):
+    event = make_event("recorded-cup", historical=True)
+    event.registrable_config.team_registration_open = True
+    db.session.add_all(
+        [
+            TeamRegistration(event=event.url, team=team.id, pseudonym="Recorded team", status="CONFIRMED"),
+            TO(user_id=player.id, user_type="player", event=event.url),
+        ]
+    )
+    db.session.commit()
+
+    card = PublicPageService.directory(view="past", today=date(2031, 1, 1), user=team).cards[0]
+    assert card.historical
+    assert card.team_count == 1
+    assert card.max_teams is None
+    assert not card.registration_open
+    assert card.account_status is None
+
+    detail = event_page(event.url, player)
+    assert {link.label for link in detail.nav_links} == {"Info", "Teams", "Results", "Bracket"}
+    assert detail.facts == detail.limits == ()
+    assert detail.registration_action is None
+    assert {link.label for link in detail.organizer_links} == {"Event settings", "Edit records", "Manage footage"}
+    assert event_page(event.url).registration_action.label == "Log in to claim a spot"
+
+
+@pytest.mark.unit
 def test_event_and_league_organizer_scopes_match_permission_service(test_db, player):
     league = make_league(published=False)
     make_event("league-draft", published=False, league=league)
