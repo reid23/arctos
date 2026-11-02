@@ -158,17 +158,25 @@ for acceptance checks and measured content readiness.
    `static/public/`. These CSS files are build outputs; prepare them before
    starting Flask in a fresh checkout.
 3. Stage the build with `uv run python scripts/stage_frontend.py
-   frontend/dist/public /srv/arctos/frontend`. Serialize deployments. Staging
-   validates the build, retains prior fingerprinted assets, publishes the
-   manifest last, and saves `index.html.previous` and
-   `arctos-assets.json.previous` for rollback. It sets directories within the
-   release to `0755` and files to `0644`. Provision ancestor directories so
-   nginx can traverse them; staging changes permissions only within its target.
-4. Set `ARCTOS_FRONTEND_DIST=/srv/arctos/frontend` in deployment and gunicorn
-   environments. Set `ARCTOS_PUBLIC_ORIGIN` to the trusted public origin.
-   Restart Flask with public rendering initially disabled.
+   frontend/dist/public /var/www/html/public` on the dev host. The production
+   destination is `/var/www/reid/arctos/public`. These paths match the
+   `FRONTEND_SERVER_ROOT` values in the deploy workflows, with `/public`
+   appended. Serialize deployments. Staging validates the build, retains prior
+   fingerprinted assets, publishes the manifest last, and saves
+   `index.html.previous` and `arctos-assets.json.previous` for rollback. It
+   sets directories within the release to `0755` and files to `0644`.
+   Provision ancestor directories so nginx can traverse them; staging changes
+   permissions only within its target.
+4. Set `ARCTOS_FRONTEND_DIST` in gunicorn to the staged directory: use
+   `/var/www/html/public` on dev or `/var/www/reid/arctos/public` on production.
+   Set `ARCTOS_PUBLIC_ORIGIN` to the trusted public origin. Restart Flask with
+   public rendering initially disabled.
 5. Adapt [the nginx example](../setup/nginx-public-html.conf.example) to the
-   host. Preserve API, upload, timeout, TLS, and external documentation rules.
+   host. The example's `root` is the dev directory; use
+   `/var/www/reid/arctos/public` for production. Port `8081` is the Flask
+   backend. When nginx terminates TLS, gunicorn must listen on plain HTTP at
+   `127.0.0.1:8081` (for example, `just bind=127.0.0.1:8081 certfile= keyfile=
+   run`). Preserve API, upload, timeout, TLS, and external documentation rules.
    Route documents to Flask. Serve `/assets/` from the prepared directory with
    correct MIME types, gzip negotiation, immutable caching, and missing-file
    404s. Route `/static/public/` through the presentation proxy or provide its
@@ -178,10 +186,11 @@ for acceptance checks and measured content readiness.
    externally against the target environment.
 
 `update.sh` prepares the manifest on each build. With `ARCTOS_FRONTEND_DIST`
-configured, it stages the build there; otherwise it copies to
-`FRONTEND_SERVER_ROOT`. Service environment and nginx changes remain explicit
-deployment steps. The implementation uses the existing Flask process and
-schema.
+configured in its environment, it stages the build there; otherwise it stages
+to `FRONTEND_SERVER_ROOT/public`. Both paths use the same staged deployment.
+The gunicorn `ARCTOS_FRONTEND_DIST` and nginx asset `root` must point to that
+same directory. Service environment and nginx changes remain explicit
+deployment steps. The implementation uses the existing Flask process and schema.
 
 Validate event/league visibility, real 404/503 responses, authorized previews,
 registration/login returns, Back/Forward, and dedicated scoreboard/OBS outputs.

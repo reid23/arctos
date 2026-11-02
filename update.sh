@@ -31,14 +31,8 @@ uv run python ../scripts/prepare_public_assets.py --dist dist/public
 if [ -n "${ARCTOS_FRONTEND_DIST:-}" ]; then
   uv run python ../scripts/stage_frontend.py dist/public "$ARCTOS_FRONTEND_DIST"
 else
-  # Preserve the existing deployment destination until the public document
-  # proxy and Flask's ARCTOS_FRONTEND_DIST are configured together.
-  # Keep copied assets readable by nginx without granting public write access.
-  (
-    umask 022
-    chmod -R u=rwX,go=rX dist/public
-    cp -r dist/public "$FRONTEND_SERVER_ROOT"
-  )
+  : "${FRONTEND_SERVER_ROOT:?Set FRONTEND_SERVER_ROOT or ARCTOS_FRONTEND_DIST}"
+  uv run python ../scripts/stage_frontend.py dist/public "${FRONTEND_SERVER_ROOT%/}/public"
 fi
 
 cd ..

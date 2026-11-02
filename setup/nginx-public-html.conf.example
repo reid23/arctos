@@ -1,10 +1,15 @@
 # Example server-block locations. Review against the host's existing TLS,
 # upload-size, API timeout, documentation and proxy configuration before use.
-# ARCTOS_FRONTEND_DIST in gunicorn must point to this same prepared directory.
+# This example uses the dev deploy root: FRONTEND_SERVER_ROOT=/var/www/html/
+# stages the prepared bundle in /var/www/html/public. For production, the
+# deploy workflow uses /var/www/reid/arctos/public instead. Set
+# ARCTOS_FRONTEND_DIST in gunicorn to the same directory as the root below.
+# Port 8081 is the Flask/gunicorn backend, not a frontend server. Configure
+# gunicorn for plain HTTP on 127.0.0.1:8081 when nginx terminates TLS.
 # This file intentionally installs no analytics or extra request logging.
 
 location ^~ /assets/ {
-    root /srv/arctos/frontend;
+    root /var/www/html/public;
     try_files $uri =404;
     types {
         application/wasm wasm;
