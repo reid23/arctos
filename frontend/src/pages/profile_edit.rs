@@ -23,6 +23,7 @@ struct ProfileEditData {
     banner: Option<String>,
     past_count: u32,
     has_password: bool,
+    owns_account: bool,
 }
 
 fn invalid_field() -> Option<(String, String)> {
@@ -53,7 +54,7 @@ pub fn ProfileEditPage(account_id: String, team: bool) -> Element {
         let Some(user) = account.read().as_ref().and_then(|value| value.as_ref().ok()).cloned() else {
             return Ok(None);
         };
-        if user.id != id || user.user_type != if team { "team" } else { "player" } {
+        if if team { !user.can_manage_team(&id) } else { user.id != id || user.user_type != "player" } {
             return Err("You can only edit your own profile.".to_string());
         }
         if team {
@@ -65,6 +66,7 @@ pub fn ProfileEditPage(account_id: String, team: bool) -> Element {
                     website: value.website.unwrap_or_default(), ..Default::default() },
                 photo: value.profile_photo, banner: value.banner_photo,
                 past_count: response.past_event_count, has_password: user.has_password,
+                owns_account: user.id == id && user.user_type == if team { "team" } else { "player" },
             }))
         } else {
             let response = api::player_profile(&id).await?;
@@ -75,6 +77,7 @@ pub fn ProfileEditPage(account_id: String, team: bool) -> Element {
                     pronouns: value.pronouns.unwrap_or_default(), pompfen: value.pompfen, ..Default::default() },
                 photo: value.profile_photo, banner: value.banner_photo,
                 past_count: response.past_event_count, has_password: user.has_password,
+                owns_account: user.id == id && user.user_type == if team { "team" } else { "player" },
             }))
         }
     }));
@@ -89,7 +92,7 @@ pub fn ProfileEditPage(account_id: String, team: bool) -> Element {
             };
         },
         Some(Err(api::AccountError::Unavailable)) => return rsx! { h1 { "Edit profile" } },
-        Some(Ok(user)) if user.id != account_id || user.user_type != if team { "team" } else { "player" } => {
+        Some(Ok(user)) if if team { !user.can_manage_team(&account_id) } else { user.id != account_id || user.user_type != "player" } => {
             let own_profile = if user.user_type == "team" {
                 Route::TeamProfilePage { id: user.id.clone() }
             } else { Route::PlayerProfilePage { id: user.id.clone() } };
@@ -295,11 +298,11 @@ fn ProfileEditForm(account_id: String, team: bool, data: ProfileEditData) -> Ele
                     }
                 }
             }
-            details { class: "profile-account-settings",
+            if data.owns_account { details { class: "profile-account-settings",
                 summary { "Account settings" }
                 if data.has_password { ChangePasswordCard {} }
                 ConnectedAppsCard {}
-            }
+            } }
         }
     }
 }

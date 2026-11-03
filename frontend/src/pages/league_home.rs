@@ -1,7 +1,8 @@
 use crate::api;
 use crate::components::{
-    EditRegistrationContext, EditRegistrationModal, EventAbout, EventBannerPhoto, EventHeader, EventTab, EventTabs,
-    EventTeamsList, LeagueRegistrationButtons, Modal, ModalKind, OrganizerTools,
+    EditRegistrationContext, EditRegistrationModal, EventAbout, EventBannerPhoto, EventHeader,
+    EventTab, EventTabs, EventTeamsList, LeagueRegistrationButtons, Modal, ModalKind,
+    OrganizerTools,
 };
 use crate::types::{ToEntry, User};
 use crate::Route;
@@ -14,11 +15,15 @@ fn get_query_param(name: &str) -> Option<String> {
     params.get(name)
 }
 
-fn is_current_user_to(me: Option<&Result<User, api::AccountError>>, to_entries: &[ToEntry]) -> bool {
+fn is_current_user_to(
+    me: Option<&Result<User, api::AccountError>>,
+    to_entries: &[ToEntry],
+) -> bool {
     me.and_then(|r| r.as_ref().ok()).map_or(false, |u| {
-        to_entries
-            .iter()
-            .any(|e| e.user_id == u.id && e.user_type == u.user_type)
+        to_entries.iter().any(|e| {
+            (e.user_id == u.id && e.user_type == u.user_type)
+                || (e.user_type == "team" && u.can_manage_team(&e.user_id))
+        })
     })
 }
 
@@ -73,9 +78,12 @@ pub fn LeagueHomeContent(
     let league_url_for_warning = league_url.clone();
     let waiver_warning = use_resource(move || {
         let lu = league_url_for_warning.clone();
-        let player_signed_in = matches!(me_res.read().as_ref(), Some(Ok(user)) if user.user_type == "player");
+        let player_signed_in =
+            matches!(me_res.read().as_ref(), Some(Ok(user)) if user.user_type == "player");
         async move {
-            if !player_signed_in { return false; }
+            if !player_signed_in {
+                return false;
+            }
             match api::get_my_player_registration_league(&lu).await {
                 Ok(res) => res.waiver_required && !res.waiver_signature_valid,
                 Err(_) => false,
@@ -123,9 +131,14 @@ pub fn LeagueHomeContent(
         }
     });
 
-    let active_tab = initial_tab.as_deref().filter(|tab| {
-        matches!(*tab, "events" | "teams") || (content.is_some() && (section_title.is_some() || *tab == "results"))
-    }).unwrap_or("info").to_string();
+    let active_tab = initial_tab
+        .as_deref()
+        .filter(|tab| {
+            matches!(*tab, "events" | "teams")
+                || (content.is_some() && (section_title.is_some() || *tab == "results"))
+        })
+        .unwrap_or("info")
+        .to_string();
     let backend = api::base_url();
     let scroll_ready = has_overview && me_res.read().is_some()
         && val.read().as_ref().is_some_and(|result| result.as_ref().is_ok_and(|details| {
@@ -161,6 +174,15 @@ pub fn LeagueHomeContent(
                     registration_open: d.league.team_registration_open || d.league.player_registration_open,
                     badge_league_url: None,
                     badge_name: None,
+                    organizer_tools: viewer_is_to.then(|| rsx! {
+                        OrganizerTools {
+                            label: "Organize".to_string(),
+                            Link { to: Route::LeagueSettings { league_url: league_url.clone() }, class: "dropdown-item", i { class: "fas fa-sliders-h", aria_hidden: "true" } "Settings" }
+                            Link { to: Route::LeagueNewTournament { league_url: league_url.clone() }, class: "dropdown-item", i { class: "fas fa-plus", aria_hidden: "true" } "Add Event" }
+                            Link { to: Route::LeagueManage { league_url: league_url.clone() }, class: "dropdown-item", i { class: "fas fa-users", aria_hidden: "true" } "Registration Management" }
+                            button { r#type: "button", class: "dropdown-item text-danger", onclick: move |_| { delete_modal_open.set(true); delete_confirm_url.set(String::new()); delete_error.set(None); }, i { class: "fas fa-trash", aria_hidden: "true" } "Delete League" }
+                        }
+                    }),
                     if content.is_none() || active_tab == "results" {
                     div { class: "event-participant-actions", role: "group", aria_label: "League registration",
                     if (d.league.team_registration_open || d.league.player_registration_open) || d.is_current_team_registered || d.is_current_player_registered {
@@ -179,15 +201,8 @@ pub fn LeagueHomeContent(
                     } else {
                         button { r#type: "button", class: "btn btn-secondary", disabled: true, "Registration closed" }
                     }
+                    crate::pages::ManagedTeamActions { kind: "leagues".to_string(), slug: league_url.clone() }
                     }
-                    }
-                    if viewer_is_to {
-                        OrganizerTools {
-                            Link { to: Route::LeagueSettings { league_url: league_url.clone() }, class: "dropdown-item", i { class: "fas fa-sliders-h", aria_hidden: "true" } "Settings" }
-                            Link { to: Route::LeagueNewTournament { league_url: league_url.clone() }, class: "dropdown-item", i { class: "fas fa-plus", aria_hidden: "true" } "Add Event" }
-                            Link { to: Route::LeagueManage { league_url: league_url.clone() }, class: "dropdown-item", i { class: "fas fa-users", aria_hidden: "true" } "Registration Management" }
-                            button { r#type: "button", class: "dropdown-item text-danger", onclick: move |_| { delete_modal_open.set(true); delete_confirm_url.set(String::new()); delete_error.set(None); }, i { class: "fas fa-trash", aria_hidden: "true" } "Delete League" }
-                        }
                     }
                 }
                 if show_registration_success() {

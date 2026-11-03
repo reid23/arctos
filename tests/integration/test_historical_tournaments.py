@@ -2,7 +2,7 @@
 
 import pytest
 
-from models import Player, Team, db
+from models import Player, Team, TeamClaimRequest, TeamManager, TeamRegistration, db
 from tests.utils import login_as
 
 
@@ -191,6 +191,80 @@ def test_team_claims_a_placeholder(client, historical_url, real_team):
         registration["event"] == historical_url and registration["historical"]
         for registration in profile["registrations"]
     )
+
+
+@pytest.mark.integration
+def test_team_manager_handles_historical_claim_and_roster(client, historical_url, real_team, roster_player):
+    alpha = team_id_named(editor_state(client, historical_url), "Alpha")
+    publish(client, historical_url)
+    invitation = client.put(
+        f"/_api/tournaments/{historical_url}/records/teams/{alpha}/claim-invitation",
+        json={"team_id": real_team.id},
+    ).get_json()["teams"]
+    assert next(team for team in invitation if team["id"] == alpha)["claim_invitation"]
+
+    manager = Player(id="team-manager", name="Team Manager")
+    outsider = Player(id="other-player", name="Other Player")
+    db.session.add_all([manager, outsider])
+    db.session.flush()
+    db.session.add(TeamManager(team_id=real_team.id, player_id=manager.id))
+    db.session.commit()
+
+    login_as(client, outsider)
+    assert client.get(f"/_api/me/invitations?team_id={real_team.id}").status_code == 403
+    login_as(client, manager)
+    assert client.get("/_api/me/invitations").get_json()["team_claims"] == []
+    [claim] = client.get(f"/_api/me/invitations?team_id={real_team.id}").get_json()["team_claims"]
+    login_as(client, outsider)
+    assert client.post(f"/_api/me/invitations/claims/{claim['id']}/accept").status_code == 403
+
+    login_as(client, manager)
+    assert client.post(f"/_api/me/invitations/claims/{claim['id']}/accept").status_code == 200
+    registrations = client.get(f"/_api/teams/{real_team.id}/management").get_json()["registrations"]
+    assert next(row for row in registrations if row["slug"] == historical_url)["historical"] is True
+    edit_url = f"/_api/tournaments/{historical_url}/registrations/team/me?team_id={real_team.id}"
+    assert client.get(edit_url).status_code == 200
+    assert client.put(edit_url, json={"shortname": "ALP"}).status_code == 200
+    assert client.get(edit_url).get_json()["registration"]["shortname"] == "ALP"
+    generic_registration = f"/_api/teams/{real_team.id}/events/{historical_url}/registration"
+    assert client.get(generic_registration).status_code == 400
+    assert client.delete(generic_registration).status_code == 400
+    assert client.get(f"/_api/teams/{real_team.id}/events/{historical_url}/roster-candidates").status_code == 400
+    roster_url = f"/_api/tournaments/{historical_url}/rosters/{real_team.id}"
+    invited = client.post(f"{roster_url}/players", json={"player_id": roster_player.id})
+    assert invited.status_code == 200
+    assert invited.get_json()["players"][0]["status"] == "INVITED"
+    assert client.get(roster_url).status_code == 200
+    assert client.delete(f"{roster_url}/players/{roster_player.id}").status_code == 200
+
+    login_as(client, roster_player)
+    assert (
+        client.post(f"/_api/tournaments/{historical_url}/roster-requests", json={"team_id": real_team.id}).status_code
+        == 200
+    )
+    login_as(client, manager)
+    registrations = client.get(f"/_api/teams/{real_team.id}/management").get_json()["registrations"]
+    assert next(row for row in registrations if row["slug"] == historical_url)["pending_count"] == 1
+    [request] = client.get(f"/_api/me/invitations?team_id={real_team.id}").get_json()["incoming_roster_requests"]
+    assert client.post(f"{roster_url}/requests/{request['id']}/approve").status_code == 200
+
+    unclaimed = client.post(f"/_api/{historical_url}/deregister-team", data={"team_id": real_team.id})
+    assert unclaimed.status_code == 200
+    placeholder = TeamRegistration.query.filter_by(event=historical_url, pseudonym="Alpha").one().team
+    assert placeholder != real_team.id
+    assert (
+        client.post(
+            f"/_api/tournaments/{historical_url}/claim-requests",
+            json={"team_id": real_team.id, "placeholder_team_id": placeholder},
+        ).status_code
+        == 200
+    )
+    assert TeamClaimRequest.query.filter_by(requesting_team=real_team.id).count() == 1
+    assert (
+        client.delete(f"/_api/tournaments/{historical_url}/claim-requests/mine?team_id={real_team.id}").status_code
+        == 200
+    )
+    assert TeamClaimRequest.query.filter_by(requesting_team=real_team.id).count() == 0
 
 
 @pytest.mark.integration

@@ -3,15 +3,19 @@ use crate::components::{
     ActionRecovery, EditRegistrationContext, EditRegistrationModal, EventAbout, EventBannerPhoto, EventHeader, EventTab, EventTabs,
     EventTeamsList, LeagueRegistrationButtons, Modal, ModalKind, OrganizerTools, PendingInvitations, PompfenIcon,
 };
-use crate::types::{TeamWithCount, ToEntry, User};
+use crate::types::{MyInvitationsResponse, TeamWithCount, ToEntry, User};
 use crate::Route;
 use dioxus::prelude::*;
 
-fn is_current_user_to(me: Option<&Result<User, api::AccountError>>, to_entries: &[ToEntry]) -> bool {
+fn is_current_user_to(
+    me: Option<&Result<User, api::AccountError>>,
+    to_entries: &[ToEntry],
+) -> bool {
     me.and_then(|r| r.as_ref().ok()).map_or(false, |u| {
-        to_entries
-            .iter()
-            .any(|e| e.user_id == u.id && e.user_type == u.user_type)
+        to_entries.iter().any(|e| {
+            (e.user_id == u.id && e.user_type == u.user_type)
+                || (e.user_type == "team" && u.can_manage_team(&e.user_id))
+        })
     })
 }
 
@@ -68,6 +72,7 @@ pub fn TournamentHomeContent(
     });
     let mut show_edit_player_modal = use_signal(|| false);
     let mut show_edit_team_modal = use_signal(|| false);
+    let mut edit_team_id = use_signal(|| None::<String>);
     let mut show_league_edit_modal = use_signal(|| false);
     let url_for_delete_confirm = url.clone();
     let mut about_markdown = use_signal(|| Option::<String>::None);
@@ -105,7 +110,11 @@ pub fn TournamentHomeContent(
         let u = url_for_sidecomps.clone();
         let has_overview = show_overview();
         async move {
-            if has_overview { api::sidecomps_list(&u).await } else { Ok(Vec::new()) }
+            if has_overview {
+                api::sidecomps_list(&u).await
+            } else {
+                Ok(Vec::new())
+            }
         }
     });
 
@@ -172,6 +181,28 @@ pub fn TournamentHomeContent(
                     badge_league_url: league.map(|l| l.league_url.clone()),
                     badge_name: league.map(|l| l.name.clone()),
                     historical: d.tournament.historical,
+                    organizer_tools: viewer_is_to.then(|| rsx! {
+                        OrganizerTools {
+                            label: "Organize".to_string(),
+                            if d.tournament.historical {
+                                Link { to: Route::TournamentSettings { url: url.clone() }, class: "dropdown-item", i { class: "fas fa-sliders-h", aria_hidden: "true" } "Settings" }
+                                Link { to: Route::HistoricalRecords { url: url.clone() }, class: "dropdown-item", i { class: "fas fa-history", aria_hidden: "true" } "Edit records" }
+                            } else {
+                                Link { to: Route::TournamentSettings { url: url.clone() }, class: "dropdown-item", i { class: "fas fa-sliders-h", aria_hidden: "true" } "Settings" }
+                                Link { to: Route::ScheduleEdit { url: url.clone() }, class: "dropdown-item", i { class: "far fa-calendar-alt", aria_hidden: "true" } "Edit Schedule" }
+                                if let Some(l) = league {
+                                    Link { to: Route::LeagueManage { league_url: l.league_url.clone() }, class: "dropdown-item", i { class: "fas fa-users", aria_hidden: "true" } "Registration Management" }
+                                } else {
+                                    Link { to: Route::Manage { url: url.clone() }, class: "dropdown-item", i { class: "fas fa-users", aria_hidden: "true" } "Registration Management" }
+                                }
+                            }
+                            Link { to: Route::ManageFootage { url: url.clone() }, class: "dropdown-item", i { class: "fas fa-video", aria_hidden: "true" } "Manage Footage" }
+                            if !d.tournament.historical {
+                                Link { to: Route::SideCompNew { url: url.clone() }, class: "dropdown-item", i { class: "fas fa-plus", aria_hidden: "true" } "Add side competition" }
+                            }
+                            button { r#type: "button", class: "dropdown-item text-danger", onclick: move |_| { delete_modal_open.set(true); delete_confirm_url.set(String::new()); delete_error.set(None); }, i { class: "fas fa-trash", aria_hidden: "true" } "Delete Tournament" }
+                        }
+                    }),
                     if (content.is_none() || matches!(active_tab.as_str(), "schedule" | "results" | "bracket")) && !matches!(me_res.read().as_ref(), Some(Err(api::AccountError::Unavailable))) {
                     div { class: "event-participant-actions", role: "group", aria_label: if d.tournament.historical { "Historical participation" } else { "Event registration" },
                     if d.tournament.historical {
@@ -179,21 +210,14 @@ pub fn TournamentHomeContent(
                             span { class: "text-muted", role: "status", "Loading…" }
                         } else if let Some(current_user) = me_res.read().as_ref().and_then(|r| r.as_ref().ok()).cloned() {
                             {
-                                let is_team_account = current_user.user_type == "team";
                                 rsx! {
                                     HistoricalParticipation {
                                         url: url.clone(),
                                         teams: d.teams_with_counts.clone(),
                                         current_user,
-                                        team_registered: d.is_current_team_registered,
                                         player_registered: d.is_current_player_registered,
-                                        on_edit: move |_| {
-                                            if is_team_account {
-                                                show_edit_team_modal.set(true);
-                                            } else {
-                                                show_edit_player_modal.set(true);
-                                            }
-                                        },
+                                        on_edit_team: move |team_id| { edit_team_id.set(Some(team_id)); show_edit_team_modal.set(true); },
+                                        on_edit_player: move |_| show_edit_player_modal.set(true),
                                         on_changed: move |_| refresh.set(refresh() + 1),
                                         lists_revision: refresh,
                                     }
@@ -283,29 +307,10 @@ pub fn TournamentHomeContent(
                             button { r#type: "button", class: "btn btn-secondary", disabled: true, "Registration closed" }
                         }
                     }
+                    if !d.tournament.historical {
+                        crate::pages::ManagedTeamActions { kind: if league.is_some() { "leagues".to_string() } else { "events".to_string() }, slug: league.map_or(url.clone(), |l| l.league_url.clone()) }
                     }
                     }
-
-                    if viewer_is_to {
-                        OrganizerTools {
-                            if d.tournament.historical {
-                                Link { to: Route::TournamentSettings { url: url.clone() }, class: "dropdown-item", i { class: "fas fa-sliders-h", aria_hidden: "true" } "Settings" }
-                                Link { to: Route::HistoricalRecords { url: url.clone() }, class: "dropdown-item", i { class: "fas fa-history", aria_hidden: "true" } "Edit records" }
-                            } else {
-                                Link { to: Route::TournamentSettings { url: url.clone() }, class: "dropdown-item", i { class: "fas fa-sliders-h", aria_hidden: "true" } "Settings" }
-                                Link { to: Route::ScheduleEdit { url: url.clone() }, class: "dropdown-item", i { class: "far fa-calendar-alt", aria_hidden: "true" } "Edit Schedule" }
-                                if let Some(l) = league {
-                                    Link { to: Route::LeagueManage { league_url: l.league_url.clone() }, class: "dropdown-item", i { class: "fas fa-users", aria_hidden: "true" } "Registration Management" }
-                                } else {
-                                    Link { to: Route::Manage { url: url.clone() }, class: "dropdown-item", i { class: "fas fa-users", aria_hidden: "true" } "Registration Management" }
-                                }
-                            }
-                            Link { to: Route::ManageFootage { url: url.clone() }, class: "dropdown-item", i { class: "fas fa-video", aria_hidden: "true" } "Manage Footage" }
-                            if !d.tournament.historical {
-                                Link { to: Route::SideCompNew { url: url.clone() }, class: "dropdown-item", i { class: "fas fa-plus", aria_hidden: "true" } "Add side competition" }
-                            }
-                            button { r#type: "button", class: "dropdown-item text-danger", onclick: move |_| { delete_modal_open.set(true); delete_confirm_url.set(String::new()); delete_error.set(None); }, i { class: "fas fa-trash", aria_hidden: "true" } "Delete Tournament" }
-                        }
                     }
                 }
                 EventTabs {
@@ -521,11 +526,12 @@ pub fn TournamentHomeContent(
             }
 
             if show_edit_team_modal() {
-                if let Some(Ok(me)) = me_res.read().as_ref() {
+                if let Some(Ok(_me)) = me_res.read().as_ref() {
                     EditRegistrationModal {
                         context: EditRegistrationContext::Tournament { tournament_url: url.clone() },
-                        user_type: me.user_type.clone(),
+                        user_type: "team".to_string(),
                         historical: d.tournament.historical,
+                        team_id: if d.tournament.historical { edit_team_id() } else { None },
                         on_close: move |_| show_edit_team_modal.set(false),
                         on_success: move |_| {
                             show_edit_team_modal.set(false);
@@ -652,11 +658,13 @@ pub fn TournamentHomeContent(
     }
 }
 
-
 /// Shared by the overview and edit page; a failed DELETE is checked before retry.
 #[component]
 pub(super) fn SideCompDeleteAction(
-    url: String, comp_id: i32, name: String, on_deleted: EventHandler<()>,
+    url: String,
+    comp_id: i32,
+    name: String,
+    on_deleted: EventHandler<()>,
     #[props(default = false)] full_label: bool,
     #[props(default = false)] disabled: bool,
     #[props(default)] on_blocked: EventHandler<bool>,
@@ -665,18 +673,35 @@ pub(super) fn SideCompDeleteAction(
     let mut confirm_delete = use_signal(|| false);
     let accessible_name = format!("Delete {name}");
     let mut action = move |send_delete: bool| {
-        if disabled || state().busy() || (send_delete && state().blocks_write()) { return; }
-        state.set(if send_delete { ActionRecovery::Pending } else { ActionRecovery::Checking });
+        if disabled || state().busy() || (send_delete && state().blocks_write()) {
+            return;
+        }
+        state.set(if send_delete {
+            ActionRecovery::Pending
+        } else {
+            ActionRecovery::Checking
+        });
         on_blocked.call(true);
         let url = url.clone();
         spawn(async move {
-            let result = if send_delete { api::sidecomp_delete(comp_id).await.map(|_| ()) } else { Err("Delete was not confirmed.".into()) };
-            if result.is_ok() { on_deleted.call(()); return; }
+            let result = if send_delete {
+                api::sidecomp_delete(comp_id).await.map(|_| ())
+            } else {
+                Err("Delete was not confirmed.".into())
+            };
+            if result.is_ok() {
+                on_deleted.call(());
+                return;
+            }
             let message = result.err().unwrap_or_default();
             state.set(ActionRecovery::Checking);
-            let present = api::sidecomps_list(&url).await.map(|rows| rows.iter().any(|row| row.id == comp_id));
+            let present = api::sidecomps_list(&url)
+                .await
+                .map(|rows| rows.iter().any(|row| row.id == comp_id));
             let next = ActionRecovery::after_check(present, &message);
-            if next == ActionRecovery::Idle { on_deleted.call(()); }
+            if next == ActionRecovery::Idle {
+                on_deleted.call(());
+            }
             on_blocked.call(next.blocks_write());
             state.set(next);
         });
@@ -726,42 +751,106 @@ fn HistoricalParticipation(
     url: String,
     teams: Vec<TeamWithCount>,
     current_user: User,
-    team_registered: bool,
     player_registered: bool,
-    on_edit: EventHandler<()>,
+    on_edit_team: EventHandler<String>,
+    on_edit_player: EventHandler<()>,
     on_changed: EventHandler<()>,
     lists_revision: Signal<u32>,
 ) -> Element {
     let mut refresh = use_signal(|| 0u32);
     let mut error = use_signal(|| None::<String>);
+    let mut responding = use_signal(|| false);
     let mut show_claim = use_signal(|| false);
     let mut show_played = use_signal(|| false);
     let mut chosen_team = use_signal(String::new);
+    let mut selected_managed_team = use_signal(String::new);
     let mut jersey_name = use_signal(String::new);
     let mut jersey_number = use_signal(String::new);
-    let url_for_invites = url.clone();
-    let invitations = use_resource(move || {
+    let mut managed_teams = Vec::<(String, String)>::new();
+    if current_user.user_type == "team" {
+        managed_teams.push((current_user.id.clone(), current_user.name.clone()));
+    }
+    for team in &current_user.managed_teams {
+        if !managed_teams.iter().any(|(id, _)| id == &team.id) {
+            managed_teams.push((team.id.clone(), team.name.clone()));
+        }
+    }
+    let selected_team_id = managed_teams
+        .iter()
+        .find(|(id, _)| *id == selected_managed_team())
+        .or_else(|| managed_teams.first())
+        .map(|(id, _)| id.clone());
+    let selected_team_name = managed_teams
+        .iter()
+        .find(|(id, _)| Some(id.as_str()) == selected_team_id.as_deref())
+        .map(|(_, name)| name.clone())
+        .unwrap_or_default();
+    let team_registered = selected_team_id
+        .as_ref()
+        .is_some_and(|id| teams.iter().any(|team| !team.placeholder && &team.team_id == id));
+    let managed_teams_for_invites = managed_teams.clone();
+    let url_for_team_invites = url.clone();
+    let mut team_invitations = use_resource(move || {
         let _ = refresh();
         let _ = lists_revision();
-        let tournament_url = url_for_invites.clone();
-        async move { api::my_invitations(Some(&tournament_url)).await }
+        let selected = selected_managed_team();
+        let team_id = managed_teams_for_invites
+            .iter()
+            .find(|(id, _)| *id == selected)
+            .or_else(|| managed_teams_for_invites.first())
+            .map(|(id, _)| id.clone());
+        let tournament_url = url_for_team_invites.clone();
+        async move {
+            let response = match team_id.as_deref() {
+                Some(id) => api::managed_team_invitations(Some(&tournament_url), id).await,
+                None => Ok(MyInvitationsResponse::default()),
+            };
+            (team_id, response)
+        }
     });
-    let data = invitations.read().as_ref().and_then(|result| result.as_ref().ok()).cloned();
-    let outgoing_team = data.as_ref().and_then(|invitations| invitations.outgoing_team_requests.first().cloned());
-    let outgoing_player = data.as_ref().and_then(|invitations| invitations.outgoing_roster_requests.first().cloned());
+    let url_for_personal_invites = url.clone();
+    let is_player = current_user.user_type == "player";
+    let mut personal_invitations = use_resource(move || {
+        let _ = refresh();
+        let _ = lists_revision();
+        let tournament_url = url_for_personal_invites.clone();
+        async move {
+            if is_player {
+                api::my_invitations(Some(&tournament_url)).await
+            } else {
+                Ok(MyInvitationsResponse::default())
+            }
+        }
+    });
+    let team_data = team_invitations.read().as_ref()
+        .filter(|(id, _)| id == &selected_team_id)
+        .and_then(|(_, result)| result.as_ref().ok()).cloned();
+    let team_query_failed = team_invitations.read().as_ref()
+        .filter(|(id, _)| id == &selected_team_id)
+        .is_some_and(|(_, result)| result.is_err());
+    let team_query_loading = team_invitations.read().as_ref()
+        .is_none_or(|(id, _)| id != &selected_team_id);
+    let personal_data = personal_invitations.read().as_ref().and_then(|result| result.as_ref().ok()).cloned();
+    let outgoing_team = team_data.as_ref().and_then(|data| data.outgoing_team_requests.first().cloned());
+    let outgoing_player = personal_data.as_ref().and_then(|data| data.outgoing_roster_requests.first().cloned());
+    let has_claim_invitation = team_data.as_ref().is_some_and(|data| !data.team_claims.is_empty());
+    let pending_roster_requests = team_data.as_ref().map_or(0, |data| data.incoming_roster_requests.len());
     let placeholders: Vec<TeamWithCount> = teams.iter().filter(|team| team.placeholder).cloned().collect();
     let first_placeholder = placeholders.first().map(|team| team.team_id.clone());
     let first_team = teams.first().map(|team| team.team_id.clone());
     let url_for_claim = url.clone();
+    let team_for_claim = selected_team_id.clone();
     let url_for_roster_request = url.clone();
-    let is_team = current_user.user_type == "team";
-    let is_player = current_user.user_type == "player";
 
     let url_for_withdraw_team = url.clone();
+    let team_for_withdraw = selected_team_id.clone();
     let withdraw_team = move |_| {
+        if responding() { return; }
+        let Some(team_id) = team_for_withdraw.clone() else { return; };
+        responding.set(true);
         let tournament_url = url_for_withdraw_team.clone();
         spawn(async move {
-            match api::historical_withdraw_claim_request(&tournament_url).await {
+            match api::historical_withdraw_claim_request(&tournament_url, &team_id).await {
                 Ok(()) => {
                     error.set(None);
                     refresh.set(refresh() + 1);
@@ -769,10 +858,13 @@ fn HistoricalParticipation(
                 }
                 Err(message) => error.set(Some(message)),
             }
+            responding.set(false);
         });
     };
     let url_for_withdraw_player = url.clone();
     let withdraw_player = move |_| {
+        if responding() { return; }
+        responding.set(true);
         let tournament_url = url_for_withdraw_player.clone();
         spawn(async move {
             match api::historical_withdraw_roster_request(&tournament_url).await {
@@ -783,6 +875,7 @@ fn HistoricalParticipation(
                 }
                 Err(message) => error.set(Some(message)),
             }
+            responding.set(false);
         });
     };
 
@@ -790,17 +883,40 @@ fn HistoricalParticipation(
         if let Some(message) = error() {
             div { class: "alert alert-danger py-2 mb-0", role: "alert", "{message}" }
         }
-        if is_team {
+        if let Some(selected_id) = selected_team_id.as_ref() {
+            if managed_teams.len() > 1 {
+                label { class: "visually-hidden", r#for: "historical-managed-team", "Team to manage" }
+                select {
+                    id: "historical-managed-team",
+                    class: "form-select",
+                    aria_label: "Team to manage",
+                    value: selected_id.clone(),
+                    onchange: move |event| { selected_managed_team.set(event.value()); error.set(None); show_claim.set(false); },
+                    for (id, name) in &managed_teams {
+                        option { value: id.clone(), "{name}" }
+                    }
+                }
+            }
+            if is_player {
+                span { class: "small text-muted", "For {selected_team_name}" }
+            }
             if team_registered {
                 Link {
-                    to: Route::HistoricalRoster { url: url.clone(), team_id: current_user.id.clone() },
+                    to: Route::HistoricalRoster { url: url.clone(), team_id: selected_id.clone() },
                     class: "btn btn-outline-secondary",
-                    "Manage roster"
+                    if pending_roster_requests > 0 { "Manage roster ({pending_roster_requests} requests)" } else { "Manage roster" }
                 }
-                button { r#type: "button", class: "btn btn-outline-secondary", aria_haspopup: "dialog", onclick: move |_| on_edit.call(()), "Edit registration" }
+                button { r#type: "button", class: "btn btn-outline-secondary", aria_haspopup: "dialog", onclick: { let selected_id = selected_id.clone(); move |_| on_edit_team.call(selected_id.clone()) }, "Edit registration" }
             } else if let Some(request) = outgoing_team {
                 span { "Waiting for the organizers to approve your claim of {request.placeholder_name}." }
-                button { r#type: "button", class: "btn btn-outline-secondary", onclick: withdraw_team, "Withdraw request" }
+                button { r#type: "button", class: "btn btn-outline-secondary", disabled: responding(), onclick: withdraw_team, "Withdraw request" }
+            } else if has_claim_invitation {
+                span { class: "small text-muted", "You have an invitation to claim a team on the event overview." }
+            } else if team_query_failed {
+                span { role: "alert", "Could not load team claims." }
+                button { r#type: "button", class: "btn btn-outline-secondary", onclick: move |_| team_invitations.restart(), "Retry" }
+            } else if team_query_loading {
+                span { role: "status", "Loading team claims…" }
             } else {
                 button {
                     r#type: "button",
@@ -818,12 +934,21 @@ fn HistoricalParticipation(
                     "Claim a team"
                 }
             }
-        } else if is_player {
+        }
+        if is_player {
+            if selected_team_id.is_some() {
+                span { class: "small text-muted", "For you" }
+            }
             if player_registered {
-                button { r#type: "button", class: "btn btn-outline-secondary", aria_haspopup: "dialog", onclick: move |_| on_edit.call(()), "Edit registration" }
+                button { r#type: "button", class: "btn btn-outline-secondary", aria_haspopup: "dialog", onclick: move |_| on_edit_player.call(()), "Edit my registration" }
             } else if let Some(request) = outgoing_player {
                 span { "Waiting for approval to join {request.team_name}." }
-                button { r#type: "button", class: "btn btn-outline-secondary", onclick: withdraw_player, "Withdraw request" }
+                button { r#type: "button", class: "btn btn-outline-secondary", disabled: responding(), onclick: withdraw_player, "Withdraw request" }
+            } else if personal_invitations.read().as_ref().is_some_and(Result::is_err) {
+                span { role: "alert", "Could not load your roster requests." }
+                button { r#type: "button", class: "btn btn-outline-secondary", onclick: move |_| personal_invitations.restart(), "Retry" }
+            } else if personal_invitations.read().is_none() {
+                span { role: "status", "Loading your roster requests…" }
             } else {
                 button {
                     r#type: "button",
@@ -854,7 +979,7 @@ fn HistoricalParticipation(
                     button { r#type: "button", class: "btn-close", aria_label: "Close", onclick: move |_| show_claim.set(false) }
                 }
                 div { class: "modal-body",
-                    p { id: "historical-claim-description", class: "text-muted", "Pick the team you were. An organizer approves the claim." }
+                    p { id: "historical-claim-description", class: "text-muted", "Request a spot for {selected_team_name}. An organizer approves the claim." }
                     select {
                         id: "historical-claim-team",
                         class: "form-select",
@@ -870,11 +995,15 @@ fn HistoricalParticipation(
                     button {
                         r#type: "button",
                         class: "btn btn-primary",
+                        disabled: responding(),
                         onclick: move |_| {
+                            if responding() { return; }
+                            let Some(team_id) = team_for_claim.clone() else { return; };
+                            responding.set(true);
                             let tournament_url = url_for_claim.clone();
                             let placeholder_team_id = chosen_team();
                             spawn(async move {
-                                match api::historical_request_claim(&tournament_url, &placeholder_team_id).await {
+                                match api::historical_request_claim(&tournament_url, &team_id, &placeholder_team_id).await {
                                     Ok(()) => {
                                         error.set(None);
                                         show_claim.set(false);
@@ -883,6 +1012,7 @@ fn HistoricalParticipation(
                                     }
                                     Err(message) => error.set(Some(message)),
                                 }
+                                responding.set(false);
                             });
                         },
                         "Request claim"

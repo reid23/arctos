@@ -56,7 +56,9 @@ pub fn EventTabs(prefix: String, label: String, active: String, tabs: Vec<EventT
                 document.fonts().ready(),
             ) {
                 spawn(async move {
-                    if wasm_bindgen_futures::JsFuture::from(fonts_ready).await.is_ok()
+                    if wasm_bindgen_futures::JsFuture::from(fonts_ready)
+                        .await
+                        .is_ok()
                         && link.is_connected()
                         && link.get_attribute("aria-current").as_deref() == Some("page")
                     {
@@ -124,6 +126,8 @@ pub struct EventHeaderProps {
     pub badge_name: Option<String>,
     #[props(default)]
     pub historical: bool,
+    #[props(default)]
+    pub organizer_tools: Option<Element>,
     pub children: Element,
 }
 
@@ -164,15 +168,23 @@ pub fn EventHeader(props: EventHeaderProps) -> Element {
                             i { class: "fas fa-history me-1", aria_hidden: "true" }
                             "Historical"
                         }
-                    } else if props.registration_open {
-                        span { class: "event-registration-badge", i { class: "fas fa-circle-check", aria_hidden: "true" } "Registration open" }
                     }
                     if let (Some(url), Some(name)) = (props.badge_league_url, props.badge_name) {
                         Link { to: Route::LeagueHome { league_url: url }, class: "arctos-event-league-badge", "Part of {name}" }
                     }
                 }
             }
-            div { class: "event-hero-actions", {props.children} }
+            div { class: "event-header-controls",
+                if props.registration_open && !props.historical {
+                    div { class: "event-header-status",
+                        span { class: "event-registration-badge", i { class: "fas fa-circle-check", aria_hidden: "true" } "Registration open" }
+                    }
+                }
+                if let Some(tools) = props.organizer_tools {
+                    div { class: "event-header-organizer", {tools} }
+                }
+                div { class: "event-hero-actions", {props.children} }
+            }
             }
         }
     }
