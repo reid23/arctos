@@ -17,8 +17,9 @@ fn next_url_from_query() -> Option<String> {
     }
 }
 
-/// A full page load, since navigating within the app would drop `next`'s query string.
+/// Keep the initialized app for internal return URLs, including their raw query.
 pub(super) fn go_to_next(next: &str) {
+    if crate::public_navigation::navigate_within_application(next) { return; }
     #[cfg(target_arch = "wasm32")]
     if let Some(window) = web_sys::window() {
         let _ = window.location().assign(next);

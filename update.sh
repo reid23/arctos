@@ -27,8 +27,13 @@ fi
 
 cd frontend
 dx bundle --web --release
-chmod -R a+rwX dist/public
-cp -r dist/public $FRONTEND_SERVER_ROOT
+uv run python ../scripts/prepare_public_assets.py --dist dist/public
+if [ -n "${ARCTOS_FRONTEND_DIST:-}" ]; then
+  uv run python ../scripts/stage_frontend.py dist/public "$ARCTOS_FRONTEND_DIST"
+else
+  : "${FRONTEND_SERVER_ROOT:?Set FRONTEND_SERVER_ROOT or ARCTOS_FRONTEND_DIST}"
+  uv run python ../scripts/stage_frontend.py dist/public "${FRONTEND_SERVER_ROOT%/}/public"
+fi
 
 cd ..
 

@@ -8,6 +8,7 @@ by the ``ARCTOS_PORT`` environment variable (default ``5006``).
 Example:
     Run the development server::
 
+        just public-assets
         ARCTOS_PORT=5006 python run_app.py
 
     Then point the Dioxus frontend at it::

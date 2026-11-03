@@ -58,7 +58,11 @@ impl DirectoryState {
         if matches!(directory, Directory::Events | Directory::Leagues) && self.past {
             params.push("view=past".to_string());
         }
-        if directory == Directory::Players && self.page > 1 {
+        if matches!(
+            directory,
+            Directory::Events | Directory::Leagues | Directory::Players
+        ) && self.page > 1
+        {
             params.push(format!("page={}", self.page));
         }
         if params.is_empty() {
@@ -92,7 +96,14 @@ fn url_state(url: &str, directory: Directory) -> DirectoryState {
         match decode(key).as_str() {
             "q" => search = value,
             "view" if matches!(directory, Directory::Events | Directory::Leagues) => view = value,
-            "page" if directory == Directory::Players => page = value,
+            "page"
+                if matches!(
+                    directory,
+                    Directory::Events | Directory::Leagues | Directory::Players
+                ) =>
+            {
+                page = value
+            }
             _ => {}
         }
     }
@@ -107,6 +118,11 @@ fn owned_url_state(url: &str, directory: Directory) -> Option<DirectoryState> {
 
 fn live_flush_is_current(url: &str, directory: Directory, committed: &DirectoryState) -> bool {
     owned_url_state(url, directory).as_ref() == Some(committed)
+}
+
+fn edited_search_state(committed: &DirectoryState, draft: &str) -> Option<DirectoryState> {
+    (draft.trim() != committed.search)
+        .then(|| DirectoryState::new(draft, if committed.past { "past" } else { "" }, ""))
 }
 
 #[derive(Clone, Copy)]
@@ -178,12 +194,11 @@ impl DirectoryControls {
         if !live_flush_is_current(&router().full_route_string(), self.directory, &committed) {
             return;
         }
-        let next = DirectoryState::new(
-            &self.search.peek(),
-            if committed.past { "past" } else { "" },
-            "",
-        );
-        self.commit(next, false);
+        // Blurring an unchanged search on a later page is not a new search.
+        // Reset pagination only when the draft query actually changes.
+        if let Some(next) = edited_search_state(&committed, &self.search.peek()) {
+            self.commit(next, false);
+        }
     }
 }
 
@@ -215,10 +230,14 @@ pub(super) fn use_directory(directory: Directory, live: bool) -> DirectoryContro
         };
         if let Some(original) = startup_repair.write().take() {
             // Router construction rewrites typed query arguments before child
-            // hooks run. Recover the pre-Router raw query once, never on Back.
-            controls
-                .navigator
-                .replace(url_state(&original, directory).url(directory));
+            // hooks run in the ordinary SPA. Recover that raw state once,
+            // never on Back. The public-document history adapter already
+            // preserves the original URL, including an explicit app=1 escape;
+            // do not navigate away merely to normalize an unchanged state.
+            let original_state = url_state(&original, directory);
+            if original_state != next {
+                controls.navigator.replace(original_state.url(directory));
+            }
             return;
         }
         // Own commits have already updated state. Do not trim/replace the input
@@ -240,7 +259,6 @@ pub(super) fn use_directory(directory: Directory, live: bool) -> DirectoryContro
             controls.flush();
         }
     });
-    use_hook(install_scroll_observer);
     controls
 }
 
@@ -252,9 +270,22 @@ pub(super) fn use_directory_scroll(controls: DirectoryControls, ready: bool) {
     let ready = ready
         && owned_url_state(&url, controls.directory)
             .is_some_and(|current| *controls.state.read() == current);
+    use_page_scroll(ready);
+}
+
+/// Restore only a pending browser Back/Forward position after this route's
+/// actual content has rendered. Layout installs the observer with `false` so
+/// navigation through routes without async restoration (such as Login) cannot
+/// miss the next popstate. It never moves focus or scrolls on ordinary pushes.
+pub(super) fn use_page_scroll(ready: bool) {
+    use_hook(install_scroll_observer);
+    let url = router().full_route_string();
     use_effect(use_reactive(&(url, ready), move |(url, ready)| {
         if ready {
-            restore_pending_scroll(url.split('#').next().unwrap_or(&url).to_string());
+            let prefix = dioxus::history::history()
+                .current_prefix()
+                .unwrap_or_default();
+            restore_pending_scroll(format!("{prefix}{}", url.split('#').next().unwrap_or(&url)));
         }
     }));
 }
@@ -422,6 +453,52 @@ mod tests {
     }
 
     #[test]
+    fn reading_directory_pagination_preserves_encoded_search_and_date_filter() {
+        for directory in [Directory::Events, Directory::Leagues] {
+            let path = directory.path();
+            let current = url_state(
+                &format!("{path}?q=A%26B+Cup&view=past&page=2#event-discovery"),
+                directory,
+            );
+            assert_eq!(current, DirectoryState::new("A&B Cup", "past", "2"));
+            assert_eq!(url_state(&current.url(directory), directory), current);
+            let next = DirectoryState {
+                page: 3,
+                ..current.clone()
+            };
+            assert_eq!(
+                next.url(directory),
+                format!("{path}?q=A%26B%20Cup&view=past&page=3")
+            );
+            assert!(live_flush_is_current(
+                &current.url(directory),
+                directory,
+                &current
+            ));
+            assert!(!live_flush_is_current(
+                &next.url(directory),
+                directory,
+                &current
+            ));
+        }
+    }
+
+    #[test]
+    fn unchanged_search_keeps_page_but_edited_search_starts_first_page() {
+        let current = DirectoryState::new("Cup", "past", "3");
+        assert_eq!(edited_search_state(&current, "Cup"), None);
+        assert_eq!(edited_search_state(&current, " Cup "), None);
+        assert_eq!(
+            edited_search_state(&current, "Open"),
+            Some(DirectoryState::new("Open", "past", "1"))
+        );
+        assert_eq!(
+            edited_search_state(&current, ""),
+            Some(DirectoryState::new("", "past", "1"))
+        );
+    }
+
+    #[test]
     fn malformed_filters_and_pages_are_safe() {
         for page in ["", "0", "-1", "no", "999999999999999999999"] {
             assert_eq!(
@@ -440,7 +517,7 @@ mod tests {
         let state = DirectoryState::new("A&B + # / café", "past", "2");
         assert_eq!(
             state.url(Directory::Events),
-            "/?q=A%26B%20%2B%20%23%20%2F%20caf%C3%A9&view=past"
+            "/?q=A%26B%20%2B%20%23%20%2F%20caf%C3%A9&view=past&page=2"
         );
         assert_eq!(
             state.url(Directory::Players),
@@ -466,7 +543,7 @@ mod tests {
         );
         assert_eq!(
             url_state("/?q=%FF%ZZ&view=unknown&page=99", Directory::Events),
-            DirectoryState::new("%FF%ZZ", "", "")
+            DirectoryState::new("%FF%ZZ", "", "99")
         );
         assert_eq!(
             url_state("/teams?q=%23rank%3D1&view=past&page=9", Directory::Teams),
@@ -494,9 +571,9 @@ mod tests {
     fn browser_history_routes_restore_independent_directory_states() {
         for (url, directory, expected) in [
             (
-                "/?q=Open&view=past",
+                "/?q=Open&view=past&page=3",
                 Directory::Events,
-                DirectoryState::new("Open", "past", ""),
+                DirectoryState::new("Open", "past", "3"),
             ),
             (
                 "/leagues?q=Coast&view=past",

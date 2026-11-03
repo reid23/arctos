@@ -30,20 +30,26 @@ their code.
 ## Architecture
 
 ```
-┌─────────────────┐   /_api/...    ┌──────────────────┐    SQLAlchemy   ┌──────────┐
-│  Dioxus SPA     │ ────────────-> │  Flask backend   │ ─────────────-> │  SQLite  │
-│  (Rust -> WASM) │                │  (gunicorn)      │                 │  (WAL)   │
-│  served by      │                │                  │                 └──────────┘
-│  nginx at /     │                │  blueprints,     │
-└─────────────────┘                │  services,       │
-                                   │  models          │
-                                   └──────────────────┘
+Browser ── document request ──> nginx ──> Flask ──> services ──> SQLite
+                                           │
+                          public HTML <─────┤  Events / Leagues / Info (opt-in)
+                          app shell   <─────┘  interactive workflow routes
+                               │
+                          Dioxus / Wasm ── /_api/ ──> Flask
 ```
 
-- **Frontend.** Single-page app written in Rust with [Dioxus],
-  compiled to WebAssembly. nginx serves the SPA at `/`.
+- **Frontend.** Rust with [Dioxus], compiled to WebAssembly. Flask can serve
+  Events, Leagues, and their published Info pages as readable HTML, with
+  startup feedback for interactive destinations. Dioxus owns interactive
+  workflows and retains one runtime across ordinary navigation. The existing
+  design and appearance preferences span both surfaces.
+  `ARCTOS_PUBLIC_HTML_ENABLED` defaults to `0`; the
+  [entry architecture](docs/public-html-architecture.md) describes configuration
+  and behavior.
 - **Backend.** Python 3.12 [Flask] app run under gunicorn. Serves
-  the application API, authentication callbacks, and static files. The SPA uses
+  public page documents, the application shell, APIs, authentication callbacks,
+  and static files. Flask retains permission checks, publication decisions,
+  data selection, and HTTP status handling. The application uses
   routes under `/_api/`; `/api/` (no underscore) is
   the public, OAuth-authenticated API for third-party apps, documented
   in [`docs/developers.md`](docs/developers.md).
@@ -66,12 +72,13 @@ their code.
 |------|-----------------|
 | [`app/`](app/README.md) | Flask backend: factory, blueprints, services, models, utils. |
 | [`app/models/`](app/models/README.md) | SQLAlchemy ORM models - the canonical domain shape. |
-| [`app/routes/`](app/routes/README.md) | Flask blueprints: the SPA's `/_api/` routes and the public `/api/`. |
+| [`app/routes/`](app/routes/README.md) | Flask document routes, application `/_api/`, and public `/api/` blueprints. |
+| `templates/public/` | Jinja documents using the app's existing design for public reading and contextual startup. |
 | [`app/services/`](app/services/README.md) | Application-workflow code that routes call into. |
 | [`app/utils/`](app/utils/README.md) | Helpers: scheduling, the ASS Lisp DSL, datetime, video pipeline. |
 | [`app/domain/`](app/domain/README.md) | Domain enums (`MatchStatus`, `ScheduleType`, ...). |
 | [`app/serializers/`](app/serializers/README.md) | DB -> JSON shape conversion. |
-| [`frontend/`](frontend/README.md) | Rust/Dioxus SPA. |
+| [`frontend/`](frontend/README.md) | Rust/Dioxus application workflows and shared theme tokens. |
 | [`tests/`](tests/README.md) | Pytest suite. See also [`TESTING.md`](TESTING.md). |
 | [`scripts/`](scripts/README.md) | Operational scripts (backups, data-quality checks). |
 | [`migrations/`](migrations/README.md) | Alembic migrations. |
@@ -98,7 +105,7 @@ Top-level files:
 
 The frontend uses Rust and Dioxus. Python packages are locked in `uv.lock` and
 Rust packages in `frontend/Cargo.lock`. Bootstrap 5.3.3 and Font Awesome 6.0.0
-are bundled locally with their licenses, so styling does not require a CDN.
+are bundled locally with their licenses and served by Arctos.
 
 Supported platforms: macOS on Apple Silicon and Ubuntu/Debian on x86_64
 (Windows users can use WSL).
@@ -145,6 +152,7 @@ migrated. Fresh demos use the current models.
 To preview an existing versioned SQLite snapshot, run the backend with:
 
 ```bash
+just public-assets
 uv run python -m scripts.dev_demo --snapshot /absolute/path/to/snapshot.db
 ```
 
@@ -216,6 +224,16 @@ gunicorn using `.env`; it defaults to TLS on port 8081. Use
 `just certfile= keyfile= run` when TLS is handled by your reverse proxy.
 `just certs` creates local self-signed certificates if needed.
 
+Enable `ARCTOS_PUBLIC_HTML_ENABLED=1` with the prepared frontend and proxy
+configuration in the [deployment guide](docs/DEPLOY.md#public-html-rollout).
+Flask serves event and league information, search, pagination, and links in the
+first response while Dioxus starts in the background. Interactive workflows
+use the running application.
+
+See the [architecture](docs/public-html-architecture.md) for data and navigation
+ownership and [verification](docs/public-html-verification.md) for external
+browser checks and measured loading improvements.
+
 ## Daily commands
 
 | Goal | Command |
@@ -236,8 +254,10 @@ with a `fail_under = 30` floor and branch coverage enabled. See
 
 ## Conventions
 
-- **Application API routes live under `/_api/`.** Browser page routes are
-  declared in `frontend/src/main.rs`. The public API for third-party clients
+- **Application API routes live under `/_api/`.** Application page routes are
+  declared in `frontend/src/main.rs`; `app/routes/public_pages.py` classifies
+  document requests between public HTML and the existing application routes.
+  Keep these route contracts aligned. The public API for third-party clients
   lives under `/api/` and uses bearer tokens.
 - **Check each endpoint's response contract.** Application APIs generally
   return JSON; validation, authentication, permissions, missing records, and
@@ -249,9 +269,10 @@ with a `fail_under = 30` floor and branch coverage enabled. See
   [`app/error_values.py`](app/error_values.py).
 - **Money is `Numeric(10, 2)`, never `float`.** Penny-exact
   reconciliation across many partial payments requires exact decimals.
-- **Times are stored as naive UTC.** The model layer converts
+- **Timestamp instants are stored as naive UTC.** The model layer converts
   client-supplied times to UTC and strips the tzinfo before persisting.
-  The frontend handles timezone display.
+  The frontend handles timezone display. Event start/end calendar dates
+  preserve the entered day; do not shift them as timestamp instants.
 - **Join tables for multi-value data.** `MatchReferee`, `MatchPlayer`,
   `HeadRefAllowList`, `CameraTimepoint` are accessed through the
   helpers in [`app/services/dual_write.py`](app/services/dual_write.py),

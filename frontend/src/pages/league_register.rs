@@ -1,5 +1,5 @@
 use crate::api;
-use crate::components::TeamRegistrationHelpModal;
+use crate::components::{has_existing_registration, EditRegistrationContext, ExistingRegistration, TeamRegistrationHelpModal};
 use dioxus::prelude::*;
 use wasm_bindgen::JsCast;
 
@@ -33,6 +33,21 @@ pub fn LeagueRegister(league_url: String) -> Element {
     });
     let me = crate::auth::use_account();
     let mut show_help_modal = use_signal(|| false);
+
+    if let Some(Ok(detail)) = data.value().read().as_ref() {
+        if let Some(Ok(user)) = me.read().as_ref() {
+            if has_existing_registration(&user.user_type, detail.is_current_team_registered, detail.is_current_player_registered) {
+                return rsx! {
+                    ExistingRegistration {
+                        context: EditRegistrationContext::League { league_url: league_url.clone() },
+                        user_type: user.user_type.clone(),
+                        return_to: crate::Route::LeagueHome { league_url: league_url.clone() },
+                        roster: (user.user_type == "team").then(|| crate::Route::LeagueInvitations { league_url: league_url.clone() }),
+                    }
+                };
+            }
+        }
+    }
 
     rsx! {
         div { class: "row justify-content-center form-page",
@@ -345,7 +360,7 @@ pub fn LeagueRegister(league_url: String) -> Element {
                         }
                     }
                 } else if let Some(Err(e)) = data.value().read().as_ref() {
-                    div { class: "alert alert-danger", "{e}" }
+                    div { class: "alert alert-danger", role: "alert", "{e}" }
                 } else {
                     p { class: "text-muted", "Loading…" }
                 }

@@ -411,8 +411,8 @@ class SmokeCheck:
                     ]
                     await expect(
                         page.locator(
-                            '.app-header a[href="/create-event"], .app-header a[href="/new-tournament"], '
-                            '.app-header a[href="/leagues/new"]'
+                            '.app-header a[href="/new-tournament"], '
+                            '.app-header a[href="/new-historical-tournament"], .app-header a[href="/leagues/new"]'
                         )
                     ).to_have_count(0)
                     await expect(page.locator(".arctos-event-card").first).to_be_visible()

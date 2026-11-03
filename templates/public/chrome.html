@@ -1,0 +1,41 @@
+{% from 'public/icons.html' import icon %}
+{% macro site_header(main_id='page-content') -%}
+<a class="skip-link public-skip" href="#{{ main_id }}">Skip to content</a>
+<header class="app-header">
+  <div class="app-header-inner">
+    <a class="app-brand" data-public-reading href="{{ home_url }}" aria-label="Arctos events"><img class="brand-mark public-mark-light" src="{{ public_asset('arctos-light.png') }}" alt="" width="34" height="34"><img class="brand-mark public-mark-dark" src="{{ public_asset('arctos-dark.png') }}" alt="" width="34" height="34"><span>Arctos</span></a>
+    <nav class="app-nav" aria-label="Main navigation">
+      {% set icons = {'Events':'calendar','Leagues':'trophy','Teams':'users','Players':'players','Stones':'stopwatch'} %}
+      {% for link in global_nav %}<a{% if link.label in ['Events', 'Leagues'] %} data-public-reading{% endif %} class="app-nav-link{% if link.label == active_section %} active{% endif %}" href="{{ link.url }}"{% if link.label == active_section %} aria-current="{{ 'page' if directory_page else 'true' }}"{% endif %}><i aria-hidden="true">{{ icon(icons[link.label]) }}</i><span>{{ link.label }}</span></a>{% endfor %}
+    </nav>
+    <div class="app-header-actions">
+      {% if authenticated %}
+      <details class="account-menu public-menu">
+        <summary class="app-icon-button account-trigger" aria-label="Account: {{ account_label }}">{{ icon('user-regular') }}</summary>
+        <div class="account-dropdown profile-dropdown"><div class="account-identity"><strong>{{ account_label }}</strong></div><a class="dropdown-item" href="{{ account_url }}">My profile</a><a class="dropdown-item" href="{{ request.script_root }}/developers/apps">Developer apps</a></div>
+      </details>
+      {% else %}<a class="btn btn-outline-secondary app-login" href="{{ login_url }}">Log in</a>{% endif %}
+      <details class="account-menu utility-menu public-menu" data-public-utility>
+        <summary class="app-icon-button account-trigger utility-trigger" aria-label="More options">{{ icon('ellipsis') }}</summary>
+        <div class="account-dropdown utility-dropdown" data-public-utility-links>
+          <button type="button" class="dropdown-item" data-public-open-appearance hidden>Appearance</button>
+          <a class="dropdown-item" href="{{ request.script_root }}/docs.md">Help &amp; documentation</a>
+          <a class="dropdown-item" href="{{ request.script_root }}/about">About Arctos</a>
+        </div>
+        <section class="appearance-panel" id="public-appearance" aria-labelledby="public-appearance-heading" hidden>
+          <div class="appearance-panel-header"><button class="appearance-back" type="button" data-public-appearance-back>← Menu</button><h2 id="public-appearance-heading">Appearance</h2><button class="app-icon-button" type="button" data-public-appearance-close aria-label="Close appearance settings">{{ icon('close') }}</button></div>
+          <div class="appearance-panel-body">
+            <fieldset class="appearance-section"><legend>Display mode</legend><div class="appearance-mode-options">{% for value,label in [('light','Light'),('dark','Dark'),('system','System')] %}<label class="appearance-mode-option"><input type="radio" name="public-mode" data-public-preference="mode" value="{{ value }}" aria-label="{{ label }} mode"><span>{{ label }}</span></label>{% endfor %}</div></fieldset>
+            <fieldset class="appearance-section"><legend>Theme</legend><div class="appearance-theme-options">{% for value,label in [('california','California Jugger'),('neutral','Neutral'),('monokai','Monokai')] %}<label class="appearance-theme-option"><input type="radio" name="public-palette" data-public-preference="palette" value="{{ value }}" aria-label="{{ label }} theme"><span>{{ label }}</span></label>{% endfor %}</div></fieldset>
+            {% if public_banner_key %}<div class="appearance-section appearance-page-setting"><label><input type="checkbox" data-public-intro-setting="{{ public_banner_key }}" aria-controls="page-banner"><span>Show page introduction</span></label></div>{% endif %}
+          </div>
+        </section>
+      </details>
+    </div>
+  </div>
+</header>
+{%- endmacro %}
+
+{% macro site_footer() -%}
+<footer class="app-footer"><div class="container-wide"><div class="footer-top"><nav class="footer-links" aria-label="Help and information">{% for path,label in [('about','About'),('docs.md','Documentation'),('developers.md','Developers'),('thanks','Thanks'),('privacy-policy.md','Privacy'),('terms.md','Terms'),('license.md','License')] %}<a href="{{ request.script_root }}/{{ path }}">{{ label }}</a>{% endfor %}</nav></div><div class="footer-bottom"><p><a href="https://github.com/reid23/arctos">Source code</a></p><p>An independent project, not affiliated with CAJA or the US NJA.</p></div></div></footer>
+{%- endmacro %}

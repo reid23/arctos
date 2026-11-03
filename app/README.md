@@ -143,6 +143,7 @@ successful completion without a payload.
 
 ```bash
 just run                 # gunicorn, 5 workers, on 0.0.0.0:8081
+just public-assets       # prepare CSS before starting Flask directly
 python run_app.py        # Werkzeug dev server on 127.0.0.1:5006
 ```
 

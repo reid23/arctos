@@ -48,6 +48,9 @@ Cargo.lock
 /frontend/pkg/
 /frontend/.parcel-cache/
 /frontend/node_modules/
+/static/public/bootstrap.css
+/static/public/design.css
+/static/public/theme.css
 /docs/_build/
 *.egg-info/
 pytest.log

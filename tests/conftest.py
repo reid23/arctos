@@ -22,6 +22,12 @@ from models import (
     Field,
 )
 from tests.utils import make_registrable_config
+from scripts.prepare_public_assets import prepare_presentation
+
+
+def pytest_sessionstart():
+    """Prepare ignored CSS before test collection or any application creation."""
+    prepare_presentation()
 
 
 @pytest.fixture(scope="session")
@@ -34,7 +40,7 @@ def app():
             "TESTING": True,
             "SQLALCHEMY_DATABASE_URI": f"sqlite:///{db_path}",
             "WTF_CSRF_ENABLED": False,
-            "SECRET_KEY": "test-secret-key",
+            "SECRET_KEY": "test-secret-key",  # pragma: allowlist secret -- test-only Flask signing key
         }
     )
 

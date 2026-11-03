@@ -1,0 +1,35 @@
+{% from 'public/chrome.html' import site_header, site_footer with context %}
+<!doctype html>
+<html lang="en" class="arctos-public" data-public-prefix="{{ request.script_root or '/' }}"{% if background_entry %} data-public-html="true" data-public-background="true"{% endif %}>
+<head>
+  <meta charset="utf-8">
+  <!-- Font Awesome Free 6.0.0 icons: https://fontawesome.com/license/free (CC BY 4.0). -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>{{ title }}{% if title != 'Arctos' %} | Arctos{% endif %}</title>
+  <meta data-public-meta name="description" content="{{ description }}">
+  {% if noindex %}<meta data-public-meta name="robots" content="noindex, follow">{% endif %}
+  {% if canonical %}<link data-public-meta rel="canonical" href="{{ canonical }}">{% endif %}
+  <meta data-public-meta property="og:title" content="{{ title }}">
+  <meta data-public-meta property="og:description" content="{{ description }}">
+  <meta data-public-meta property="og:type" content="website">
+  <link rel="icon" type="image/png" href="{{ public_asset('arctos-light.png') }}">
+  {% if canonical %}<meta data-public-meta property="og:url" content="{{ canonical }}">{% endif %}
+  <script src="{{ public_asset('appearance.js') }}"></script>
+  <link rel="stylesheet" href="{{ public_asset('bootstrap.css') }}">
+  <link rel="stylesheet" href="{{ public_asset('design.css') }}">
+  <link rel="stylesheet" href="{{ public_asset('theme.css') }}">
+  <link rel="stylesheet" href="{{ public_asset('public.css') }}">
+</head>
+<body class="public-document{% if background_entry %} public-background{% endif %}">
+  <div id="public-document" class="arctos-app public-shell" data-public-theme{% if background_entry %} data-entry="{{ background_entry }}"{% endif %}>
+    {{ site_header() }}
+    {% if background_entry %}<div class="container-wide"><p id="public-app-status" class="public-app-status" role="status" aria-live="polite" hidden></p></div>{% endif %}
+    {% block content %}{% endblock %}
+    {{ site_footer() }}
+  </div>
+  {% if background_entry %}
+  <div id="main" aria-hidden="true" inert></div>
+  <script src="{{ public_asset('background.js') }}" defer></script>
+  {% endif %}
+</body>
+</html>

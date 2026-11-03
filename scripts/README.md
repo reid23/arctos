@@ -22,6 +22,7 @@ load `.env` or use `instance/tournament.db`. Keep it local.
 To start from an existing versioned SQLite snapshot:
 
 ```bash
+just public-assets
 uv run python -m scripts.dev_demo --snapshot /absolute/path/to/snapshot.db
 ```
 
@@ -58,6 +59,26 @@ uv run python scripts/check_mobile_ui.py --screenshots /tmp/arctos-ui
 Keep the demo and frontend running. The checks require a demo marker and guard
 against real data writes. See [TESTING.md](../TESTING.md#mobile-browser-verification)
 for focused suites and device/integration limits.
+
+## Public HTML assets and browser checks
+
+`prepare_public_assets.py` generates public CSS from the frontend sources,
+validates the compiled module and Wasm references, creates gzip companions,
+and writes the application manifest. `stage_frontend.py` publishes that build
+while retaining assets used by open tabs. See [deployment](../docs/DEPLOY.md#public-html-rollout).
+
+The [public entry verification guide](../docs/public-html-verification.md)
+provides setup, commands, acceptance criteria, and measured results for:
+
+| Script | Purpose |
+| --- | --- |
+| `check_public_html.py` | Readable content, usable controls, native navigation, and startup recovery |
+| `check_public_reading_navigation.py` | Reading during startup, navigation races, history, focus, and handoff |
+| `check_directory_account_state.py` | Account isolation, stale responses, Retry, and pagination |
+| `compare_startup_profiles.py` | Cold/warm startup and repeat navigation under network/CPU profiles |
+
+These tools run externally and write local reports. Production does not collect
+performance telemetry.
 
 ## Database maintenance
 
