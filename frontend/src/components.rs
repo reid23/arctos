@@ -1,9 +1,7 @@
 //! Reusable UI components.
 
 mod action_recovery;
-mod invitation_actions;
 pub use action_recovery::{ActionRecovery, RegistrationIntent, RequestEpoch};
-pub use invitation_actions::InvitationActions;
 
 mod appearance_menu;
 mod banner_upload;

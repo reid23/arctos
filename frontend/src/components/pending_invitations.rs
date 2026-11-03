@@ -1,5 +1,5 @@
 use crate::api;
-use crate::types::InvitationTournament;
+use crate::types::{IncomingRosterRequest, InvitationTournament, MyInvitationsResponse, TeamClaimInvitationItem};
 use crate::Route;
 use dioxus::prelude::*;
 
@@ -26,11 +26,33 @@ pub fn PendingInvitations(
     let mut error = use_signal(|| None::<String>);
     let mut responding = use_signal(|| false);
     let auth_version = use_context::<Signal<u32>>();
+    let account = crate::auth::use_account();
+    let tournament_for_personal = tournament_url.clone();
     let invitations = use_resource(move || {
         let _ = refresh();
         let _ = auth_version();
-        let tournament_url = tournament_url.clone();
+        let tournament_url = tournament_for_personal.clone();
         async move { api::my_invitations(tournament_url.as_deref()).await }
+    });
+    let managed_invitations = use_resource(move || {
+        let _ = refresh();
+        let _ = auth_version();
+        let user = account.read().as_ref().and_then(|result| result.as_ref().ok()).cloned();
+        let tournament_url = tournament_url.clone();
+        async move {
+            let mut results = Vec::new();
+            if let Some(user) = user {
+                for team in user.managed_teams {
+                    // The personal query already includes a team account's own invitations.
+                    if user.user_type == "team" && team.id == user.id {
+                        continue;
+                    }
+                    let result = api::managed_team_invitations(tournament_url.as_deref(), &team.id).await;
+                    results.push((team.name, result));
+                }
+            }
+            results
+        }
     });
 
     let respond = use_callback(move |(is_claim, invitation_id, accept): (bool, u32, bool)| {
@@ -58,13 +80,21 @@ pub fn PendingInvitations(
         });
     });
 
-    let Some(Ok(data)) = invitations.read().as_ref().cloned() else {
-        return rsx! {};
-    };
-    if data.team_claims.is_empty()
-        && data.roster_invitations.is_empty()
-        && data.incoming_roster_requests.is_empty()
-    {
+    let data = invitations.read().as_ref().and_then(|result| result.as_ref().ok()).cloned().unwrap_or_default();
+    let managed_data = managed_invitations.read().as_ref().cloned().unwrap_or_default();
+    let mut claims: Vec<(Option<String>, TeamClaimInvitationItem)> = data.team_claims.iter().cloned().map(|item| (None, item)).collect();
+    let mut incoming: Vec<(Option<String>, IncomingRosterRequest)> = data.incoming_roster_requests.iter().cloned().map(|item| (None, item)).collect();
+    let mut load_errors = Vec::new();
+    for (team_name, result) in managed_data {
+        match result {
+            Ok(team_data) => {
+                claims.extend(team_data.team_claims.into_iter().map(|item| (Some(team_name.clone()), item)));
+                incoming.extend(team_data.incoming_roster_requests.into_iter().map(|item| (Some(team_name.clone()), item)));
+            }
+            Err(message) => load_errors.push(format!("Could not load invitations for {team_name}: {message}")),
+        }
+    }
+    if claims.is_empty() && data.roster_invitations.is_empty() && incoming.is_empty() && load_errors.is_empty() {
         return rsx! {};
     }
 
@@ -79,14 +109,18 @@ pub fn PendingInvitations(
             if let Some(message) = error() {
                 div { class: "alert alert-danger mb-3 py-2", role: "alert", "{message}" }
             }
+            for message in load_errors {
+                p { class: "alert alert-danger mb-3 py-2", role: "alert", "{message}" }
+            }
             ul { class: "list-group list-group-flush",
-                for claim in data.team_claims.iter() {
+                for (team_name, claim) in claims.iter() {
                     {
                         let invitation_id = claim.id;
                         let date = tournament_date(&claim.tournament);
                         rsx! {
                             li { key: "claim-{claim.id}", class: "list-group-item d-flex flex-wrap justify-content-between align-items-center gap-2",
                                 div {
+                                    if let Some(name) = team_name { div { class: "small text-muted", "For {name}" } }
                                     div {
                                         "Claim the results of "
                                         strong { "{claim.placeholder_name}" }
@@ -163,7 +197,7 @@ pub fn PendingInvitations(
                         }
                     }
                 }
-                for request in data.incoming_roster_requests.iter() {
+                for (team_name, request) in incoming.iter() {
                     {
                         let registration_id = request.id;
                         let approve_url = request.tournament.url.clone();
@@ -174,6 +208,7 @@ pub fn PendingInvitations(
                         rsx! {
                             li { key: "roster-request-{request.id}", class: "list-group-item d-flex flex-wrap justify-content-between align-items-center gap-2",
                                 div {
+                                    if let Some(name) = team_name { div { class: "small text-muted", "For {name}" } }
                                     strong { "{request.player_name}" }
                                     " asked to join "
                                     strong { "{request.team_name}" }
