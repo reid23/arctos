@@ -3,8 +3,8 @@
 ``track_matchups`` is only meaningful when ``track_losses`` is set. The
 enter-results screen then scores two people at a time.
 
-Revision ID: 0027_sidecomp_track_matchups
-Revises: generic_schedule_items
+Revision ID: 0030_sidecomp_track_matchups
+Revises: 0029_team_managers
 Create Date: 2026-10-29
 """
 
@@ -16,8 +16,8 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision: str = "0027_sidecomp_track_matchups"
-down_revision: Union[str, Sequence[str], None] = "generic_schedule_items"
+revision: str = "0030_sidecomp_track_matchups"
+down_revision: Union[str, Sequence[str], None] = "0029_team_managers"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
