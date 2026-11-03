@@ -1,7 +1,7 @@
-use crate::Route;
 use crate::api;
 use crate::components::{
-    PenaltyDisplay, TeamLabel, TeamLabelStyle, TeamSlot, all_tokens_known, resolve_value_to_team_ids,
+    all_tokens_known, resolve_value_to_team_ids, Modal, ModalSize, PenaltyDisplay, TeamLabel, TeamLabelStyle,
+    TeamSlot,
 };
 use crate::display::short_or_truncate;
 use crate::pages::TeamSelectionField;
@@ -9,6 +9,7 @@ use crate::time_format::format_match_display_local;
 use crate::types::{
     ConflictingMatchInfo, ForceStartMatchRequest, MatchDetailData, PointData, PointTimestamp,
 };
+use crate::Route;
 #[cfg(target_arch = "wasm32")]
 use chrono;
 use dioxus::prelude::*;
@@ -99,19 +100,47 @@ fn point_note_display(
     )
 }
 
-fn get_query_param(name: &str) -> Option<String> {
-    #[cfg(target_arch = "wasm32")]
-    {
-        let window = web_sys::window()?;
-        let search = window.location().search().ok()?;
-        let params = web_sys::UrlSearchParams::new_with_str(&search).ok()?;
-        params.get(name)
+/// Select only this event's match query. The router removes undeclared query
+/// fields during startup, so the first mount may use the captured raw query.
+fn match_selection(
+    path: &str,
+    current_url: &str,
+    startup: Option<&(String, String)>,
+) -> (Option<String>, Option<String>) {
+    let current_url = current_url.split('#').next().unwrap_or(current_url);
+    let (current_path, query) = current_url.split_once('?').unwrap_or((current_url, ""));
+    if current_path != path {
+        return (None, None);
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let _ = name;
-        None
+    let query = if query.is_empty() {
+        startup.filter(|(initial_path, _)| initial_path == path)
+            .map(|(_, query)| query.as_str()).unwrap_or("")
+    } else {
+        query
+    };
+    let mut id = None;
+    let mut name = None;
+    for pair in query.split('&') {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        let decode = |text: &str| {
+            let text = text.replace('+', " ");
+            urlencoding::decode(&text).map(|value| value.into_owned()).ok()
+        };
+        let value = decode(value).filter(|value| !value.is_empty());
+        match decode(key).as_deref() {
+            Some("id") => id = value,
+            Some("name") => name = value,
+            _ => {},
+        }
     }
+    (id, name)
+}
+
+fn take_initial_match_query(path: &str) -> Option<(String, String)> {
+    thread_local! { static CONSUMED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+    let query = crate::initial_query(path)?;
+    if CONSUMED.replace(true) { return None; }
+    Some((path.to_string(), query))
 }
 
 /// Seek the local video player to the given time in seconds (wasm only).
@@ -488,8 +517,16 @@ fn fallback_ref_slots(m: &MatchDetailData) -> Vec<TeamSlot> {
         };
         out.push(TeamSlot {
             token: token.to_string(),
-            team_id: if id.is_empty() { None } else { Some(id.to_string()) },
-            name: if name.is_empty() { None } else { Some(name.to_string()) },
+            team_id: if id.is_empty() {
+                None
+            } else {
+                Some(id.to_string())
+            },
+            name: if name.is_empty() {
+                None
+            } else {
+                Some(name.to_string())
+            },
             shortname: None,
             photo: None,
         });
@@ -509,7 +546,7 @@ fn ForceStartModal(
     on_close: EventHandler<()>,
     on_success: EventHandler<()>,
 ) -> Element {
-    let schedule_data = use_resource({
+    let mut schedule_data = use_resource({
         let tournament_url_for_resource = tournament_url.clone();
         move || {
             let u = tournament_url_for_resource.clone();
@@ -549,7 +586,11 @@ fn ForceStartModal(
 
     let mut error = use_signal(|| None::<String>);
     let mut saving = use_signal(|| false);
-    let mut submit_trigger = use_signal(|| 0u32);
+    use_effect(move || {
+        if error().is_some() {
+            crate::form_validation::focus_after_render("match-force-start-error");
+        }
+    });
 
     let tournament_url_submit = tournament_url.clone();
     let match_id_submit = match_id.clone();
@@ -634,27 +675,23 @@ fn ForceStartModal(
         .into(),
     );
 
-    use_effect(move || {
-        let trigger = submit_trigger();
-        if trigger == 0 {
+    let mut on_submit_click = move |_: ()| {
+        if saving() {
             return;
         }
         let t1 = team1_submit().trim().to_string();
         let t2 = team2_submit().trim().to_string();
         if t1.is_empty() || t2.is_empty() {
-            submit_trigger.set(0);
             return;
         }
         if has_conflict {
             let act = conflicting_action_submit();
             if act.is_none() {
-                submit_trigger.set(0);
                 return;
             }
             if act.as_deref() == Some("COMPLETE") {
                 let win = conflicting_winner_submit();
                 if win.is_none() {
-                    submit_trigger.set(0);
                     return;
                 }
             }
@@ -662,7 +699,6 @@ fn ForceStartModal(
         let data = match val_for_submit.read().as_ref() {
             Some(Ok(d)) => d.clone(),
             _ => {
-                submit_trigger.set(0);
                 return;
             }
         };
@@ -677,7 +713,6 @@ fn ForceStartModal(
             Some(ids) => ids,
             None => {
                 error.set(Some("Could not resolve Team 1 to a team ID.".to_string()));
-                submit_trigger.set(0);
                 return;
             }
         };
@@ -691,7 +726,6 @@ fn ForceStartModal(
             Some(ids) => ids,
             None => {
                 error.set(Some("Could not resolve Team 2 to a team ID.".to_string()));
-                submit_trigger.set(0);
                 return;
             }
         };
@@ -707,7 +741,6 @@ fn ForceStartModal(
                     .collect::<Vec<_>>(),
                 None => {
                     error.set(Some("Could not resolve Referees to team IDs.".to_string()));
-                    submit_trigger.set(0);
                     return;
                 }
             }
@@ -735,170 +768,178 @@ fn ForceStartModal(
                 }
             }
         });
-        submit_trigger.set(0);
-    });
-
-    let mut on_submit_click = move |_| {
-        submit_trigger.set(submit_trigger() + 1);
     };
 
     rsx! {
         style { {TEAM_TOKEN_MODAL_CSS} }
-        div { class: "modal show", style: "display: block;",
-            div { class: "modal-dialog modal-dialog-centered modal-lg",
-                div { class: "modal-content",
-                    div { class: "modal-header",
-                        h5 { class: "modal-title", "Force Start Match" }
-                        button { r#type: "button", class: "btn-close", onclick: move |_| on_close.call(()) }
-                    }
-                    div { class: "modal-body",
-                        if let Some(Ok(data)) = val.read().as_ref() {
-                            form {
-                                onsubmit: move |ev| { ev.prevent_default(); on_submit_click(()); },
-                                div { class: "mb-3",
-                                    TeamSelectionField {
-                                        label: "Team 1".to_string(),
-                                        team_options: data.team_options.clone(),
-                                        tags: data.tags.clone(),
-                                        matches: data.matches.clone(),
-                                        value: team1(),
-                                        on_change: move |s| team1.set(s),
-                                        multiple: false,
-                                        placeholder: "Team 1".to_string(),
-                                    }
+        Modal {
+            id: "match-force-start-dialog",
+            labelled_by: "match-force-start-title",
+            return_focus_id: Some("match-start-explanation-trigger".to_string()),
+            size: ModalSize::Large,
+            dismissible: !saving(),
+            on_close: move |_| { if !saving() { on_close.call(()); } },
+            div { class: "modal-header",
+                h2 { id: "match-force-start-title", class: "modal-title h5", tabindex: "-1", "Force Start Match" }
+                button {
+                    r#type: "button", class: "btn-close", aria_label: "Close force start",
+                    disabled: saving(),
+                    onclick: move |_| { if !saving() { on_close.call(()); } },
+                }
+            }
+            div { class: "modal-body",
+                if let Some(Ok(data)) = val.read().as_ref() {
+                    form {
+                        id: "match-force-start-form",
+                        aria_busy: "{saving()}",
+                        onsubmit: move |ev| { ev.prevent_default(); on_submit_click(()); },
+                        fieldset { disabled: saving(),
+                            legend { class: "visually-hidden", "Teams and referees" }
+                            div { class: "mb-3",
+                                TeamSelectionField {
+                                    label: "Team 1".to_string(),
+                                    team_options: data.team_options.clone(),
+                                    tags: data.tags.clone(),
+                                    matches: data.matches.clone(),
+                                    value: team1(),
+                                    on_change: move |s| { if !saving() { team1.set(s); } },
+                                    multiple: false,
+                                    placeholder: "Team 1".to_string(),
                                 }
-                                div { class: "mb-3",
-                                    TeamSelectionField {
-                                        label: "Team 2".to_string(),
-                                        team_options: data.team_options.clone(),
-                                        tags: data.tags.clone(),
-                                        matches: data.matches.clone(),
-                                        value: team2(),
-                                        on_change: move |s| team2.set(s),
-                                        multiple: false,
-                                        placeholder: "Team 2".to_string(),
-                                    }
+                            }
+                            div { class: "mb-3",
+                                TeamSelectionField {
+                                    label: "Team 2".to_string(),
+                                    team_options: data.team_options.clone(),
+                                    tags: data.tags.clone(),
+                                    matches: data.matches.clone(),
+                                    value: team2(),
+                                    on_change: move |s| { if !saving() { team2.set(s); } },
+                                    multiple: false,
+                                    placeholder: "Team 2".to_string(),
                                 }
-                                div { class: "mb-3",
-                                    TeamSelectionField {
-                                        label: "Referees".to_string(),
-                                        team_options: data.team_options.clone(),
-                                        tags: data.tags.clone(),
-                                        matches: data.matches.clone(),
-                                        value: refs(),
-                                        on_change: move |s| refs.set(s),
-                                        multiple: true,
-                                        placeholder: "(optional) teams, match winners/losers, or tags".to_string(),
-                                        help_text: Some("(optional) teams, match winners/losers, or tags".to_string()),
-                                    }
+                            }
+                            div { class: "mb-3",
+                                TeamSelectionField {
+                                    label: "Referees".to_string(),
+                                    team_options: data.team_options.clone(),
+                                    tags: data.tags.clone(),
+                                    matches: data.matches.clone(),
+                                    value: refs(),
+                                    on_change: move |s| { if !saving() { refs.set(s); } },
+                                    multiple: true,
+                                    placeholder: "(optional) teams, match winners/losers, or tags".to_string(),
+                                    help_text: Some("(optional) teams, match winners/losers, or tags".to_string()),
                                 }
-                                if let Some(ref cm) = conflicting_match {
-                                    div { class: "mb-3 p-3 border rounded",
-                                        p { class: "mb-2", "Another match is in progress on this field: {cm.name}." }
-                                        div { class: "mb-2",
-                                            label { class: "form-label small", "What should happen to that match?" }
+                            }
+                            if let Some(ref cm) = conflicting_match {
+                                div { class: "mb-3 p-3 border rounded",
+                                    p { class: "mb-2", "Another match is in progress on this field: {cm.name}." }
+                                    fieldset { class: "mb-2",
+                                        legend { class: "form-label small", "What should happen to that match?" }
+                                        div { class: "form-check",
+                                            input {
+                                                class: "form-check-input",
+                                                r#type: "radio",
+                                                name: "conflict_action",
+                                                id: "conflict_skip",
+                                                checked: conflicting_action().as_deref() == Some("SKIP"),
+                                                onchange: move |_| {
+                                                    conflicting_action.set(Some("SKIP".to_string()));
+                                                    conflicting_winner.set(None);
+                                                }
+                                            }
+                                            label { class: "form-check-label", r#for: "conflict_skip", "Mark as SKIPPED (discard results)" }
+                                        }
+                                        div { class: "form-check",
+                                            input {
+                                                class: "form-check-input",
+                                                r#type: "radio",
+                                                name: "conflict_action",
+                                                id: "conflict_complete",
+                                                checked: conflicting_action().as_deref() == Some("COMPLETE"),
+                                                onchange: move |_| conflicting_action.set(Some("COMPLETE".to_string()))
+                                            }
+                                            label { class: "form-check-label", r#for: "conflict_complete", "Mark as COMPLETED (choose winner)" }
+                                        }
+                                    }
+                                    if conflicting_action().as_deref() == Some("COMPLETE") {
+                                        fieldset { class: "ms-3",
+                                            legend { class: "form-label small", "Winner" }
                                             div { class: "form-check",
                                                 input {
                                                     class: "form-check-input",
                                                     r#type: "radio",
-                                                    name: "conflict_action",
-                                                    id: "conflict_skip",
-                                                    checked: conflicting_action().as_deref() == Some("SKIP"),
-                                                    onchange: move |_| {
-                                                        conflicting_action.set(Some("SKIP".to_string()));
-                                                        conflicting_winner.set(None);
-                                                    }
+                                                    name: "conflict_winner",
+                                                    id: "winner_team1",
+                                                    checked: conflicting_winner().as_deref() == Some("TEAM1"),
+                                                    onchange: move |_| conflicting_winner.set(Some("TEAM1".to_string()))
                                                 }
-                                                label { class: "form-check-label", r#for: "conflict_skip", "Mark as SKIPPED (discard results)" }
+                                                label { class: "form-check-label", r#for: "winner_team1", "{short_or_truncate(&cm.team1_name, cm.team1_shortname.as_deref())}" }
                                             }
                                             div { class: "form-check",
                                                 input {
                                                     class: "form-check-input",
                                                     r#type: "radio",
-                                                    name: "conflict_action",
-                                                    id: "conflict_complete",
-                                                    checked: conflicting_action().as_deref() == Some("COMPLETE"),
-                                                    onchange: move |_| conflicting_action.set(Some("COMPLETE".to_string()))
+                                                    name: "conflict_winner",
+                                                    id: "winner_team2",
+                                                    checked: conflicting_winner().as_deref() == Some("TEAM2"),
+                                                    onchange: move |_| conflicting_winner.set(Some("TEAM2".to_string()))
                                                 }
-                                                label { class: "form-check-label", r#for: "conflict_complete", "Mark as COMPLETED (choose winner)" }
+                                                label { class: "form-check-label", r#for: "winner_team2", "{short_or_truncate(&cm.team2_name, cm.team2_shortname.as_deref())}" }
                                             }
                                         }
-                                        if conflicting_action().as_deref() == Some("COMPLETE") {
-                                            div { class: "ms-3",
-                                                label { class: "form-label small", "Winner" }
-                                                div { class: "form-check",
-                                                    input {
-                                                        class: "form-check-input",
-                                                        r#type: "radio",
-                                                        name: "conflict_winner",
-                                                        id: "winner_team1",
-                                                        checked: conflicting_winner().as_deref() == Some("TEAM1"),
-                                                        onchange: move |_| conflicting_winner.set(Some("TEAM1".to_string()))
-                                                    }
-                                                    label { class: "form-check-label", r#for: "winner_team1", "{short_or_truncate(&cm.team1_name, cm.team1_shortname.as_deref())}" }
-                                                }
-                                                div { class: "form-check",
-                                                    input {
-                                                        class: "form-check-input",
-                                                        r#type: "radio",
-                                                        name: "conflict_winner",
-                                                        id: "winner_team2",
-                                                        checked: conflicting_winner().as_deref() == Some("TEAM2"),
-                                                        onchange: move |_| conflicting_winner.set(Some("TEAM2".to_string()))
-                                                    }
-                                                    label { class: "form-check-label", r#for: "winner_team2", "{short_or_truncate(&cm.team2_name, cm.team2_shortname.as_deref())}" }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                if let Some(msg) = validation_message {
-                                    div { class: "alert alert-danger mb-0 mt-3", "{msg}" }
-                                }
-                                if let Some(err) = error() {
-                                    div { class: "alert alert-danger mb-0 mt-2", "{err}" }
-                                }
-                                div { class: "modal-footer mt-3",
-                                    button {
-                                        r#type: "button",
-                                        class: "btn btn-secondary",
-                                        onclick: move |_| on_close.call(()),
-                                        "Cancel"
-                                    }
-                                    button {
-                                        r#type: "submit",
-                                        class: "btn btn-warning",
-                                        disabled: saving() || !can_submit,
-                                        "Force Start"
                                     }
                                 }
                             }
-                        } else if let Some(Err(e)) = val.read().as_ref() {
-                            p { class: "text-danger", "{e}" }
-                        } else {
-                            p { "Loading…" }
+                        }
+                        if let Some(msg) = validation_message {
+                            p { class: "text-danger mb-0 mt-3", "{msg}" }
                         }
                     }
+                } else if let Some(Err(e)) = val.read().as_ref() {
+                    div { class: "alert alert-danger", role: "alert", "Could not load match setup: {e}" }
+                    button { r#type: "button", class: "btn btn-outline-secondary", onclick: move |_| schedule_data.restart(), "Retry" }
+                } else {
+                    p { role: "status", "Loading match setup…" }
+                }
+            }
+            div { class: "modal-footer",
+                if let Some(err) = error() {
+                    p { id: "match-force-start-error", class: "text-danger w-100 mb-0", role: "alert", tabindex: "-1", "{err}" }
+                }
+                button {
+                    r#type: "button", class: "btn btn-secondary", disabled: saving(),
+                    onclick: move |_| { if !saving() { on_close.call(()); } },
+                    "Cancel"
+                }
+                button {
+                    r#type: "submit", form: "match-force-start-form", class: "btn btn-warning",
+                    disabled: saving() || !can_submit || !matches!(val.read().as_ref(), Some(Ok(_))),
+                    if saving() { "Starting…" } else { "Force Start" }
                 }
             }
         }
-        div { class: "modal-backdrop show" }
     }
 }
 
 #[component]
 pub fn MatchPage(url: String) -> Element {
-    let match_id = get_query_param("id");
-    let match_name = get_query_param("name");
-    match_page_inner(url, match_id, match_name)
+    let path = format!("/{url}/match");
+    let startup = use_hook(|| take_initial_match_query(&path));
+    let current_url = dioxus::router::router().full_route_string();
+    let (match_id, match_name) = match_selection(&path, &current_url, startup.as_ref());
+    rsx! { MatchPageContent { key: "{url}/{match_id:?}/{match_name:?}", url, match_id, match_name } }
 }
 
 #[component]
 pub fn MatchPageById(url: String, match_id: String) -> Element {
-    match_page_inner(url, Some(match_id), None)
+    rsx! { MatchPageContent { key: "{url}/{match_id}", url, match_id: Some(match_id), match_name: None } }
 }
 
-fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<String>) -> Element {
+#[component]
+fn MatchPageContent(url: String, match_id: Option<String>, match_name: Option<String>) -> Element {
+    let navigator = use_navigator();
     let url_for_resource = url.clone();
     let id_for_resource = match_id.clone();
     let name_for_resource = match_name.clone();
@@ -919,10 +960,23 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
         }
     });
 
+    // Legacy query URLs must become bookmarkable after the router strips their
+    // query. Replace only while this event's legacy route still owns the page.
+    let canonical_event = url.clone();
+    use_effect(move || {
+        let Some(Ok(detail)) = data.read().as_ref().cloned() else { return; };
+        let current = dioxus::router::router().current::<Route>();
+        if matches!(current, Route::MatchPage { url } if url == canonical_event) {
+            navigator.replace(Route::MatchPageById {
+                url: canonical_event.clone(),
+                match_id: detail.match_data.uuid,
+            });
+        }
+    });
+
     // Polling for live match state updates
     let poll_tick = use_signal(|| 0u32);
     let url_for_poll = url.clone();
-    let match_id_for_poll = match_id.clone();
 
     #[cfg(target_arch = "wasm32")]
     let poll_interval = use_signal(|| None as Option<Interval>);
@@ -952,19 +1006,18 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
     let state_signal = use_signal(|| None as Option<Result<Value, String>>);
     use_effect(move || {
         let u = url_for_poll.clone();
-        let id = match_id_for_poll.clone();
         let _tick = poll_tick();
         let mut state_signal = state_signal;
-        if let Some(id) = id {
-            if let Some(Ok(d)) = data.value().read().as_ref() {
-                if d.match_data.status == "IN_PROGRESS" {
-                    spawn(async move {
-                        match api::match_state(&u, &id).await {
-                            Ok(v) => state_signal.set(Some(Ok(v))),
-                            Err(e) => state_signal.set(Some(Err(e))),
-                        }
-                    });
-                }
+        if let Some(Ok(d)) = data.value().read().as_ref() {
+            if d.match_data.status == "IN_PROGRESS" {
+                // Name-based legacy links resolve to the same live match as ID links.
+                let id = d.match_data.uuid.clone();
+                spawn(async move {
+                    match api::match_state(&u, &id).await {
+                        Ok(v) => state_signal.set(Some(Ok(v))),
+                        Err(e) => state_signal.set(Some(Err(e))),
+                    }
+                });
             }
         }
     });
@@ -984,9 +1037,6 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
         }
         live_points_signal.set(None);
     });
-
-    // User info for permissions
-    let user_info = use_resource(move || async move { api::me().await.ok() });
 
     // Shared client-server time sync (converges to the server clock; the probe
     // loop lives in the module).
@@ -1024,7 +1074,6 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
 
     let val = data.value();
     let base_url = api::base_url();
-    let navigator = use_navigator();
     let mut selected_camera_idx = use_signal(|| 0usize);
     let mut camera_dropdown_open = use_signal(|| false);
     let mut selected_point_index = use_signal(|| 0usize);
@@ -1083,7 +1132,6 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
             n_points_for_keys.set(0);
         }
     });
-
 
     // When switching camera with pending same-time seek, poll video until ready then seek.
     #[cfg(target_arch = "wasm32")]
@@ -1231,9 +1279,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                     Some(c) if c.camera_type == "youtube" => c,
                     _ => return,
                 };
-                let stream_start = cam
-                    .stream_start_time
-                    .clone();
+                let stream_start = cam.stream_start_time.clone();
                 let Some(stream_start) = stream_start else {
                     return;
                 };
@@ -1299,6 +1345,9 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
     }
 
     let keydown_handler = move |ev: Event<KeyboardData>| {
+        if why_modal_show() || force_start_modal_show() || penalty_desc_modal().is_some() {
+            return;
+        }
         #[cfg(target_arch = "wasm32")]
         {
             if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
@@ -1327,9 +1376,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                             return;
                         }
                         let stamp = d.points.get(pi).and_then(|p| p.stamp.as_deref());
-                        let stream_start_time: Option<String> = cam
-                            .stream_start_time
-                            .clone();
+                        let stream_start_time: Option<String> = cam.stream_start_time.clone();
                         if let Some(secs) = in_video_start_for_world_stamp_interpolated(
                             stamp,
                             cam.time_world.as_ref(),
@@ -1354,9 +1401,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                             return;
                         }
                         let stamp = d.points.get(new_idx).and_then(|p| p.stamp.as_deref());
-                        let stream_start_time: Option<String> = cam
-                            .stream_start_time
-                            .clone();
+                        let stream_start_time: Option<String> = cam.stream_start_time.clone();
                         if let Some(secs) = in_video_start_for_world_stamp_interpolated(
                             stamp,
                             cam.time_world.as_ref(),
@@ -1382,9 +1427,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                             return;
                         }
                         let stamp = d.points.get(new_idx).and_then(|p| p.stamp.as_deref());
-                        let stream_start_time: Option<String> = cam
-                            .stream_start_time
-                            .clone();
+                        let stream_start_time: Option<String> = cam.stream_start_time.clone();
                         if let Some(secs) = in_video_start_for_world_stamp_interpolated(
                             stamp,
                             cam.time_world.as_ref(),
@@ -1460,6 +1503,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
         style { "#match-page-keyboard:focus {{ outline: none; }}" }
         div {
             id: "match-page-keyboard",
+            class: "match-page",
             tabindex: "-1",
             onkeydown: keydown_handler,
             onmounted: move |ev: Event<MountedData>| {
@@ -1497,7 +1541,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                     let time_video_next = time_video_go.clone();
 
                     rsx! {
-                        div { class: "card mt-3",
+                        div { class: "card mt-3 match-video",
                         div { class: "card-header d-flex justify-content-between align-items-center",
                             h5 { class: "mb-0", "Match Footage" }
                             if cameras.len() > 1 {
@@ -1578,7 +1622,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                 if status == "UPLOADING" {
                                     p { class: "text-muted", "Video is still processing." }
                                 } else if status == "FAILED" {
-                                    p { class: "text-danger", "error processing video." }
+                                    p { class: "text-danger", "This video could not be processed. Try another camera or contact the event organizer." }
                                 } else {
                                     div {
                                         id: "youtube-player-container",
@@ -1593,6 +1637,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                         span { "Seek to point:" }
                                         select {
                                             id: "points-dropdown",
+                                            aria_label: "Jump footage to point",
                                             class: "form-select form-select-sm",
                                             style: "width: auto;",
                                             value: "{selected_point_index().min(points.len().saturating_sub(1))}",
@@ -1682,7 +1727,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                             },
                                             "Next Point (n)"
                                         }
-                                        span { class: "ms-2", "Speed:" }
+                                        label { class: "ms-2", r#for: "playback-speed", "Speed:" }
                                         select {
                                             id: "playback-speed",
                                             class: "form-select form-select-sm",
@@ -1746,16 +1791,24 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                     "{url}"
                                 }
                             }
+                            if !d.historical {
                             li { class: "breadcrumb-item",
-                                Link {
-                                    to: Route::Schedule {
-                                        url: url.clone(),
-                                        view: String::new(),
-                                        team: String::new(),
-                                        field: String::new(),
-                                    },
-                                    "Schedule"
+                                if d.can_view_schedule {
+                                    Link {
+                                        to: Route::Schedule {
+                                            url: url.clone(),
+                                            view: String::new(),
+                                            team: String::new(),
+                                            field: String::new(),
+                                        },
+                                        if d.schedule_published { "Schedule" } else { "Preview schedule" }
+                                    }
+                                } else {
+                                    span { class: "text-muted",
+                                        if d.schedule_published { "Schedule unavailable" } else { "Schedule not posted" }
+                                    }
                                 }
+                            }
                             }
                             li { class: "breadcrumb-item active", "{d.match_data.name}" }
                         }
@@ -1766,7 +1819,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
             div { class: "row",
                 div { class: "col-md-8",
                     // Match Information Card
-                    div { class: "card",
+                    div { class: "card match-overview",
                         div { class: "card-header",
                             h5 { class: "mb-0", "Match Information" }
                         }
@@ -1861,6 +1914,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                             span { "{field}" }
                                         }
                                     }
+                                    if !d.historical {
                                     // Planned start is always the published contract of the day (#196).
                                     div { class: "d-flex align-items-center mb-2",
                                         strong { class: "me-2", "Planned start:" }
@@ -1921,6 +1975,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                             }
                                         }
                                     }
+                                    }
                                 }
                                 div { class: "col-md-4" }
                             }
@@ -1975,10 +2030,12 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                 div { class: "row mt-3",
                                     div { class: "col-12",
                                         div { class: "d-flex gap-2 align-items-center flex-wrap",
-                                            a {
-                                                href: "#",
-                                                class: "text-muted small text-decoration-none",
-                                                onclick: move |ev: Event<MouseData>| { ev.prevent_default(); why_modal_show.set(true); },
+                                            button {
+                                                id: "match-start-explanation-trigger",
+                                                r#type: "button",
+                                                class: "btn btn-link text-muted small text-decoration-none p-0",
+                                                aria_haspopup: "dialog",
+                                                onclick: move |_| why_modal_show.set(true),
                                                 "Why can't I start this match?"
                                             }
                                         }
@@ -1990,7 +2047,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                     }
 
                     // Live Match Status Card
-                    div { class: "card mt-3",
+                    div { class: "card mt-3 match-live",
                         div { class: "card-header",
                             h5 { class: "mb-0",
                                 "Match Status: "
@@ -2150,8 +2207,9 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                         }
                     }
 
+                    if !d.historical {
                     // Points Table - update from state
-                    div { class: "card mt-3",
+                    div { class: "card data-section mt-3",
                         div { class: "card-header",
                             h5 { class: "mb-0", "Points" }
                         }
@@ -2194,9 +2252,9 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                             table { class: "table table-sm",
                                                 thead {
                                                     tr {
-                                                        th { "#" }
-                                                        th { "Set" }
-                                                        th { "Stones Elapsed" }
+                                                        th { class: "table-number", "#" }
+                                                        th { class: "table-number", "Set" }
+                                                        th { class: "table-number", "Stones Elapsed" }
                                                         th { "Winner" }
                                                         th { "Rerun" }
                                                         if d.is_head_ref {
@@ -2207,10 +2265,11 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                                 tbody { id: "live-points-table",
                                                     for (idx, (pt, note_elems)) in points_with_note_displays.iter().enumerate() {
                                                         tr { key: "{pt.uuid}", id: "live-point-row-{pt.uuid}",
-                                                            td { "{idx + 1}" }
-                                                            td { "{pt.set_number.unwrap_or(1)}" }
+                                                            td { class: "table-number", "{idx + 1}" }
+                                                            td { class: "table-number", "{pt.set_number.unwrap_or(1)}" }
                                                             td {
                                                                 id: "live-stones-{pt.uuid}",
+                                                                class: "table-number",
                                                                 "data-stamp": pt.stamp.as_deref().unwrap_or(""),
                                                                 "data-end": pt.end_stamp.as_deref().unwrap_or(""),
                                                                 "data-stones-at-start": pt.stones_at_start.map(|s: u32| s.to_string()).unwrap_or_default(),
@@ -2271,6 +2330,7 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                                 }
                             }
                         }
+                    }
                     }
 
                     // Match Footage Section (rendered via footage_section above)
@@ -2457,131 +2517,129 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
                     }
                 }
             }
-            if penalty_desc_modal().is_some() {
-                div { class: "modal show", style: "display: block;",
-                    div { class: "modal-dialog modal-dialog-centered",
-                        div { class: "modal-content",
-                            div { class: "modal-header",
-                                h5 { class: "modal-title", "Penalty description" }
-                                button { r#type: "button", class: "btn-close", onclick: move |_| penalty_desc_modal.set(None) }
-                            }
-                            div { class: "modal-body", "{penalty_desc_modal().as_ref().unwrap_or(&String::new())}" }
-                            div { class: "modal-footer",
-                                button { r#type: "button", class: "btn btn-secondary", onclick: move |_| penalty_desc_modal.set(None), "Close" }
-                            }
-                        }
+            if let Some(description) = penalty_desc_modal() {
+                Modal {
+                    id: "match-penalty-description-dialog",
+                    labelled_by: "match-penalty-description-title",
+                    on_close: move |_| penalty_desc_modal.set(None),
+                    div { class: "modal-header",
+                        h2 { id: "match-penalty-description-title", class: "modal-title h5", tabindex: "-1", "Penalty description" }
+                        button { r#type: "button", class: "btn-close", aria_label: "Close penalty description", onclick: move |_| penalty_desc_modal.set(None) }
+                    }
+                    div { class: "modal-body", "{description}" }
+                    div { class: "modal-footer",
+                        button { r#type: "button", class: "btn btn-secondary", onclick: move |_| penalty_desc_modal.set(None), "Close" }
                     }
                 }
-                div { class: "modal-backdrop show" }
             }
             if why_modal_show() {
-                div { class: "modal show", style: "display: block;",
-                    div { class: "modal-dialog modal-dialog-centered modal-lg",
-                        div { class: "modal-content",
-                            div { class: "modal-header",
-                                h5 { class: "modal-title", "Why can't I start this match?" }
-                                button { r#type: "button", class: "btn-close", onclick: move |_| why_modal_show.set(false) }
-                            }
-                            div { class: "modal-body",
-                                {
-                                    match &d.why_sections {
-                                        Some(sections) => rsx! {
-                                            div { class: "mb-4",
-                                                h6 { class: "text-muted mb-2",
-                                                    "1. Match Status & Dependencies"
-                                                    if !sections.match_ready.blocks_start {
-                                                        span { class: "text-success ms-1", "✓" }
-                                                    }
-                                                }
-                                                p { class: "small mb-1", "What is the match status? Does this prevent it from being started?" }
-                                                if !sections.match_ready.blocks_start {
-                                                    p { class: "text-success small mb-0", "Ready to start." }
-                                                } else {
-                                                    ul { class: "mb-0 small",
-                                                        for reason in sections.match_ready.reasons.iter().filter(|r| !r.starts_with("Match status is")) {
-                                                            li { class: "mb-1", "{reason}" }
-                                                        }
-                                                    }
-                                                }
+                Modal {
+                    id: "match-start-explanation-dialog",
+                    labelled_by: "match-start-explanation-title",
+                    return_focus_id: Some("match-start-explanation-trigger".to_string()),
+                    size: ModalSize::Large,
+                    on_close: move |_| why_modal_show.set(false),
+                    div { class: "modal-header",
+                        h2 { id: "match-start-explanation-title", class: "modal-title h5", tabindex: "-1", "Why can't I start this match?" }
+                        button { r#type: "button", class: "btn-close", aria_label: "Close match-start explanation", onclick: move |_| why_modal_show.set(false) }
+                    }
+                    div { class: "modal-body",
+                        {
+                            match &d.why_sections {
+                                Some(sections) => rsx! {
+                                    div { class: "mb-4",
+                                        h6 { class: "text-muted mb-2",
+                                            "1. Match Status & Dependencies"
+                                            if !sections.match_ready.blocks_start {
+                                                span { class: "text-success ms-1", "✓" }
                                             }
-                                            div { class: "mb-4",
-                                                h6 { class: "text-muted mb-2",
-                                                    "2. Conflicts"
-                                                    if sections.conflicts.is_empty() {
-                                                        span { class: "text-success ms-1", "✓" }
-                                                    }
-                                                }
-                                                p { class: "small mb-2", "Is there another match currently happening on this field?" }
-                                                if sections.conflicts.is_empty() {
-                                                    p { class: "text-success small mb-0", "No conflicts." }
-                                                } else {
-                                                    ul { class: "mb-0 small",
-                                                        for c in &sections.conflicts {
-                                                            li { class: "mb-1", "{c}" }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            div { class: "mb-0",
-                                                h6 { class: "text-muted mb-2",
-                                                    "3. Ref permissions"
-                                                    if sections.ref_permissions.is_ok {
-                                                        span { class: "text-success ms-1", "✓" }
-                                                    }
-                                                }
-                                                div { class: "ms-3 mb-3",
-                                                    h6 { class: "small mb-1", "a. Who is allowed" }
-                                                    p { class: "small text-muted mb-1", "Based on tournament settings, who should be allowed to head ref?" }
-                                                    ul { class: "mb-0 small",
-                                                        for s in &sections.ref_permissions.who_allowed {
-                                                            li { class: "mb-1", "{s}" }
-                                                        }
-                                                    }
-                                                }
-                                                div { class: "ms-3 mb-0",
-                                                    h6 { class: "small mb-1", "b. Current user" }
-                                                    p { class: "small text-muted mb-1", "Your current sign-in and registration." }
-                                                    ul { class: "mb-0 small",
-                                                        for s in &sections.ref_permissions.current_user {
-                                                            li { class: "mb-1", "{s}" }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        },
-                                        None => rsx! {
-                                            ul { class: "mb-0",
-                                                for reason in &d.block_reasons {
+                                        }
+                                        p { class: "small mb-1", "What is the match status? Does this prevent it from being started?" }
+                                        if !sections.match_ready.blocks_start {
+                                            p { class: "text-success small mb-0", "Ready to start." }
+                                        } else {
+                                            ul { class: "mb-0 small",
+                                                for reason in sections.match_ready.reasons.iter().filter(|r| !r.starts_with("Match status is")) {
                                                     li { class: "mb-1", "{reason}" }
                                                 }
                                             }
-                                        },
-                                    }
-                                }
-                                if d.is_head_ref && !d.can_start {
-                                    div { class: "mt-4 pt-3 border-top",
-                                        p { class: "small text-muted mb-2",
-                                            "If you need to start this match anyway (e.g. to resolve a conflict or bypass a blocking condition), you can force start it. You will set the teams and referees, and any conflicting match on the same field can be skipped or marked complete."
-                                        }
-                                        button {
-                                            r#type: "button",
-                                            class: "btn btn-warning",
-                                            onclick: move |_| {
-                                                why_modal_show.set(false);
-                                                force_start_modal_show.set(true);
-                                            },
-                                            "Force Start Match"
                                         }
                                     }
-                                }
+                                    div { class: "mb-4",
+                                        h6 { class: "text-muted mb-2",
+                                            "2. Conflicts"
+                                            if sections.conflicts.is_empty() {
+                                                span { class: "text-success ms-1", "✓" }
+                                            }
+                                        }
+                                        p { class: "small mb-2", "Is there another match currently happening on this field?" }
+                                        if sections.conflicts.is_empty() {
+                                            p { class: "text-success small mb-0", "No conflicts." }
+                                        } else {
+                                            ul { class: "mb-0 small",
+                                                for c in &sections.conflicts {
+                                                    li { class: "mb-1", "{c}" }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    div { class: "mb-0",
+                                        h6 { class: "text-muted mb-2",
+                                            "3. Ref permissions"
+                                            if sections.ref_permissions.is_ok {
+                                                span { class: "text-success ms-1", "✓" }
+                                            }
+                                        }
+                                        div { class: "ms-3 mb-3",
+                                            h6 { class: "small mb-1", "a. Who is allowed" }
+                                            p { class: "small text-muted mb-1", "Based on tournament settings, who should be allowed to head ref?" }
+                                            ul { class: "mb-0 small",
+                                                for s in &sections.ref_permissions.who_allowed {
+                                                    li { class: "mb-1", "{s}" }
+                                                }
+                                            }
+                                        }
+                                        div { class: "ms-3 mb-0",
+                                            h6 { class: "small mb-1", "b. Current user" }
+                                            p { class: "small text-muted mb-1", "Your current sign-in and registration." }
+                                            ul { class: "mb-0 small",
+                                                for s in &sections.ref_permissions.current_user {
+                                                    li { class: "mb-1", "{s}" }
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
+                                None => rsx! {
+                                    ul { class: "mb-0",
+                                        for reason in &d.block_reasons {
+                                            li { class: "mb-1", "{reason}" }
+                                        }
+                                    }
+                                },
                             }
-                            div { class: "modal-footer",
-                                button { r#type: "button", class: "btn btn-secondary", onclick: move |_| why_modal_show.set(false), "Close" }
+                        }
+                        if d.is_head_ref && !d.can_start {
+                            div { class: "mt-4 pt-3 border-top",
+                                p { class: "small text-muted mb-2",
+                                    "If you need to start this match anyway (e.g. to resolve a conflict or bypass a blocking condition), you can force start it. You will set the teams and referees, and any conflicting match on the same field can be skipped or marked complete."
+                                }
+                                button {
+                                    r#type: "button",
+                                    class: "btn btn-warning",
+                                    onclick: move |_| {
+                                        why_modal_show.set(false);
+                                        force_start_modal_show.set(true);
+                                    },
+                                    "Force Start Match"
+                                }
                             }
                         }
                     }
+                    div { class: "modal-footer",
+                        button { r#type: "button", class: "btn btn-secondary", onclick: move |_| why_modal_show.set(false), "Close" }
+                    }
                 }
-                div { class: "modal-backdrop show" }
             }
             if force_start_modal_show() {
                 ForceStartModal {
@@ -2609,5 +2667,30 @@ fn match_page_inner(url: String, match_id: Option<String>, match_name: Option<St
             p { "Loading…" }
         }
         }
+    }
+}
+
+#[cfg(test)]
+mod match_selection_tests {
+    use super::match_selection;
+
+    #[test]
+    fn legacy_links_recover_id_and_decode_names_without_splitting_encoded_delimiters() {
+        let startup = ("/cup/match".into(), "id=match-1".into());
+        assert_eq!(match_selection("/cup/match", "/cup/match", Some(&startup)),
+            (Some("match-1".into()), None));
+        assert_eq!(match_selection("/cup/match", "/cup/match?name=Pool+A%26B%2B+%23caf%C3%A9", None),
+            (None, Some("Pool A&B+ #café".into())));
+        assert_eq!(match_selection("/cup/match", "/cup/match?name=%FF", None), (None, None));
+    }
+
+    #[test]
+    fn match_queries_belong_to_the_current_event_and_live_query_wins() {
+        let startup = ("/first/match".into(), "id=old".into());
+        assert_eq!(match_selection("/second/match", "/second/match", Some(&startup)), (None, None));
+        assert_eq!(match_selection("/first/match", "/other/match?id=new", Some(&startup)), (None, None));
+        assert_eq!(match_selection("/first/match", "/first/match?id=new#points", Some(&startup)),
+            (Some("new".into()), None));
+        assert_eq!(match_selection("/first/match", "/first/match?id=", Some(&startup)), (None, None));
     }
 }

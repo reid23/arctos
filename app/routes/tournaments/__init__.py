@@ -193,5 +193,6 @@ from app.routes.tournaments import (  # noqa: E402, F401
     matches_admin,
     read,
     scheduling,
+    schedule_items,
     scoreboard_overlay,
 )

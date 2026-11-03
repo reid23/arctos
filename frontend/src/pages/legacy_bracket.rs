@@ -20,7 +20,7 @@ pub fn LegacyBracket(url: String) -> Element {
         if let Some(Ok(d)) = val.read().as_ref() {
             div { class: "row",
                 div { class: "col-12",
-                    h1 { "{d.tournament.name} - Legacy Bracket" }
+                    h2 { "Legacy bracket" }
                     div { class: "d-flex flex-wrap gap-2 mb-3",
                         Link {
                             to: Route::TournamentHome { url: url.clone() },
@@ -135,7 +135,7 @@ pub fn LegacyBracketDiagrams(url: String, brackets: Vec<BracketItem>) -> Element
                                                         }
                                                     } else if team_entry.is_reference {
                                                         a {
-                                                            href: "/{url}/match?name={match_ref}",
+                                                            href: format!("/{url}/match?name={}", urlencoding::encode(&match_ref)),
                                                             class: "text-decoration-none text-dark",
                                                             {team_info.display_text.replace("::", " ")}
                                                         }

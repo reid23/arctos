@@ -532,6 +532,7 @@ def _bracket_layout_response(tournament, is_to: bool) -> dict:
             "url": tournament.url,
             "name": tournament.name,
             "bracket_published": bool(getattr(tournament, "bracket_published", False)),
+            "historical": bool(tournament.historical),
         },
         "is_to": is_to,
         "bracket_published": bool(getattr(tournament, "bracket_published", False)),

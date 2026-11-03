@@ -1,0 +1,13 @@
+/* Keep editing actions available while the registration form scrolls. */
+.arctos-app :is(#edit-registration-dialog, #deregister-dialog) .modal-body { min-height: 0; scroll-padding-block: 1rem; }
+.arctos-app #edit-registration-dialog .registration-withdraw-section { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--ui-border); }
+.arctos-app #edit-registration-dialog .registration-dialog-footer { align-items: center; }
+.arctos-app #edit-registration-dialog .registration-dialog-feedback { flex-basis: 100%; max-height: min(6rem, 20dvh); margin: 0; overflow-y: auto; overflow-wrap: anywhere; font-size: .875rem; }
+.arctos-app :is(#edit-registration-dialog, #deregister-dialog) .btn { min-height: 44px; }
+.arctos-app .registration-waiver-warning { display: flex; align-items: baseline; gap: .45rem; margin: 0; color: var(--ui-warning-text); font-size: .875rem; }
+.arctos-app .registration-waiver-warning i { flex-shrink: 0; }
+@media (max-width: 575.98px) {
+  .arctos-app #edit-registration-dialog .registration-dialog-footer > .btn { flex: 1 1 0; min-width: 0; padding-inline: .75rem; }
+  .arctos-app #deregister-dialog .registration-confirm-footer { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .arctos-app #deregister-dialog .registration-confirm-footer > .btn { width: 100%; }
+}

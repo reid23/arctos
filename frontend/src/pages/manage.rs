@@ -1,8 +1,9 @@
 use crate::api;
+use crate::components::{RequestEpoch, ToolPageHeader};
+use crate::components::{PaymentStatusBadge, RegistrationStatusBadge, WaiverStatusBadge};
 use crate::types::{
     PlayerListItem, RegisterPlayerAsToResponse, RegisterTeamAsToResponse, TeamListItem,
 };
-use crate::Route;
 use dioxus::prelude::*;
 use wasm_bindgen::JsCast;
 
@@ -32,6 +33,16 @@ enum SessionLogEntry {
     },
 }
 
+/// Do not silently turn a typo into a zero-dollar payment.
+pub(crate) fn validated_payment_amount(value: &str) -> Result<f64, &'static str> {
+    value
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|amount| amount.is_finite() && *amount >= 0.0)
+        .ok_or("Enter a valid amount of zero or more before saving payment details.")
+}
+
 #[component]
 pub fn Manage(url: String) -> Element {
     let mut search = use_signal(|| String::new());
@@ -40,6 +51,10 @@ pub fn Manage(url: String) -> Element {
     let mut submitted_type = use_signal(|| "both".to_string());
     let mut refresh = use_signal(|| 0u32);
     let deregister_error = use_signal(|| None::<String>);
+    let mut payment_error = use_signal(|| None::<String>);
+    let mut payment_saved = use_signal(|| false);
+    let mut payment_saving = use_signal(|| None::<(bool, u32)>);
+    let mut payment_target = use_signal(|| None::<(bool, u32)>);
     let url_for_data = url.clone();
     let data = use_resource(move || {
         let u = url_for_data.clone();
@@ -62,6 +77,9 @@ pub fn Manage(url: String) -> Element {
     let mut player_search_query = use_signal(String::new);
     let mut player_search_results = use_signal(Vec::<PlayerListItem>::new);
     let mut player_searching = use_signal(|| false);
+    let mut player_search_error = use_signal(|| None::<String>);
+    let mut player_search_retry = use_signal(|| 0u32);
+    let mut player_search_epoch = use_signal(RequestEpoch::default);
     let mut selected_player = use_signal(|| None::<PlayerListItem>);
     let mut selected_team = use_signal(String::new);
     let mut jersey_number = use_signal(String::new);
@@ -74,6 +92,9 @@ pub fn Manage(url: String) -> Element {
     let mut team_search_query = use_signal(String::new);
     let mut team_search_results = use_signal(Vec::<TeamListItem>::new);
     let mut team_searching = use_signal(|| false);
+    let mut team_search_error = use_signal(|| None::<String>);
+    let mut team_search_retry = use_signal(|| 0u32);
+    let mut team_search_epoch = use_signal(RequestEpoch::default);
     let mut selected_team_for_register = use_signal(|| None::<TeamListItem>);
     let mut team_pseudonym_input = use_signal(String::new);
     let mut team_shortname_input = use_signal(String::new);
@@ -82,35 +103,41 @@ pub fn Manage(url: String) -> Element {
     // Session log for Quick Register tab
     let mut session_log = use_signal(Vec::<SessionLogEntry>::new);
 
-    // Player search effect
+    // Ignore responses for an older query, retry, or cleared selection.
     use_effect(move || {
         let q = player_search_query();
-        if q.trim().is_empty() {
-            player_search_results.set(Vec::new());
-            return;
-        }
-        player_searching.set(true);
+        let _ = player_search_retry();
+        let request = player_search_epoch.write().next();
+        player_search_results.set(Vec::new());
+        player_search_error.set(None);
+        player_searching.set(!q.trim().is_empty());
+        if q.trim().is_empty() { return; }
         spawn(async move {
-            match api::players_list(&q, 1).await {
+            let response = api::players_list(&q, 1).await;
+            if !player_search_epoch.peek().is_current(request) || *player_search_query.peek() != q { return; }
+            match response {
                 Ok(resp) => player_search_results.set(resp.players),
-                Err(_) => player_search_results.set(Vec::new()),
+                Err(error) => player_search_error.set(Some(error)),
             }
             player_searching.set(false);
         });
     });
 
-    // Team search effect
+    // Ignore responses for an older query, retry, or cleared selection.
     use_effect(move || {
         let q = team_search_query();
-        if q.trim().is_empty() {
-            team_search_results.set(Vec::new());
-            return;
-        }
-        team_searching.set(true);
+        let _ = team_search_retry();
+        let request = team_search_epoch.write().next();
+        team_search_results.set(Vec::new());
+        team_search_error.set(None);
+        team_searching.set(!q.trim().is_empty());
+        if q.trim().is_empty() { return; }
         spawn(async move {
-            match api::teams_list(&q).await {
+            let response = api::teams_list(&q).await;
+            if !team_search_epoch.peek().is_current(request) || *team_search_query.peek() != q { return; }
+            match response {
                 Ok(resp) => team_search_results.set(resp.teams),
-                Err(_) => team_search_results.set(Vec::new()),
+                Err(error) => team_search_error.set(Some(error)),
             }
             team_searching.set(false);
         });
@@ -118,17 +145,7 @@ pub fn Manage(url: String) -> Element {
 
     rsx! {
         if let Some(Ok(d)) = val.read().as_ref() {
-            div { class: "row",
-                div { class: "col-12",
-                    h1 { "{d.tournament.name} - Registration Management" }
-                    nav { aria_label: "breadcrumb",
-                        ol { class: "breadcrumb",
-                            li { class: "breadcrumb-item", Link { to: Route::TournamentHome { url: url.clone() }, "{d.tournament.name}" } }
-                            li { class: "breadcrumb-item active", "Registration Management" }
-                        }
-                    }
-                }
-            }
+            ToolPageHeader { title: "Registration management" }
 
             // Top-level tabs
             ul { class: "nav nav-tabs mb-3",
@@ -156,6 +173,12 @@ pub fn Manage(url: String) -> Element {
                         if let Some(ref err) = deregister_error() {
                             div { class: "alert alert-danger small py-2 mb-0", "{err}" }
                         }
+                        if let Some(error) = payment_error() {
+                            div { class: "alert alert-danger", role: "alert", "{error}" }
+                        }
+                        if payment_saved() {
+                            div { class: "alert alert-success", role: "status", "Payment details saved." }
+                        }
                         form { class: "row g-2",
                             onsubmit: move |ev| {
                                 ev.prevent_default();
@@ -167,6 +190,7 @@ pub fn Manage(url: String) -> Element {
                                     r#type: "text",
                                     class: "form-control",
                                     name: "search",
+                                    aria_label: "Search registrations",
                                     placeholder: "Search teams, players, or signed waiver names",
                                     value: "{search()}",
                                     oninput: move |ev| search.set(ev.value().clone()),
@@ -176,6 +200,7 @@ pub fn Manage(url: String) -> Element {
                                 select {
                                     class: "form-select",
                                     name: "type",
+                                    aria_label: "Registration type",
                                     value: "{search_type()}",
                                     onchange: move |ev| search_type.set(ev.value().clone()),
                                     option { value: "both", "Teams and Players" }
@@ -192,47 +217,33 @@ pub fn Manage(url: String) -> Element {
 
                 div { class: "row",
                     div { class: "col-12",
-                        div { class: "card",
-                            div { class: "card-header", h5 { class: "mb-0", "Team Registrations" } }
-                            div { class: "card-body",
-                                div { class: "table-responsive",
-                                    table { class: "table table-striped",
+                        div { class: "edit-section data-section",
+                            div { class: "edit-section-heading", h3 { class: "h5 mb-0", "Team Registrations" } }
+                            div { class: "edit-section-body",
+                                div { class: "table-responsive management-table-wrap",
+                                    table { class: "table table-striped management-table",
                                         thead {
                                             tr {
-                                                th { "Team Name" }
-                                                th { "Status" }
-                                                th { "Registration Date" }
-                                                th { "Actions" }
+                                                th { class: "table-nowrap", "Team Name" }
+                                                th { class: "table-nowrap", "Status" }
+                                                th { class: "table-nowrap", "Registration Date" }
+                                                th { class: "table-nowrap", "Actions" }
                                             }
                                         }
                                         tbody {
                                             for (url_dereg, url_save, team_id_dereg, reg_id_save, team_data) in d.team_registrations.iter().map(|t| (url.clone(), url.clone(), t.registration.team.clone(), t.registration.id, t)) {
                                                 tr { key: "{team_data.registration.id}",
-                                                    td {
+                                                    td { class: "table-copy", "data-label": "Team",
                                                         a { href: "/teams/{team_data.registration.team}", class: "text-decoration-none",
                                                             strong { "{team_data.registration.pseudonym}" }
                                                         }
                                                     }
-                                                    td {
-                                                        span {
-                                                            class: format!(
-                                                                "badge {}",
-                                                                match team_data.registration.status.as_str() {
-                                                                    "CONFIRMED" => "bg-success",
-                                                                    "CANCELLED" => "bg-danger",
-                                                                    _ => "bg-warning",
-                                                                }
-                                                            ),
-                                                            "{team_data.registration.status}"
-                                                        }
-                                                        if team_data.registration.paid {
-                                                            span { class: "badge bg-primary ms-1", "Paid" }
-                                                        } else {
-                                                            span { class: "badge bg-secondary ms-1", "Unpaid" }
-                                                        }
+                                                    td { "data-label": "Status",
+                                                        RegistrationStatusBadge { status: team_data.registration.status.clone() }
+                                                        PaymentStatusBadge { paid: team_data.registration.paid, class: "ms-1" }
                                                     }
-                                                    td { "{team_data.registration.registered_at.as_deref().unwrap_or(\"-\")}" }
-                                                    td {
+                                                    td { class: "table-nowrap", "data-label": "Registered", {crate::time_format::format_registration_timestamp(team_data.registration.registered_at.as_deref().unwrap_or("—"))} }
+                                                    td { "data-label": "Actions", class: "management-actions",
                                                         if team_data.registration.status == "CONFIRMED" {
                                                             button {
                                                                 r#type: "button",
@@ -252,8 +263,8 @@ pub fn Manage(url: String) -> Element {
                                                                 "Deregister"
                                                             }
                                                         }
-                                                        div { class: "d-inline ms-2",
-                                                            div { class: "input-group input-group-sm", style: "max-width: 420px;",
+                                                        div { class: "management-payment",
+                                                            div { class: "input-group input-group-sm management-payment-controls",
                                                                 span { class: "input-group-text", "$" }
                                                                 input {
                                                                     r#type: "number",
@@ -261,45 +272,77 @@ pub fn Manage(url: String) -> Element {
                                                                     min: "0",
                                                                     class: "form-control",
                                                                     id: "team-amount-{team_data.registration.id}",
+                                                                        aria_label: "Amount paid",
+                                                                        inputmode: "decimal",
                                                                     placeholder: "Amount",
                                                                     value: format!("{:.2}", team_data.registration.amount_paid)
                                                                 }
-                                                                div { class: "input-group-text",
+                                                                label { class: "input-group-text management-payment-confirmed",
                                                                     input {
                                                                         class: "form-check-input mt-0",
                                                                         r#type: "checkbox",
                                                                         id: "team-paid-{team_data.registration.id}",
+                                                                        aria_label: "Payment complete",
                                                                         checked: team_data.registration.paid
                                                                     }
+                                                                        "Payment complete"
                                                                 }
                                                                 button {
                                                                     r#type: "button",
                                                                     class: "btn btn-sm btn-outline-primary",
+                                                                    disabled: payment_saving().is_some(),
                                                                     onclick: move |_| {
+                                                                        if payment_saving().is_some() { return; }
+                                                                        payment_error.set(None);
+                                                                        payment_saved.set(false);
                                                                         let u = url_save.clone();
                                                                         let rid = reg_id_save;
+                                                                        payment_target.set(Some((true, rid)));
+                                                                        payment_saving.set(Some((true, rid)));
                                                                         spawn(async move {
-                                                                            let amount: f64 = web_sys::window()
+                                                                            let amount_text = web_sys::window()
                                                                                 .and_then(|w| w.document())
                                                                                 .and_then(|d| d.get_element_by_id(&format!("team-amount-{}", rid)))
                                                                                 .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
-                                                                                .map(|e: web_sys::HtmlInputElement| e.value().parse().unwrap_or(0.0))
-                                                                                .unwrap_or(0.0);
+                                                                                .map(|e: web_sys::HtmlInputElement| e.value())
+                                                                                .unwrap_or_default();
+                                                                            let amount = match super::manage::validated_payment_amount(&amount_text) {
+                                                                                Ok(amount) => amount,
+                                                                                Err(error) => {
+                                                                                    payment_error.set(Some(error.to_string()));
+                                                                                    payment_saving.set(None);
+                                                                                    return;
+                                                                                }
+                                                                            };
                                                                             let paid = web_sys::window()
                                                                                 .and_then(|w| w.document())
                                                                                 .and_then(|d| d.get_element_by_id(&format!("team-paid-{}", rid)))
                                                                                 .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
                                                                                 .map(|e: web_sys::HtmlInputElement| e.checked())
                                                                                 .unwrap_or(false);
-                                                                            let _ = api::mark_team_paid(&u, rid, amount, paid, "", "", "").await;
-                                                                            refresh.set(refresh() + 1);
+                                                                            match api::mark_team_paid(&u, rid, amount, paid, "", "", "").await {
+                                                                                Ok(response) if response.success => {
+                                                                                    payment_saved.set(true);
+                                                                                    refresh.set(refresh() + 1);
+                                                                                }
+                                                                                Ok(response) => payment_error.set(Some(response.error.unwrap_or_else(|| "Payment details could not be saved. Please try again.".to_string()))),
+                                                                                Err(error) => payment_error.set(Some(format!("Payment details could not be saved. {error}"))),
+                                                                            }
+                                                                            payment_saving.set(None);
                                                                         });
                                                                     },
-                                                                    "Save"
+                                                                    if payment_saving() == Some((true, reg_id_save)) { "Saving…" } else { "Save payment" }
+                                                                }
+                                                                if payment_target() == Some((true, reg_id_save)) {
+                                                                    if let Some(error) = payment_error() {
+                                                                        div { class: "w-100 small text-danger mt-2", role: "alert", "{error}" }
+                                                                    } else if payment_saved() {
+                                                                        div { class: "w-100 small text-success mt-2", role: "status", "Saved" }
+                                                                    }
                                                                 }
                                                             }
                                                             if let Some(paid_at) = &team_data.registration.paid_at {
-                                                                div { class: "form-text", "Paid at {paid_at}" }
+                                                                div { class: "form-text", "Paid " {crate::time_format::format_registration_timestamp(paid_at)} }
                                                             }
                                                         }
                                                     }
@@ -315,97 +358,72 @@ pub fn Manage(url: String) -> Element {
 
                 div { class: "row mt-4",
                     div { class: "col-12",
-                        div { class: "card",
-                            div { class: "card-header", h5 { class: "mb-0", "Player Registrations" } }
-                            div { class: "card-body",
-                                div { class: "table-responsive",
-                                    table { class: "table table-striped",
+                        div { class: "edit-section data-section",
+                            div { class: "edit-section-heading", h3 { class: "h5 mb-0", "Player Registrations" } }
+                            div { class: "edit-section-body",
+                                div { class: "table-responsive management-table-wrap",
+                                    table { class: "table table-striped management-table",
                                         thead {
                                             tr {
-                                                th { "Player Name" }
-                                                th { "Team" }
-                                                th { "Jersey" }
+                                                th { class: "table-nowrap", "Player Name" }
+                                                th { class: "table-nowrap", "Team" }
+                                                th { class: "table-nowrap", "Jersey" }
                                                 if d.tournament.waiver_required {
-                                                    th { "Waiver Signed Name" }
-                                                    th { "Waiver Status" }
+                                                    th { class: "table-nowrap", "Waiver Signed Name" }
+                                                    th { class: "table-nowrap", "Waiver Status" }
                                                 }
-                                                th { "Status" }
-                                                th { "Registration Date" }
-                                                th { "Actions" }
+                                                th { class: "table-nowrap", "Status" }
+                                                th { class: "table-nowrap", "Registration Date" }
+                                                th { class: "table-nowrap", "Actions" }
                                             }
                                         }
                                         tbody {
                                             for (url_dereg, url_save, player_id_dereg, reg_id_save, player_data) in d.player_registrations.iter().map(|p| (url.clone(), url.clone(), p.registration.player.clone(), p.registration.id, p)) {
                                                 tr { key: "{player_data.registration.id}",
-                                                    td {
+                                                    td { class: "table-copy", "data-label": "Player",
                                                         a { href: "/players/{player_data.registration.player}", class: "text-decoration-none",
                                                             strong { "{player_data.player.name}" }
                                                         }
                                                     }
-                                                    td {
+                                                    td { class: "table-copy", "data-label": "Team",
                                                         if let Some(team) = &player_data.team {
                                                             a { href: "/teams/{team.id}", class: "text-decoration-none", "{team.name}" }
                                                         } else {
                                                             span { class: "text-muted", "Unattached" }
                                                         }
                                                     }
-                                                    td {
+                                                    td { class: "table-copy", "data-label": "Jersey",
                                                         if player_data.registration.jersey_name.is_some()
-                                                            && player_data.registration.jersey_number.is_some()
+                                                            || player_data.registration.jersey_number.is_some()
                                                         {
-                                                            "#{player_data.registration.jersey_number.as_deref().unwrap_or(\"\")} {player_data.registration.jersey_name.as_deref().unwrap_or(\"\")}"
-                                                        } else if let Some(name) = &player_data.registration.jersey_name {
-                                                            "{name}"
-                                                        } else if let Some(num) = &player_data.registration.jersey_number {
-                                                            "#{num}"
+                                                            span { class: "table-jersey",
+                                                                if let Some(name) = &player_data.registration.jersey_name {
+                                                                    span { class: "table-copy", "{name}" }
+                                                                }
+                                                                if let Some(num) = &player_data.registration.jersey_number {
+                                                                    span { class: "table-nowrap", "#{num}" }
+                                                                }
+                                                            }
                                                         } else {
                                                             span { class: "text-muted", "No jersey info" }
                                                         }
                                                     }
                                                     if d.tournament.waiver_required {
-                                                        td {
+                                                        td { class: "table-copy", "data-label": "Signed waiver name",
                                                             span { class: "text-muted",
                                                                 "{player_data.registration.waiver_legal_name_signature.as_deref().unwrap_or(\"-\")}"
                                                             }
                                                         }
-                                                        td {
-                                                            if player_data.registration.waiver_required {
-                                                                {
-                                                                    let ws = player_data.registration.waiver_status.as_deref().unwrap_or("NOT_SIGNED");
-                                                                    let (cls, label) = match ws {
-                                                                        "VALID" => ("bg-success", "Waiver valid"),
-                                                                        "OUT_OF_DATE" => ("bg-warning text-dark", "Waiver out of date"),
-                                                                        "NOT_SIGNED" => ("bg-danger", "Waiver not signed"),
-                                                                        _ => ("bg-secondary", "Waiver status unknown"),
-                                                                    };
-                                                                    rsx! { span { class: "badge {cls}", "{label}" } }
-                                                                }
-                                                            } else {
-                                                                span { class: "text-muted", "-" }
-                                                            }
+                                                        td { "data-label": "Waiver",
+                                                            WaiverStatusBadge { required: player_data.registration.waiver_required, status: player_data.registration.waiver_status.clone(), show_not_required: true }
                                                         }
                                                     }
-                                                    td {
-                                                        span {
-                                                            class: format!(
-                                                                "badge {}",
-                                                                match player_data.registration.status.as_str() {
-                                                                    "CONFIRMED" => "bg-success",
-                                                                    "CANCELLED" => "bg-danger",
-                                                                    "PENDING_TEAM_APPROVAL" => "bg-warning",
-                                                                    _ => "bg-secondary",
-                                                                }
-                                                            ),
-                                                            "{player_data.registration.status}"
-                                                        }
-                                                        if player_data.registration.paid {
-                                                            span { class: "badge bg-primary ms-1", "Paid" }
-                                                        } else {
-                                                            span { class: "badge bg-secondary ms-1", "Unpaid" }
-                                                        }
+                                                    td { "data-label": "Status",
+                                                        RegistrationStatusBadge { status: player_data.registration.status.clone() }
+                                                        PaymentStatusBadge { paid: player_data.registration.paid, class: "ms-1" }
                                                     }
-                                                    td { "{player_data.registration.registered_at.as_deref().unwrap_or(\"-\")}" }
-                                                    td {
+                                                    td { class: "table-nowrap", "data-label": "Registered", {crate::time_format::format_registration_timestamp(player_data.registration.registered_at.as_deref().unwrap_or("—"))} }
+                                                    td { "data-label": "Actions", class: "management-actions",
                                                         if player_data.registration.status == "PENDING_TEAM_APPROVAL"
                                                             || player_data.registration.status == "CONFIRMED"
                                                         {
@@ -427,8 +445,8 @@ pub fn Manage(url: String) -> Element {
                                                                 "Deregister"
                                                             }
                                                         }
-                                                        div { class: "d-inline ms-2",
-                                                            div { class: "input-group input-group-sm", style: "max-width: 420px;",
+                                                        div { class: "management-payment",
+                                                            div { class: "input-group input-group-sm management-payment-controls",
                                                                 span { class: "input-group-text", "$" }
                                                                 input {
                                                                     r#type: "number",
@@ -436,45 +454,77 @@ pub fn Manage(url: String) -> Element {
                                                                     min: "0",
                                                                     class: "form-control",
                                                                     id: "player-amount-{player_data.registration.id}",
+                                                                        aria_label: "Amount paid",
+                                                                        inputmode: "decimal",
                                                                     placeholder: "Amount",
                                                                     value: format!("{:.2}", player_data.registration.amount_paid)
                                                                 }
-                                                                div { class: "input-group-text",
+                                                                label { class: "input-group-text management-payment-confirmed",
                                                                     input {
                                                                         class: "form-check-input mt-0",
                                                                         r#type: "checkbox",
                                                                         id: "player-paid-{player_data.registration.id}",
+                                                                        aria_label: "Payment complete",
                                                                         checked: player_data.registration.paid
                                                                     }
+                                                                        "Payment complete"
                                                                 }
                                                                 button {
                                                                     r#type: "button",
                                                                     class: "btn btn-sm btn-outline-primary",
+                                                                    disabled: payment_saving().is_some(),
                                                                     onclick: move |_| {
+                                                                        if payment_saving().is_some() { return; }
+                                                                        payment_error.set(None);
+                                                                        payment_saved.set(false);
                                                                         let u = url_save.clone();
                                                                         let rid = reg_id_save;
+                                                                        payment_target.set(Some((false, rid)));
+                                                                        payment_saving.set(Some((false, rid)));
                                                                         spawn(async move {
-                                                                            let amount: f64 = web_sys::window()
+                                                                            let amount_text = web_sys::window()
                                                                                 .and_then(|w| w.document())
                                                                                 .and_then(|d| d.get_element_by_id(&format!("player-amount-{}", rid)))
                                                                                 .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
-                                                                                .map(|e: web_sys::HtmlInputElement| e.value().parse().unwrap_or(0.0))
-                                                                                .unwrap_or(0.0);
+                                                                                .map(|e: web_sys::HtmlInputElement| e.value())
+                                                                                .unwrap_or_default();
+                                                                            let amount = match super::manage::validated_payment_amount(&amount_text) {
+                                                                                Ok(amount) => amount,
+                                                                                Err(error) => {
+                                                                                    payment_error.set(Some(error.to_string()));
+                                                                                    payment_saving.set(None);
+                                                                                    return;
+                                                                                }
+                                                                            };
                                                                             let paid = web_sys::window()
                                                                                 .and_then(|w| w.document())
                                                                                 .and_then(|d| d.get_element_by_id(&format!("player-paid-{}", rid)))
                                                                                 .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
                                                                                 .map(|e: web_sys::HtmlInputElement| e.checked())
                                                                                 .unwrap_or(false);
-                                                                            let _ = api::mark_player_paid(&u, rid, amount, paid, "", "", "").await;
-                                                                            refresh.set(refresh() + 1);
+                                                                            match api::mark_player_paid(&u, rid, amount, paid, "", "", "").await {
+                                                                                Ok(response) if response.success => {
+                                                                                    payment_saved.set(true);
+                                                                                    refresh.set(refresh() + 1);
+                                                                                }
+                                                                                Ok(response) => payment_error.set(Some(response.error.unwrap_or_else(|| "Payment details could not be saved. Please try again.".to_string()))),
+                                                                                Err(error) => payment_error.set(Some(format!("Payment details could not be saved. {error}"))),
+                                                                            }
+                                                                            payment_saving.set(None);
                                                                         });
                                                                     },
-                                                                    "Save"
+                                                                    if payment_saving() == Some((false, reg_id_save)) { "Saving…" } else { "Save payment" }
+                                                                }
+                                                                if payment_target() == Some((false, reg_id_save)) {
+                                                                    if let Some(error) = payment_error() {
+                                                                        div { class: "w-100 small text-danger mt-2", role: "alert", "{error}" }
+                                                                    } else if payment_saved() {
+                                                                        div { class: "w-100 small text-success mt-2", role: "status", "Saved" }
+                                                                    }
                                                                 }
                                                             }
                                                             if let Some(paid_at) = &player_data.registration.paid_at {
-                                                                div { class: "form-text", "Paid at {paid_at}" }
+                                                                div { class: "form-text", "Paid " {crate::time_format::format_registration_timestamp(paid_at)} }
                                                             }
                                                         }
                                                     }
@@ -494,8 +544,8 @@ pub fn Manage(url: String) -> Element {
                     strong { "Note: " }
                     "Quick Register bypasses payment (registration is marked paid for $0) and skips the usual approval steps (registrations land as confirmed immediately)."
                 }
-                // Sub-tab pills: Players / Teams
-                ul { class: "nav nav-pills mb-3",
+                // Registration type tabs use the shared theme and touch targets.
+                ul { class: "nav nav-tabs mb-3",
                     li { class: "nav-item",
                         button {
                             r#type: "button",
@@ -528,19 +578,25 @@ pub fn Manage(url: String) -> Element {
                                 div { class: "alert alert-danger", "{err}" }
                             }
 
-                            // Player search card
-                            div { class: "card mb-3",
-                                div { class: "card-header", h5 { class: "mb-0", "Find Player" } }
-                                div { class: "card-body",
+                            // Player search section
+                            div { class: "edit-section mb-3",
+                                div { class: "edit-section-heading", h3 { class: "h5 mb-0", "Find Player" } }
+                                div { class: "edit-section-body",
                                     input {
                                         r#type: "text",
                                         class: "form-control mb-2",
                                         placeholder: "Search by name or username",
+                                        aria_label: "Search players by name or username",
                                         value: "{player_search_query()}",
                                         oninput: move |e| player_search_query.set(e.value()),
                                     }
                                     if player_searching() {
-                                        p { class: "text-muted small mb-0", "Searching..." }
+                                        p { class: "text-muted small mb-0", role: "status", "Searching…" }
+                                    } else if let Some(message) = player_search_error() {
+                                        p { class: "text-danger small", role: "alert", "Could not search: {message}" }
+                                        button { r#type: "button", class: "btn btn-outline-secondary btn-sm", onclick: move |_| player_search_retry.set(player_search_retry().wrapping_add(1)), "Retry search" }
+                                    } else if !player_search_query().trim().is_empty() && player_search_results().is_empty() {
+                                        p { class: "text-muted small mb-0", "No matching players found." }
                                     }
                                     if !player_search_results().is_empty() {
                                         ul { class: "list-group",
@@ -576,9 +632,9 @@ pub fn Manage(url: String) -> Element {
                                     let waiver_url = d.tournament.waiver_filepath.clone();
                                     let url_submit = url.clone();
                                     rsx! {
-                                        div { class: "card mb-3",
-                                            div { class: "card-header d-flex justify-content-between align-items-center",
-                                                h5 { class: "mb-0", "Registering: {player.name}" }
+                                        div { class: "edit-section mb-3",
+                                            div { class: "edit-section-heading d-flex justify-content-between align-items-center",
+                                                h3 { class: "h5 mb-0", "Registering: {player.name}" }
                                                 button {
                                                     class: "btn btn-sm btn-outline-secondary",
                                                     r#type: "button",
@@ -592,7 +648,7 @@ pub fn Manage(url: String) -> Element {
                                                     "Change"
                                                 }
                                             }
-                                            div { class: "card-body",
+                                            div { class: "edit-section-body",
                                                 form {
                                                     onsubmit: move |ev| {
                                                         ev.prevent_default();
@@ -748,19 +804,25 @@ pub fn Manage(url: String) -> Element {
                                 div { class: "alert alert-danger", "{err}" }
                             }
 
-                            // Team search card
-                            div { class: "card mb-3",
-                                div { class: "card-header", h5 { class: "mb-0", "Find Team" } }
-                                div { class: "card-body",
+                            // Team search section
+                            div { class: "edit-section mb-3",
+                                div { class: "edit-section-heading", h3 { class: "h5 mb-0", "Find Team" } }
+                                div { class: "edit-section-body",
                                     input {
                                         r#type: "text",
                                         class: "form-control mb-2",
                                         placeholder: "Search by team name or username",
+                                        aria_label: "Search teams by name or username",
                                         value: "{team_search_query()}",
                                         oninput: move |e| team_search_query.set(e.value()),
                                     }
                                     if team_searching() {
-                                        p { class: "text-muted small mb-0", "Searching..." }
+                                        p { class: "text-muted small mb-0", role: "status", "Searching…" }
+                                    } else if let Some(message) = team_search_error() {
+                                        p { class: "text-danger small", role: "alert", "Could not search: {message}" }
+                                        button { r#type: "button", class: "btn btn-outline-secondary btn-sm", onclick: move |_| team_search_retry.set(team_search_retry().wrapping_add(1)), "Retry search" }
+                                    } else if !team_search_query().trim().is_empty() && team_search_results().is_empty() {
+                                        p { class: "text-muted small mb-0", "No matching teams found." }
                                     }
                                     if !team_search_results().is_empty() {
                                         ul { class: "list-group",
@@ -795,9 +857,9 @@ pub fn Manage(url: String) -> Element {
                                 {
                                     let url_team_submit = url.clone();
                                     rsx! {
-                                        div { class: "card mb-3",
-                                            div { class: "card-header d-flex justify-content-between align-items-center",
-                                                h5 { class: "mb-0", "Registering: {team.name}" }
+                                        div { class: "edit-section mb-3",
+                                            div { class: "edit-section-heading d-flex justify-content-between align-items-center",
+                                                h3 { class: "h5 mb-0", "Registering: {team.name}" }
                                                 button {
                                                     class: "btn btn-sm btn-outline-secondary",
                                                     r#type: "button",
@@ -809,7 +871,7 @@ pub fn Manage(url: String) -> Element {
                                                     "Change"
                                                 }
                                             }
-                                            div { class: "card-body",
+                                            div { class: "edit-section-body",
                                                 form {
                                                     onsubmit: move |ev| {
                                                         ev.prevent_default();
@@ -902,8 +964,8 @@ pub fn Manage(url: String) -> Element {
 
                         // Session log for this tab session
                         if !session_log().is_empty() {
-                            div { class: "card mb-3",
-                                div { class: "card-header", h5 { class: "mb-0", "Registered this session" } }
+                            details { id: "session-registration-history", class: "card data-section section-disclosure mb-3", open: true,
+                                summary { class: "card-header", h3 { class: "h5 mb-0", "Registered this session ({session_log().len()})" } }
                                 ul { class: "list-group list-group-flush",
                                     for entry in session_log().iter() {
                                         match entry {
@@ -926,7 +988,7 @@ pub fn Manage(url: String) -> Element {
                                             },
                                             SessionLogEntry::Team { team_name, pseudonym } => rsx! {
                                                 li { class: "list-group-item",
-                                                    span { class: "badge bg-info me-2", "Team" }
+                                                    span { class: "badge table-nowrap bg-info me-2", "Team" }
                                                     strong { "{team_name}" }
                                                     if team_name != pseudonym {
                                                         " "
@@ -946,6 +1008,24 @@ pub fn Manage(url: String) -> Element {
             p { class: "text-danger", "{e}" }
         } else {
             p { "Loading..." }
+        }
+    }
+}
+
+#[cfg(test)]
+mod payment_tests {
+    use super::validated_payment_amount;
+
+    #[test]
+    fn payment_amount_accepts_zero_and_decimal_values() {
+        assert_eq!(validated_payment_amount("0"), Ok(0.0));
+        assert_eq!(validated_payment_amount(" 12.50 "), Ok(12.5));
+    }
+
+    #[test]
+    fn invalid_payment_amounts_cannot_become_zero_payments() {
+        for value in ["", " ", "ten", "-1", "NaN", "inf", "1e999"] {
+            assert!(validated_payment_amount(value).is_err(), "{value}");
         }
     }
 }

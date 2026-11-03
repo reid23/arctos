@@ -1,12 +1,8 @@
 use crate::api;
-use crate::components::PompfenIcon;
-use crate::types::SideCompManageResultRow;
+use crate::components::{ActionRecovery, PompfenIcon, RecordTimestamp};
+use crate::types::{SideCompManageResultRow, SideCompManageResults as ManageResultsData};
 use crate::Route;
 use dioxus::prelude::*;
-
-fn format_stamp(stamp: &Option<String>) -> String {
-    stamp.clone().unwrap_or_else(|| "—".to_string())
-}
 
 fn player_label(row: &SideCompManageResultRow) -> String {
     let entry = row
@@ -21,12 +17,55 @@ fn player_label(row: &SideCompManageResultRow) -> String {
     format!("{entry} {} ({jersey} · {short})", row.display_name)
 }
 
+#[derive(Clone, Debug, PartialEq)]
+enum ResultChange {
+    Validity(String, bool),
+    Finalize,
+}
+impl ResultChange {
+    fn applied(&self, data: &ManageResultsData) -> bool {
+        match self {
+            Self::Validity(id, valid) => data.results.iter().any(|row| row.uuid == *id && row.valid == *valid),
+            Self::Finalize => data.finalized,
+        }
+    }
+}
+
+fn result_checkbox_value(id: &str, authoritative: bool, recovery: &ActionRecovery, requested: Option<&ResultChange>) -> bool {
+    if recovery.blocks_write() {
+        if let Some(ResultChange::Validity(target, value)) = requested {
+            if target == id { return *value; }
+        }
+    }
+    authoritative
+}
+
+async fn reconcile_result_change(
+    comp_id: i32,
+    change: ResultChange,
+    mut refreshed: Signal<Option<ManageResultsData>>,
+    mut recovery: Signal<ActionRecovery>,
+    message: String,
+) {
+    recovery.set(ActionRecovery::Checking);
+    match api::sidecomp_manage_results(comp_id).await {
+        Ok(current) => {
+            recovery.set(if change.applied(&current) { ActionRecovery::Idle } else {
+                ActionRecovery::Retryable(format!("{message} Current results have been loaded; review them before trying again."))
+            });
+            refreshed.set(Some(current));
+        }
+        Err(error) => recovery.set(ActionRecovery::NeedsCheck(format!("Could not confirm the change. {error} Check status before making another change."))),
+    }
+}
+
 #[component]
 pub fn SideCompManageResults(url: String, comp_id: i32) -> Element {
     let mut data = use_resource(move || async move { api::sidecomp_manage_results(comp_id).await });
-    let mut error = use_signal(|| None::<String>);
-    let mut finalizing = use_signal(|| false);
-    let mut busy_uuid = use_signal(|| None::<String>);
+    let mut recovery = use_signal(ActionRecovery::default);
+    let refreshed = use_signal(|| None::<ManageResultsData>);
+    let mut requested = use_signal(|| None::<ResultChange>);
+    let snapshot = refreshed().map(Ok).or_else(|| data.read().clone());
 
     let url_back = url.clone();
 
@@ -38,7 +77,18 @@ pub fn SideCompManageResults(url: String, comp_id: i32) -> Element {
                     class: "btn btn-link",
                     "<- Back to side competition"
                 }
-                match data.read().as_ref() {
+                if recovery().busy() { p { role: "status", "Saving and checking results…" } }
+                if let Some(message) = recovery().message() { p { class: "text-danger", role: "alert", "{message}" } }
+                if matches!(recovery(), ActionRecovery::NeedsCheck(_)) {
+                    button { r#type: "button", class: "btn btn-outline-secondary mb-3", onclick: move |_| {
+                        if recovery().busy() { return; }
+                        if let Some(change) = requested() {
+                            recovery.set(ActionRecovery::Checking);
+                            spawn(reconcile_result_change(comp_id, change, refreshed, recovery, "The change was not confirmed.".into()));
+                        }
+                    }, "Check result status" }
+                }
+                match snapshot.as_ref() {
                     Some(Ok(payload)) => {
                         let name = payload.name.clone();
                         let active = payload.active;
@@ -53,49 +103,51 @@ pub fn SideCompManageResults(url: String, comp_id: i32) -> Element {
                             "Permanently finalize results".to_string()
                         };
                         rsx! {
-                            h1 { "Manage results — {name}" }
+                            h2 { "Manage results — {name}" }
                             div { class: "mb-3 d-flex flex-wrap align-items-center gap-2",
                                 if finalized {
                                     span { class: "badge bg-dark", "Finalized" }
                                 }
                                 button {
                                     class: "btn btn-warning",
-                                    disabled: !can_finalize || finalizing(),
+                                    disabled: !can_finalize || recovery().blocks_write(),
                                     title: "{finalize_title}",
+                                    aria_describedby: "sidecomp-finalize-help",
                                     onclick: move |_| {
-                                        if !can_finalize {
+                                        if !can_finalize || recovery().blocks_write() {
                                             return;
                                         }
-                                        finalizing.set(true);
-                                        error.set(None);
+                                        let change = ResultChange::Finalize;
+                                        requested.set(Some(change.clone()));
+                                        recovery.set(ActionRecovery::Pending);
                                         spawn(async move {
-                                            match api::sidecomp_finalize(comp_id).await {
-                                                Ok(_) => data.restart(),
-                                                Err(e) => error.set(Some(e)),
-                                            }
-                                            finalizing.set(false);
+                                            let message = api::sidecomp_finalize(comp_id).await.err().unwrap_or_else(|| "Finalization was not confirmed.".into());
+                                            reconcile_result_change(comp_id, change, refreshed, recovery, message).await;
                                         });
                                     },
                                     "Finalize results"
                                 }
                             }
-                            if let Some(err) = error() {
-                                div { class: "alert alert-danger", "{err}" }
+                            p { class: "small text-muted", id: "sidecomp-finalize-help",
+                                if active { "Deactivate this side competition in Edit before finalizing." }
+                                else if finalized { "Results are finalized. Validity corrections remain available." }
+                                else { "Finalizing stops new scoring and prevents reactivation. You can still correct result validity." }
                             }
                             if results.is_empty() {
                                 p { class: "text-muted", "No points logged yet." }
                             } else {
-                                div { class: "table-responsive",
-                                    table { class: "table table-sm align-middle",
+                                p { class: "small text-muted", "Times shown in your local timezone." }
+                                div { class: "table-responsive", role: "region", "aria-label": "Side event result management", tabindex: "0",
+                                    table { class: "table table-sm align-middle sidecomp-management-table",
                                         thead {
                                             tr {
-                                                th { "Time" }
-                                                th { "Player" }
-                                                th { "Role" }
-                                                th { "Points" }
-                                                th { "Ref" }
-                                                th { "Flagged" }
-                                                th { "Valid" }
+                                                th { class: "table-nowrap", "Time" }
+                                                th { class: "table-nowrap", "Player" }
+                                                th { class: "table-nowrap", "Role" }
+                                                th { class: "table-number", "Points" }
+                                                th { class: "table-nowrap", "Ref" }
+                                                th { class: "table-nowrap", "Flagged" }
+                                                th { class: "table-nowrap", "Valid" }
                                             }
                                         }
                                         tbody {
@@ -105,7 +157,8 @@ pub fn SideCompManageResults(url: String, comp_id: i32) -> Element {
                                                     let uuid_busy = uuid.clone();
                                                     let is_flagged = row.flagged;
                                                     let is_valid = row.valid;
-                                                    let busy = busy_uuid().as_deref() == Some(uuid.as_str());
+                                                    let busy = recovery().blocks_write();
+                                                    let checked = result_checkbox_value(&uuid, is_valid, &recovery(), requested().as_ref());
                                                     let row_class = if is_flagged {
                                                         "table-warning"
                                                     } else if !is_valid {
@@ -114,7 +167,6 @@ pub fn SideCompManageResults(url: String, comp_id: i32) -> Element {
                                                         ""
                                                     };
                                                     let label = player_label(&row);
-                                                    let stamp = format_stamp(&row.stamp);
                                                     let points_label = if row.points > 0 {
                                                         format!("+{}", row.points)
                                                     } else {
@@ -132,9 +184,9 @@ pub fn SideCompManageResults(url: String, comp_id: i32) -> Element {
                                                             class: "{row_class}",
                                                             style: "{row_style}",
                                                             title: "{row_title}",
-                                                            td { class: "text-nowrap small", "{stamp}" }
-                                                            td { "{label}" }
-                                                            td {
+                                                            td { class: "table-nowrap small", RecordTimestamp { value: row.stamp.clone(), include_seconds: true } }
+                                                            td { class: "table-copy", "{label}" }
+                                                            td { class: "table-nowrap",
                                                                 if !row.registered {
                                                                     i {
                                                                         class: "fas fa-exclamation-triangle text-warning",
@@ -146,35 +198,35 @@ pub fn SideCompManageResults(url: String, comp_id: i32) -> Element {
                                                                 }
                                                             }
                                                             td {
-                                                                class: if row.untracked { "fw-bold text-muted" } else if row.points >= 0 { "fw-bold text-success" } else { "fw-bold text-danger" },
+                                                                class: if row.untracked { "table-number fw-bold text-muted" } else if row.points >= 0 { "table-number fw-bold text-success" } else { "table-number fw-bold text-danger" },
                                                                 "{points_label}"
                                                             }
-                                                            td { class: "small", "{row.result_ref}" }
-                                                            td {
+                                                            td { class: "small table-copy", "{row.result_ref}" }
+                                                            td { class: "table-nowrap",
                                                                 if is_flagged {
                                                                     span { class: "badge bg-warning text-dark", "Flagged" }
                                                                 } else {
                                                                     span { class: "text-muted", "—" }
                                                                 }
                                                             }
-                                                            td {
+                                                            td { class: "table-nowrap",
                                                                 div { class: "form-check form-switch m-0",
                                                                     input {
                                                                         class: "form-check-input",
                                                                         r#type: "checkbox",
-                                                                        checked: is_valid,
+                                                                        checked,
+                                                                        aria_label: "Valid result for {label}: {points_label}",
                                                                         disabled: busy,
                                                                         onchange: move |evt| {
+                                                                            if recovery().blocks_write() { return; }
                                                                             let next = evt.checked();
+                                                                            let change = ResultChange::Validity(uuid_busy.clone(), next);
                                                                             let id = uuid_busy.clone();
-                                                                            busy_uuid.set(Some(id.clone()));
-                                                                            error.set(None);
+                                                                            requested.set(Some(change.clone()));
+                                                                            recovery.set(ActionRecovery::Pending);
                                                                             spawn(async move {
-                                                                                match api::sidecomp_set_result_valid(&id, next).await {
-                                                                                    Ok(_) => data.restart(),
-                                                                                    Err(e) => error.set(Some(e)),
-                                                                                }
-                                                                                busy_uuid.set(None);
+                                                                                let message = api::sidecomp_set_result_valid(&id, next).await.err().unwrap_or_else(|| "Validity change was not confirmed.".into());
+                                                                                reconcile_result_change(comp_id, change, refreshed, recovery, message).await;
                                                                             });
                                                                         },
                                                                     }
@@ -190,10 +242,38 @@ pub fn SideCompManageResults(url: String, comp_id: i32) -> Element {
                             }
                         }
                     }
-                    Some(Err(e)) => rsx! { div { class: "alert alert-danger", "{e}" } },
-                    None => rsx! { div { class: "spinner-border" } },
+                    Some(Err(e)) => rsx! { div { class: "alert alert-danger", role: "alert", "Could not load results: {e}" } button { r#type: "button", class: "btn btn-outline-secondary", onclick: move |_| data.restart(), "Retry loading results" } },
+                    None => rsx! { p { role: "status", "Loading results…" } },
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+    #[test]
+    fn rejected_validity_change_restores_checkbox_after_pending_value() {
+        let request = ResultChange::Validity("a".into(), true);
+        assert!(result_checkbox_value("a", false, &ActionRecovery::Pending, Some(&request)));
+        assert!(result_checkbox_value("a", false, &ActionRecovery::NeedsCheck("offline".into()), Some(&request)));
+        assert!(!result_checkbox_value("a", false, &ActionRecovery::Retryable("rejected".into()), Some(&request)));
+        assert!(!result_checkbox_value("other", false, &ActionRecovery::Pending, Some(&request)));
+        assert!(result_checkbox_value("a", true, &ActionRecovery::Idle, Some(&request)));
+    }
+
+    #[test]
+    fn result_reconciliation_requires_the_requested_authoritative_value() {
+        let mut data: ManageResultsData = serde_json::from_value(serde_json::json!({
+            "id":1,"name":"Example","type":"DUELS","active":false,"finalized":false,
+            "results":[{"uuid":"a","comp":1,"player":1,"points":1,"ref":"ref","valid":false}]
+        })).unwrap();
+        assert!(ResultChange::Validity("a".into(), false).applied(&data));
+        assert!(!ResultChange::Validity("a".into(), true).applied(&data));
+        assert!(!ResultChange::Validity("missing".into(), false).applied(&data));
+        assert!(!ResultChange::Finalize.applied(&data));
+        data.finalized = true;
+        assert!(ResultChange::Finalize.applied(&data));
     }
 }

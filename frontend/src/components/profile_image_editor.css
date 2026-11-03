@@ -1,0 +1,97 @@
+.arctos-app .profile-image-editor {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 3 / 1;
+  min-width: 0;
+}
+.arctos-app .profile-image-editor.is-avatar { aspect-ratio: 1; }
+.arctos-app .profile-image-editor.has-open-menu { z-index: 50; }
+.arctos-app .profile-image-viewport {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: linear-gradient(125deg, var(--ui-gradient-start), var(--ui-gradient-end));
+}
+.arctos-app .is-avatar > .profile-image-viewport { border-radius: 50%; }
+.arctos-app .profile-image-viewport.is-adjusting { cursor: grab; touch-action: none; }
+.arctos-app .profile-image-viewport.is-adjusting:active { cursor: grabbing; }
+.arctos-app .profile-image-viewport:focus-visible {
+  outline: 3px solid var(--ui-link);
+  outline-offset: 3px;
+}
+.arctos-app .profile-image-viewport img {
+  position: absolute;
+  max-width: none;
+  user-select: none;
+  pointer-events: none;
+}
+.arctos-app .profile-image-placeholder {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  color: var(--ui-muted);
+  background: var(--ui-surface-muted);
+  font-size: 2rem;
+}
+.arctos-app .profile-image-camera,
+.arctos-app .profile-image-reset {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--ui-border);
+  border-radius: 50%;
+  color: var(--ui-text);
+  background: var(--ui-surface);
+  box-shadow: 0 2px 6px rgb(0 0 0 / 15%);
+}
+.arctos-app .is-avatar > .profile-image-camera { right: 0; bottom: 0; }
+.arctos-app .profile-image-reset { top: 8px; left: 8px; right: auto; bottom: auto; }
+.arctos-app .is-avatar > .profile-image-reset { top: 0; left: 0; }
+.arctos-app .profile-image-camera:hover,
+.arctos-app .profile-image-reset:hover { background: var(--ui-surface-hover); }
+.arctos-app .profile-image-camera:focus-visible,
+.arctos-app .profile-image-reset:focus-visible { outline: 3px solid var(--ui-link); outline-offset: 2px; }
+.arctos-app .profile-image-menu-dismiss { position: fixed; inset: 0; border: 0; background: transparent; cursor: default; }
+.arctos-app .profile-image-options {
+  position: absolute;
+  right: 8px;
+  top: calc(100% - 4px);
+  width: max-content;
+  min-width: 176px;
+  max-width: calc(100vw - 32px);
+  padding: 4px;
+  border: 1px solid var(--ui-border);
+  border-radius: 10px;
+  color: var(--ui-text);
+  background: var(--ui-surface);
+  box-shadow: 0 5px 20px rgb(0 0 0 / 18%);
+}
+.arctos-app .is-avatar > .profile-image-options { left: 0; right: auto; }
+.arctos-app .profile-image-options .dropdown-item { min-height: 44px; padding: 10px 12px; border-radius: 6px; }
+.arctos-app .profile-image-message {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  right: 4px;
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  color: var(--ui-text);
+  background: var(--ui-surface);
+  font-size: .85rem;
+}
+.arctos-app .profile-image-message.is-error { color: var(--bs-danger-text-emphasis); background: var(--bs-danger-bg-subtle); }
+.arctos-app .is-avatar > .profile-image-message { top: calc(100% + 8px); width: min(240px, calc(100vw - 48px)); right: auto; z-index: 2; }
+.arctos-app .profile-image-controls { color: var(--ui-text); padding: 12px 0; min-width: 0; }
+.arctos-app .profile-image-controls .form-text { margin: 0 0 8px; color: var(--ui-muted); }
+.arctos-app .profile-image-zoom-row { display: flex; align-items: center; gap: 12px; }
+.arctos-app .profile-image-zoom-row .form-range { flex: 1; width: 0; min-width: 44px; height: 44px; margin: 0; }
+.arctos-app .profile-image-zoom-row .form-range::-webkit-slider-thumb { background: var(--ui-link); }
+.arctos-app .profile-image-zoom-row .form-range::-moz-range-thumb { background: var(--ui-link); }
+.arctos-app .profile-image-zoom-row label { flex-shrink: 0; }

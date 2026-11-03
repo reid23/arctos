@@ -1,11 +1,17 @@
 #![allow(non_snake_case)]
 
 mod api;
+mod appearance;
+mod auth;
 mod components;
 mod display;
+mod form_validation;
+mod league_cache;
 mod pages;
+mod public_navigation;
 mod time_format;
 mod url_slug;
+mod viewport;
 
 mod stones_filter;
 mod time_sync;
@@ -18,6 +24,9 @@ use pages::*;
 #[rustfmt::skip]
 enum Route {
     #[layout(Layout)]
+    #[route("/?:q&:view&:page")]
+    IndexWithQuery { q: String, view: String, page: String },
+
     #[route("/")]
     Index {},
 
@@ -39,14 +48,17 @@ enum Route {
     #[route("/auth/google/complete-profile")]
     GoogleCompleteProfile {},
 
+    #[route("/leagues?:q&:view&:page")]
+    LeaguesIndexWithQuery { q: String, view: String, page: String },
+
     #[route("/leagues")]
     LeaguesIndex {},
 
-    #[route("/create-event")]
-    CreateEvent {},
-
     #[route("/leagues/new")]
     NewLeague {},
+
+    #[route("/leagues/:league_url?:tab")]
+    LeagueHomeWithTab { league_url: String, tab: String },
 
     #[route("/leagues/:league_url")]
     LeagueHome { league_url: String },
@@ -127,6 +139,12 @@ enum Route {
     #[route("/:url/invitations")]
     Invitations { url: String },
 
+    #[route("/:url/records")]
+    HistoricalRecords { url: String },
+
+    #[route("/:url/rosters/:team_id")]
+    HistoricalRoster { url: String, team_id: String },
+
     #[route("/:url/start-match/:match_id")]
     StartMatch { url: String, match_id: String },
 
@@ -154,17 +172,41 @@ enum Route {
     #[route("/players/:player_id/edit")]
     EditPlayerProfile { player_id: String },
 
+    #[route("/manage-teams")]
+    ManageTeams {},
+
+    #[route("/teams/:team_id/manage?:tab")]
+    ManageTeamWithTab { team_id: String, tab: String },
+
+    #[route("/teams/:team_id/manage")]
+    ManageTeam { team_id: String },
+
+    #[route("/teams/:team_id/manage/:kind/:slug")]
+    ManageTeamEvent { team_id: String, kind: String, slug: String },
+
     #[route("/teams/:team_id/edit")]
     EditTeamProfile { team_id: String },
+
+    #[route("/players?:q&:page")]
+    PlayersListWithQuery { q: String, page: String },
 
     #[route("/players")]
     PlayersList {},
 
+    #[route("/players/:id?:tab")]
+    PlayerProfilePageWithTab { id: String, tab: String },
+
     #[route("/players/:id")]
     PlayerProfilePage { id: String },
 
+    #[route("/teams?:q")]
+    TeamsListWithQuery { q: String },
+
     #[route("/teams")]
     TeamsList {},
+
+    #[route("/teams/:id?:tab")]
+    TeamProfilePageWithTab { id: String, tab: String },
 
     #[route("/teams/:id")]
     TeamProfilePage { id: String },
@@ -180,6 +222,9 @@ enum Route {
 
     #[route("/new-tournament")]
     NewTournament {},
+
+    #[route("/new-historical-tournament")]
+    NewHistoricalTournament {},
 
     #[route("/thanks")]
     Thanks {},
@@ -210,18 +255,44 @@ enum Route {
 
     #[route("/oauth/authorize")]
     OAuthAuthorize {},
+
+    #[route("/:..segments")]
+    NotFound { segments: Vec<String> },
 }
 
-/// The page's path and query string (without `?`) as it was loaded. The router
-/// rewrites the address bar to its own form of the route before any page
-/// renders, which drops query parameters the route doesn't declare and
-/// percent-decodes the ones it does.
+/// Startup fallback for environments without browser location access. In the
+/// browser the persistent history adapter preserves raw URLs, so route entry
+/// helpers read the current location rather than a stale public-page snapshot.
 static INITIAL_LOCATION: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
+static INITIAL_FRAGMENT: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
 
-/// The query string the app was loaded with, if it was loaded at `path`.
+/// Raw query for the route currently being entered, if it owns `path`.
 pub fn initial_query(path: &str) -> Option<String> {
+    #[cfg(target_arch = "wasm32")]
+    if let Some(location) = web_sys::window().map(|window| window.location()) {
+        let current = location.pathname().ok()?;
+        let prefix = public_navigation::document_prefix();
+        let current = public_navigation::without_prefix(&current, &prefix)?;
+        return (current.trim_end_matches('/') == path.trim_end_matches('/'))
+            .then(|| location.search().unwrap_or_default().trim_start_matches('?').to_string());
+    }
     let (initial_path, query) = INITIAL_LOCATION.get()?;
-    (initial_path == path).then(|| query.clone())
+    (initial_path.trim_end_matches('/') == path.trim_end_matches('/')).then(|| query.clone())
+}
+
+/// Raw fragment for the route currently being entered, including `#`.
+pub(crate) fn initial_fragment(path: &str) -> Option<String> {
+    #[cfg(target_arch = "wasm32")]
+    if let Some(location) = web_sys::window().map(|window| window.location()) {
+        let current = location.pathname().ok()?;
+        let prefix = public_navigation::document_prefix();
+        let current = public_navigation::without_prefix(&current, &prefix)?;
+        let fragment = location.hash().ok()?;
+        return (current.trim_end_matches('/') == path.trim_end_matches('/') && !fragment.is_empty())
+            .then_some(fragment);
+    }
+    let (initial_path, fragment) = INITIAL_FRAGMENT.get()?;
+    (initial_path.trim_end_matches('/') == path.trim_end_matches('/') && !fragment.is_empty()).then(|| fragment.clone())
 }
 
 fn main() {
@@ -229,11 +300,15 @@ fn main() {
     if let Some(location) = web_sys::window().map(|window| window.location()) {
         let path = location.pathname().unwrap_or_default();
         let query = location.search().unwrap_or_default().trim_start_matches('?').to_string();
+        let _ = INITIAL_FRAGMENT.set((path.clone(), location.hash().unwrap_or_default()));
         let _ = INITIAL_LOCATION.set((path, query));
     }
     dioxus::launch(|| {
+        let active = public_navigation::use_application_runtime();
         rsx! {
-            Router::<Route> {}
+            document::Link { rel: "icon", r#type: "image/svg+xml", media: "(prefers-color-scheme: light)", href: asset!("/assets/arctos-light.png") }
+            document::Link { rel: "icon", r#type: "image/svg+xml", media: "(prefers-color-scheme: dark)", href: asset!("/assets/arctos-dark.png") }
+            if active { Router::<Route> {} }
         }
     });
 }

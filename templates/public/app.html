@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en"{% if not bare %} class="arctos-public"{% endif %} data-public-html="{{ 'true' if public_enabled else 'false' }}" data-public-prefix="{{ request.script_root or '/' }}">
+<head>
+  <meta charset="utf-8">
+  <!-- Font Awesome Free 6.0.0 icons: https://fontawesome.com/license/free (CC BY 4.0). -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  {% if noindex or not entry %}<meta name="robots" content="noindex">{% endif %}
+  <title>{{ title }}</title>
+  <link rel="icon" type="image/png" href="{{ public_asset('arctos-light.png') }}">
+  {% if not bare %}
+  {% if entry %}<link rel="modulepreload" href="{{ entry }}">{% endif %}
+  <script src="{{ public_asset('appearance.js') }}"></script>
+  <link rel="stylesheet" href="{{ public_asset('bootstrap.css') }}">
+  <link rel="stylesheet" href="{{ public_asset('design.css') }}">
+  <link rel="stylesheet" href="{{ public_asset('theme.css') }}">
+  <link rel="stylesheet" href="{{ public_asset('public.css') }}">
+  {% endif %}
+</head>
+<body{% if not bare %} class="public-startup"{% endif %}>
+  {% if not bare %}
+  {% from 'public/chrome.html' import site_header, site_footer with context %}
+  <div id="app-startup" class="arctos-app public-shell" data-public-theme>
+    {{ site_header('startup-content') }}
+    <main class="container-wide app-main" id="startup-content" tabindex="-1">
+  {% endif %}
+  {% if not bare or not entry %}
+      <section class="public-boot" id="app-boot" data-boot-state="{{ 'opening' if entry else 'failed' }}" data-entry="{{ entry or '' }}" data-workflow="{{ workflow_label }}" aria-label="Application loading">
+        {% if event_name %}<p class="text-muted">{{ event_name }}{% if date_label %} · {{ date_label }}{% endif %}</p>{% endif %}
+        <h1>{{ workflow_label }}</h1>
+        <p class="public-boot-status text-muted" role="status" aria-live="polite" data-boot-message>{{ 'Loading…' if entry else 'The application is temporarily unavailable. Please try again shortly.' }}</p>
+        <noscript><p>This page needs JavaScript. Turn it on, then reload this page.{% if public_enabled %} You can also return to the events directory to read event details.{% endif %}</p><style>.public-boot-status{display:none}</style></noscript>
+        <div class="public-boot-actions">
+          <a data-public-return href="{{ return_url }}">{{ return_label }}</a>
+          <a class="btn btn-outline-secondary" data-boot-retry href="{{ request.script_root + request.full_path.rstrip('?') }}"{% if entry %} hidden{% endif %}>Retry</a>
+        </div>
+      </section>
+  {% endif %}
+  {% if not bare %}
+    </main>
+    {{ site_footer() }}
+  </div>
+  {% endif %}
+  <div id="main"{% if not bare %} aria-hidden="true" inert{% endif %}></div>
+  {% if entry %}
+    {% if bare %}<script type="module" src="{{ entry }}"></script>{% else %}<script src="{{ public_asset('boot.js') }}" async></script>{% endif %}
+  {% endif %}
+</body>
+</html>

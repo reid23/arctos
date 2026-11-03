@@ -1,210 +1,281 @@
+use super::directory_state::{use_directory, use_directory_scroll, Directory, DirectoryState};
 use crate::api;
-use crate::types::{Tournament, UserRegStatus};
+use crate::components::{
+    OrganizeContext, OrganizeMenu, PageIntro, PaymentStatusBadge, PendingInvitations,
+    RegistrationStatusBadge, WaiverStatusBadge,
+};
+use crate::types::{PublicEventCard, PublicRegistrationSummary, UserRegStatus};
 use crate::Route;
-use chrono::{Local, NaiveDate};
+use chrono::NaiveDate;
 use dioxus::prelude::*;
 
-fn format_date(iso: &str) -> String {
-    iso.split('T').next().unwrap_or(iso).to_string()
+pub(super) fn format_date_display(start: &str, end: Option<&String>) -> String {
+    crate::time_format::format_calendar_range(start, end.map(String::as_str))
 }
 
-fn format_date_display(start: &str, end: Option<&String>) -> String {
-    let start_fmt = format_date(start);
-    match end {
-        None => start_fmt,
-        Some(e) if e.as_str() == start => start_fmt,
-        Some(e) => format!("{} - {}", start_fmt, format_date(e)),
-    }
+pub(super) fn listing_date(iso: &str) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(iso.get(..10).unwrap_or(iso), "%Y-%m-%d").ok()
 }
 
-/// True if the tournament's end date (or start date if no end) has fully passed in the user's local timezone.
-fn is_past_in_local_tz(t: &Tournament) -> bool {
-    let end_str = t.end_date.as_deref().unwrap_or(&t.start_date);
-    let date_str = end_str.get(..10).unwrap_or(end_str);
-    match NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
-        Ok(end_date) => Local::now().date_naive() > end_date,
-        Err(_) => false,
-    }
-}
-
-/// Split tournaments into upcoming (end not yet passed in local TZ) and past, sorted for display.
-fn split_upcoming_past(tournaments: &[Tournament]) -> (Vec<Tournament>, Vec<Tournament>) {
-    let mut upcoming: Vec<_> = tournaments
-        .iter()
-        .filter(|t| !is_past_in_local_tz(t))
-        .cloned()
-        .collect();
-    let mut past: Vec<_> = tournaments
-        .iter()
-        .filter(|t| is_past_in_local_tz(t))
-        .cloned()
-        .collect();
-    upcoming.sort_by(|a, b| a.start_date.cmp(&b.start_date));
-    past.sort_by(|a, b| {
-        let ea = a.end_date.as_deref().unwrap_or(&a.start_date);
-        let eb = b.end_date.as_deref().unwrap_or(&b.start_date);
-        eb.cmp(ea)
-    });
-    (upcoming, past)
+#[component]
+pub fn IndexWithQuery(q: String, view: String, page: String) -> Element {
+    rsx! { Index {} }
 }
 
 #[component]
 pub fn Index() -> Element {
-    let tournaments = use_resource(move || async move {
-        api::tournaments().await.map_err(|e| e.to_string())
+    let controls = use_directory(Directory::Events, true);
+    let auth_version = super::layout::use_auth_invalidate();
+    let mut search = controls.search;
+    let mut directory = use_resource(move || {
+        // A logout while already on Events need not remount this component.
+        // Tie personalized cards to the same account generation as Layout,
+        // without serializing this request behind the initial account check.
+        let requested = ((controls.state)(), auth_version());
+        async move {
+            let (filters, _) = &requested;
+            let response =
+                api::public_events::directory(&filters.search, filters.past, filters.page)
+                    .await;
+            (requested, response)
+        }
     });
-    let val = tournaments.value();
+    let value = directory.value();
+    // An older account/query response must never replace the current page.
+    // This also hides the prior account's private cards immediately on logout,
+    // while the new request is pending. Cancellation alone cannot guarantee it.
+    let matching = value
+        .read()
+        .as_ref()
+        .filter(|(requested, _)| *requested == ((controls.state)(), auth_version()))
+        .map(|(_, response)| response.clone());
+    use_directory_scroll(controls, matching.as_ref().is_some_and(Result::is_ok));
+    use_effect(move || {
+        let current = ((controls.state)(), auth_version());
+        if let Some((requested, Ok(page))) = value.read().as_ref() {
+            if *requested == current {
+                // Flask clamps invalid or now-empty last pages and limits
+                // search length. Reflect that canonical state without adding
+                // another Back entry; later controls use the actual page.
+                let actual = DirectoryState::new(&page.query, &page.view, &page.page.to_string());
+                if actual != current.0 {
+                    if search.peek().trim() == current.0.search {
+                        search.set(actual.search.clone());
+                    }
+                    controls.commit(actual, false);
+                }
+            }
+        }
+    });
+    let show_past = (controls.state)().past;
+    let counts = matching
+        .as_ref()
+        .and_then(|result| result.as_ref().ok())
+        .map(|page| (page.upcoming_count, page.past_count));
 
     rsx! {
-        div { class: "row",
-            div { class: "col-12",
-                if let Some(Ok(data)) = val.read().as_ref() {
-                    {
-                        let (upcoming, past) = split_upcoming_past(&data.tournaments);
-                        if !upcoming.is_empty() || !past.is_empty() {
-                            rsx! {
-                                h2 { class: "mb-3", "Upcoming Events" }
-                                div { class: "row mb-4",
-                                    for t in upcoming.iter() {
-                                        {
-                                            let count = data.team_counts.get(&t.url).copied().unwrap_or(0);
-                                            let urs = data.user_reg_status.get(&t.url).cloned();
-                                            rsx! {
-                                                TournamentCard {
-                                                    tournament: t.clone(),
-                                                    team_count: count,
-                                                    user_reg_status: urs
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                h2 { class: "mb-3", "Past Events" }
-                                div { class: "row",
-                                    for t in past.iter() {
-                                        {
-                                            let count = data.team_counts.get(&t.url).copied().unwrap_or(0);
-                                            let urs = data.user_reg_status.get(&t.url).cloned();
-                                            rsx! {
-                                                TournamentCard {
-                                                    tournament: t.clone(),
-                                                    team_count: count,
-                                                    user_reg_status: urs
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        } else {
-                            rsx! {
-                                h2 { "Upcoming Events" }
-                                div { class: "alert alert-info",
-                                    h4 { "No tournaments available" }
-                                    p { "Check back later for upcoming events!" }
-                                }
-                            }
+        PageIntro { page_key: "events", title: "Events", focus_target: "event-discovery",
+            "Find "
+            a { href: "https://en.wikipedia.org/wiki/Jugger", "jugger" }
+            " tournaments and results."
+        }
+        PendingInvitations { on_respond: move |_| directory.restart() }
+        section { id: "event-discovery", class: "arctos-discovery", aria_label: "Find an event", tabindex: "-1",
+            div { class: "arctos-discovery-toolbar",
+                div { class: "arctos-discovery-actions",
+                    div { class: "arctos-segmented", role: "group", aria_label: "Event dates",
+                        button {
+                            r#type: "button", class: if !show_past { "arctos-segment is-active" } else { "arctos-segment" },
+                            aria_pressed: "{!show_past}", onclick: move |_| controls.filter(false),
+                            "Upcoming "
+                            if let Some((upcoming, _)) = counts { span { class: "arctos-count", "{upcoming}" } }
+                        }
+                        button {
+                            r#type: "button", class: if show_past { "arctos-segment is-active" } else { "arctos-segment" },
+                            aria_pressed: "{show_past}", onclick: move |_| controls.filter(true),
+                            "Past "
+                            if let Some((_, past)) = counts { span { class: "arctos-count", "{past}" } }
                         }
                     }
-                } else if let Some(Err(e)) = val.read().as_ref() {
-                    p { class: "text-danger", "{e}" }
+                    OrganizeMenu { context: OrganizeContext::Events }
+                }
+                div { class: "arctos-event-search",
+                    label { class: "visually-hidden", r#for: "event-search", "Search event names, locations, or leagues" }
+                    i { class: "fas fa-search", aria_hidden: "true" }
+                    input {
+                        id: "event-search", r#type: "search", class: "form-control", maxlength: "200",
+                        placeholder: "Find an event or location…", value: "{search()}",
+                        oninput: move |event| search.set(event.value()),
+                        onblur: move |_| controls.flush(),
+                        onkeydown: move |event| { if event.key() == Key::Enter { controls.flush(); } },
+                    }
+                }
+            }
+            if let Some(Ok(page)) = matching.as_ref() {
+                if !page.query.is_empty() {
+                    p { class: "arctos-results-count", role: "status",
+                        "{page.total} "
+                        if page.total == 1 { "event" } else { "events" }
+                        " matching “{page.query}”. "
+                        Link { to: app_target(&page.clear_url), "Clear search" }
+                    }
+                }
+                if page.cards.is_empty() {
+                    div { class: "arctos-empty-state", role: "status",
+                        i { class: "fas fa-calendar-alt", aria_hidden: "true" }
+                        h2 { if !page.query.is_empty() { "No matching events" } else if page.view == "past" { "No past events yet" } else { "No upcoming events yet" } }
+                        p { if !page.query.is_empty() { "Try another event name, location or league." } else if page.view == "past" { "Completed events will appear here after their final day." } else { "Check back for new events, or explore the leagues." } }
+                        if !page.query.is_empty() {
+                            Link { to: app_target(&page.clear_url), class: "btn btn-outline-secondary", "Clear search" }
+                        } else if page.view != "past" {
+                            Link { to: Route::LeaguesIndex {}, class: "btn btn-outline-secondary", "Browse leagues" }
+                        }
+                    }
                 } else {
-                    p { class: "text-muted", "Loading…" }
-                }
-            }
-        }
-    }
-}
-
-#[component]
-fn TournamentCard(
-    tournament: Tournament,
-    team_count: u32,
-    user_reg_status: Option<UserRegStatus>,
-) -> Element {
-    let max_teams = tournament.n_max_teams;
-    rsx! {
-        div { key: "{tournament.url}", class: "col-md-6 col-lg-4 mb-3",
-            Link {
-                to: Route::TournamentHome { url: tournament.url.clone() },
-                class: "card tournament-card text-decoration-none position-relative",
-                style: "display: block; transition: box-shadow 0.2s ease, transform 0.2s ease;",
-                if let Some(ref league) = tournament.league {
-                    Link {
-                        to: Route::LeagueHome { league_url: league.league_url.clone() },
-                        class: "position-absolute top-0 end-0 m-2 badge bg-secondary text-decoration-none",
-                        style: "z-index: 1;",
-                        "{league.name}"
-                    }
-                }
-                div { class: "card-body",
-                    h5 { class: "card-title", "{tournament.name}" }
-                    p { class: "card-text",
-                        span { class: "text-muted",
-                            "📅 {format_date_display(&tournament.start_date, tournament.end_date.as_ref())}"
-                        }
-                        br {}
-                        span { class: "text-muted",
-                            "📍 {tournament.location.as_deref().unwrap_or(\"TBA\")}"
-                        }
-                        br {}
-                        if let Some(max) = max_teams {
-                            small { class: "text-muted",
-                                "{team_count}/{max} teams registered"
-                            }
-                        } else {
-                            small { class: "text-muted",
-                                "{team_count} teams registered"
-                            }
-                        }
-                        if let Some(urs) = user_reg_status {
-                            br {}
-                            UserRegBadges { urs: urs }
+                    div { class: "arctos-card-grid",
+                        for card in page.cards.iter() {
+                            PublicTournamentCard { key: "{card.url}", card: card.clone(), past: page.view == "past" }
                         }
                     }
                 }
-            }
-        }
-    }
-}
-
-#[component]
-fn UserRegBadges(urs: UserRegStatus) -> Element {
-    let status_class = match urs.status.as_str() {
-        "CONFIRMED" => "bg-success",
-        "PENDING_TEAM_APPROVAL" => "bg-warning text-dark",
-        _ => "bg-secondary",
-    };
-    let paid_class = if urs.paid { "bg-success" } else { "bg-warning text-dark" };
-
-    let waiver_status = urs.waiver_status.as_deref().unwrap_or("NOT_SIGNED");
-    let waiver_class = match waiver_status {
-        "VALID" => "bg-success",
-        "OUT_OF_DATE" => "bg-warning text-dark",
-        "NOT_SIGNED" => "bg-danger",
-        _ => "bg-secondary",
-    };
-    let waiver_label = match waiver_status {
-        "VALID" => "Waiver valid",
-        "OUT_OF_DATE" => "Waiver out of date",
-        "NOT_SIGNED" => "Waiver not signed",
-        _ => "Waiver status unknown",
-    };
-    rsx! {
-        span { class: "badge status-badge me-1 {status_class}",
-            if urs.reg_type == "team" {
-                "Team {urs.status}"
+                if page.previous_url.is_some() || page.next_url.is_some() {
+                    nav { class: "arctos-pagination", aria_label: "Event pages",
+                        if let Some(url) = &page.previous_url {
+                            Link { class: "btn btn-outline-secondary", rel: "prev", to: app_target(url), "Previous" }
+                        }
+                        span { class: "arctos-page-position", aria_live: "polite", "Page {page.page}" }
+                        if let Some(url) = &page.next_url {
+                            Link { class: "btn btn-outline-secondary", rel: "next", to: app_target(url), "Next" }
+                        }
+                    }
+                }
+            } else if let Some(Err(error)) = matching.as_ref() {
+                div { class: "arctos-empty-state", role: "alert",
+                    h2 { "Events could not be loaded" }
+                    p { "{error}" }
+                    button { class: "btn btn-primary", r#type: "button", onclick: move |_| directory.restart(), "Try again" }
+                }
             } else {
-                "Player {urs.status}"
+                div { class: "arctos-empty-state", role: "status", "Loading events…" }
             }
         }
-        span { class: "badge status-badge {paid_class}",
-            if urs.paid { "Paid" } else { "Unpaid" }
-        }
-        if urs.waiver_required {
-            span { class: "badge status-badge ms-1 {waiver_class}",
-                "{waiver_label}"
+    }
+}
+
+/// Server links include the deployment prefix. Router links add that prefix
+/// themselves; remove it exactly once without decoding query delimiters.
+fn app_target(url: &str) -> String {
+    let prefix = dioxus::history::history()
+        .current_prefix()
+        .unwrap_or_default();
+    crate::public_navigation::without_prefix(url, &prefix)
+        .unwrap_or(url)
+        .to_string()
+}
+
+#[component]
+fn PublicTournamentCard(card: PublicEventCard, past: bool) -> Element {
+    let labels: Vec<_> = card.date_label.split(" – ").collect();
+    rsx! {
+        article { class: "card arctos-event-card event-card",
+            div { class: "card-body",
+                div { class: "arctos-card-statuses",
+                    if !card.published { span { class: "badge bg-warning text-dark", title: "Draft · Only visible to organizers", "Unpublished" } }
+                    if card.historical {
+                        span { class: "badge arctos-badge-neutral", title: "Results recorded after the tournament took place",
+                            i { class: "fas fa-history me-1", aria_hidden: "true" }
+                            "Historical"
+                        }
+                    } else if past {
+                        span { class: "badge arctos-badge-neutral", "Past event" }
+                    } else {
+                        span { class: if card.registration_open { "badge arctos-badge-success" } else { "badge arctos-badge-neutral" }, "{card.registration_label}" }
+                    }
+                }
+                h2 { class: "arctos-card-title", Link { to: app_target(&card.url), "{card.name}" } }
+                if let (Some(name), Some(url)) = (&card.league_name, &card.league_url) {
+                    Link { to: app_target(url), class: "arctos-league-link",
+                        i { class: "fas fa-trophy", aria_hidden: "true" } "{name}"
+                    }
+                }
+                ul { class: "arctos-meta-list",
+                    li { i { class: "fas fa-map-marker-alt", aria_hidden: "true" } span { "{card.location}" } }
+                    li { i { class: "fas fa-calendar-alt", aria_hidden: "true" }
+                        span {
+                            time { datetime: "{card.date_start}", "{labels[0]}" }
+                            if let Some(end) = card.date_end.as_ref().filter(|end| *end != &card.date_start) {
+                                " – "
+                                time { datetime: "{end}", "{labels.last().copied().unwrap_or_default()}" }
+                            }
+                        }
+                    }
+                    li { i { class: "fas fa-users", aria_hidden: "true" }
+                        span {
+                            if card.historical {
+                                "{card.team_count} teams"
+                            } else {
+                                "{card.team_count}"
+                                if let Some(max) = card.max_teams { " / {max}" }
+                                " teams registered"
+                            }
+                        }
+                    }
+                }
+                if !card.historical {
+                    if let Some(status) = &card.account_status { PublicRegistrationBadges { status: status.clone() } }
+                }
+            }
+            div { class: "arctos-card-footer",
+                Link { to: app_target(&card.url), class: "btn btn-outline-secondary w-100",
+                    if card.published { "View event" } else { "Preview event" }
+                    i { class: "fas fa-arrow-right", aria_hidden: "true" }
+                }
             }
         }
+    }
+}
+
+#[component]
+fn PublicRegistrationBadges(status: PublicRegistrationSummary) -> Element {
+    let (tone, icon) = match status.status.as_str() {
+        "CONFIRMED" => ("success", "fas fa-circle-check"),
+        "PENDING_TEAM_APPROVAL" => ("warning", "fas fa-clock"),
+        "REJECTED" => ("danger", "fas fa-circle-xmark"),
+        "CANCELLED" => ("neutral", "fas fa-circle-minus"),
+        _ => ("neutral", "fas fa-circle-question"),
+    };
+    let waiver = status.waiver_status.as_deref().map(|value| match value {
+        "Signed" => ("success", "fas fa-check", "Waiver valid"),
+        "Needs updating" => (
+            "warning",
+            "fas fa-file-signature",
+            "Waiver needs re-signing",
+        ),
+        "Not signed" => ("danger", "fas fa-file-signature", "Waiver not signed"),
+        _ => ("danger", "fas fa-file-signature", "Waiver status unknown"),
+    });
+    rsx! {
+        div { class: "arctos-registration-summary", aria_label: "Your registration",
+            span { class: "badge arctos-registration-badge arctos-badge-{tone}",
+                i { class: icon, aria_hidden: "true" } "{status.status_label}"
+            }
+            PaymentStatusBadge { paid: status.paid, show_icon: true }
+            if let Some((tone, icon, label)) = waiver {
+                span { class: "badge arctos-registration-badge arctos-badge-{tone}",
+                    i { class: icon, aria_hidden: "true" } "{label}"
+                }
+            }
+        }
+    }
+}
+
+// Leagues still consumes its existing registration response. Keep that shared
+// presentation independent of the server's smaller public event projection.
+#[component]
+pub(super) fn UserRegBadges(urs: UserRegStatus) -> Element {
+    rsx! {
+        RegistrationStatusBadge { status: urs.status, show_icon: true }
+        PaymentStatusBadge { paid: urs.paid, show_icon: true }
+        WaiverStatusBadge { required: urs.waiver_required, status: urs.waiver_status, show_icon: true }
     }
 }

@@ -9,7 +9,6 @@ import threading
 
 from flask_login import current_user
 from app.domain.enums import RegistrationStatus
-from app.services._common import current_user_type
 from models import Tournament, Team
 
 
@@ -337,6 +336,27 @@ def resolve_match_winner_loser_ref(initial: str, tournament_url: str) -> str | N
     return None
 
 
+def unpublished_historical_urls(urls) -> set[str]:
+    """URLs among *urls* that are historical tournaments and not published.
+
+    Those records are visible to their organisers on the tournament itself,
+    and nowhere else: not on profiles, and not as invitations.
+    """
+    from models import Tournament
+
+    urls = [url for url in urls if url]
+    if not urls:
+        return set()
+    return {
+        tournament.url
+        for tournament in Tournament.query.filter(
+            Tournament.url.in_(urls),
+            Tournament.historical.is_(True),
+            Tournament.published.is_(False),
+        ).all()
+    }
+
+
 def check_tournament_access(tournament_url: str):
     """Check whether the current Flask user may view a tournament.
 
@@ -352,7 +372,7 @@ def check_tournament_access(tournament_url: str):
         :class:`~app.models.tournament.Tournament` instance (or ``None`` when
         the tournament does not exist).
     """
-    from models import Tournament, TO
+    from models import Tournament
 
     tournament = Tournament.query.get(tournament_url)
     if not tournament:
@@ -366,21 +386,9 @@ def check_tournament_access(tournament_url: str):
     if not current_user.is_authenticated:
         return False, tournament
 
-    is_to = None
-    if tournament.league_id:
-        is_to = TO.query.filter_by(
-            user_id=current_user.id,
-            user_type=current_user_type(),
-            league_id=tournament.league_id,
-        ).first()
-    if not is_to:
-        is_to = TO.query.filter_by(
-            user_id=current_user.id,
-            user_type=current_user_type(),
-            event=tournament_url,
-        ).first()
+    from app.services.permission_service import PermissionService
 
-    if not is_to:
+    if not PermissionService.is_tournament_organizer_of(tournament, current_user):
         return False, tournament
 
     return True, tournament

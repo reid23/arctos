@@ -24,6 +24,15 @@ pub struct Token {
     pub value: String,
 }
 
+/// `"Name (id)"`, or just the name for placeholder teams, whose ids are internal.
+fn team_option_label(team: &TeamOption) -> String {
+    match &team.pseudonym {
+        Some(name) if team.placeholder => name.clone(),
+        Some(name) => format!("{name} ({})", team.id),
+        None => team.id.clone(),
+    }
+}
+
 fn parse_value_into_tokens(
     value: &str,
     multiple: bool,
@@ -70,8 +79,7 @@ fn parse_value_into_tokens(
             let display = team_options
                 .iter()
                 .find(|t| t.id == team_id)
-                .and_then(|t| t.pseudonym.clone())
-                .map(|p| format!("{p} ({})", team_id))
+                .map(team_option_label)
                 .unwrap_or_else(|| team_id.clone());
             tokens.push(Token {
                 kind: TokenKind::Team,
@@ -115,11 +123,7 @@ fn resolve_token_to_team(
             let tag = tags.iter().find(|t| t.name.eq_ignore_ascii_case(name))?;
             let team_id = tag.team.as_ref()?;
             let team = team_options.iter().find(|t| t.id == *team_id)?;
-            let display = team
-                .pseudonym
-                .clone()
-                .map(|p| format!("{p} ({})", team.id))
-                .unwrap_or_else(|| team.id.clone());
+            let display = team_option_label(team);
             Some(ResolvedTeam {
                 profile_photo: team.profile_photo.clone(),
                 display,
@@ -141,11 +145,7 @@ fn resolve_token_to_team(
                 }
             })?;
             let team = team_options.iter().find(|t| t.id == *team_id)?;
-            let display = team
-                .pseudonym
-                .clone()
-                .map(|p| format!("{p} ({})", team.id))
-                .unwrap_or_else(|| team.id.clone());
+            let display = team_option_label(team);
             Some(ResolvedTeam {
                 profile_photo: team.profile_photo.clone(),
                 display,
@@ -167,11 +167,7 @@ fn resolve_token_to_team(
                 }
             })?;
             let team = team_options.iter().find(|t| t.id == loser_id)?;
-            let display = team
-                .pseudonym
-                .clone()
-                .map(|p| format!("{p} ({})", team.id))
-                .unwrap_or_else(|| team.id.clone());
+            let display = team_option_label(team);
             Some(ResolvedTeam {
                 profile_photo: team.profile_photo.clone(),
                 display,
@@ -339,11 +335,7 @@ fn collect_autocomplete(
     let mut out = Vec::new();
     if q.is_empty() {
         for t in team_options.iter().take(15) {
-            let display = t
-                .pseudonym
-                .clone()
-                .map(|p| format!("{p} ({})", t.id))
-                .unwrap_or_else(|| t.id.clone());
+            let display = team_option_label(t);
             out.push(AutocompleteOption {
                 kind: TokenKind::Team,
                 display,
@@ -398,11 +390,7 @@ fn collect_autocomplete(
         let id_lower = t.id.to_lowercase();
         let pseudo_lower = t.pseudonym.as_deref().unwrap_or("").to_lowercase();
         if id_lower.contains(&q) || pseudo_lower.contains(&q) {
-            let display = t
-                .pseudonym
-                .clone()
-                .map(|p| format!("{p} ({})", t.id))
-                .unwrap_or_else(|| t.id.clone());
+            let display = team_option_label(t);
             out.push(AutocompleteOption {
                 kind: TokenKind::Team,
                 display,
@@ -463,6 +451,8 @@ fn collect_autocomplete(
 
 #[component]
 pub fn TeamTokenInput(
+    input_id: String,
+    #[props(optional)] described_by: Option<String>,
     team_options: Vec<TeamOption>,
     tags: Vec<TagSetupData>,
     matches: Vec<MatchSetupData>,
@@ -814,6 +804,8 @@ pub fn TeamTokenInput(
                     }
                 }
                 input {
+                    id: input_id,
+                    aria_describedby: described_by,
                     class: "team-token-input-field",
                     "type": "text",
                     placeholder: if tokens_empty { placeholder.clone() } else { "".to_string() },
@@ -986,11 +978,19 @@ pub fn TeamSelectionField(
 ) -> Element {
     let wrapper = wrapper_class.as_deref().unwrap_or("mb-3");
     let label_cls = label_class.as_deref().unwrap_or("form-label");
+    static FIELD_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let input_id = use_hook(|| {
+        let id = FIELD_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        format!("team-selection-{id}")
+    });
+    let help_id = format!("{input_id}-help");
 
     rsx! {
         div { class: "{wrapper}",
-            label { class: "{label_cls}", "{label}" }
+            label { class: "{label_cls}", r#for: input_id.clone(), "{label}" }
             TeamTokenInput {
+                input_id: input_id.clone(),
+                described_by: help_text.as_ref().map(|_| help_id.clone()),
                 team_options,
                 tags,
                 matches,
@@ -1000,7 +1000,7 @@ pub fn TeamSelectionField(
                 placeholder,
             }
             if let Some(help) = &help_text {
-                div { class: "form-text", "{help}" }
+                div { id: help_id, class: "form-text", "{help}" }
             }
         }
     }

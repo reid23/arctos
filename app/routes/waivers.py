@@ -11,12 +11,27 @@ from __future__ import annotations
 
 import os
 
-from flask import Blueprint, redirect, send_file
+from flask import Blueprint, current_app, redirect, send_file, url_for
+from flask_login import current_user
+
+from app.services.permission_service import PermissionService
 
 from models import League, Tournament
-from flask import current_app
 
 bp = Blueprint("waivers", __name__)
+
+
+@bp.after_request
+def private_waiver_response(response):
+    # Publication and organizer access can change between requests, including
+    # redirects and missing/private responses. None may be stored or shared.
+    response.headers["Cache-Control"] = "private, no-store"
+    response.vary.add("Cookie")
+    return response
+
+
+def _can_view_league(league) -> bool:
+    return bool(league and (league.published or PermissionService.is_league_organizer(league.url, current_user)))
 
 
 def _waiver_disk_path(scope_url: str) -> str:
@@ -37,8 +52,7 @@ def _waiver_disk_path(scope_url: str) -> str:
     """
     # Prefer any extension variant (waiver.<ext>) and fall back to legacy extensionless file.
     base_dir = os.path.join(
-        current_app.root_path,
-        "../static",
+        current_app.static_folder,
         "uploads",
         "waivers",
         scope_url,
@@ -73,14 +87,14 @@ def league_waiver(league_url: str):
         is not found.
     """
     league = League.query.filter_by(url=league_url).first()
-    if not league:
+    if not _can_view_league(league):
         return {"error": "Not found"}, 404
 
     file_path = _waiver_disk_path(league_url)
     if not os.path.isfile(file_path):
         return {"error": "Waiver not found"}, 404
 
-    return send_file(file_path, as_attachment=False)
+    return send_file(file_path, as_attachment=False, conditional=False)
 
 
 @bp.route("/<event_url>/waiver", methods=["GET"])
@@ -101,18 +115,22 @@ def event_waiver_alias(event_url: str):
     # If the slug matches a league, redirect to the canonical league URL.
     league = League.query.filter_by(url=event_url).first()
     if league:
-        return redirect(f"/leagues/{event_url}/waiver", code=302)
+        if not _can_view_league(league):
+            return {"error": "Not found"}, 404
+        return redirect(url_for("waivers.league_waiver", league_url=event_url), code=302)
 
     tournament = Tournament.query.filter_by(url=event_url).first()
-    if not tournament:
+    if not tournament or not PermissionService.can_view_tournament(event_url, current_user):
         return {"error": "Not found"}, 404
 
     # If this tournament belongs to a league, redirect to the league's canonical waiver.
     if getattr(tournament, "league_id", None):
-        return redirect(f"/leagues/{tournament.league_id}/waiver", code=302)
+        if not _can_view_league(League.query.filter_by(url=tournament.league_id).first()):
+            return {"error": "Not found"}, 404
+        return redirect(url_for("waivers.league_waiver", league_url=tournament.league_id), code=302)
 
     file_path = _waiver_disk_path(event_url)
     if not os.path.isfile(file_path):
         return {"error": "Waiver not found"}, 404
 
-    return send_file(file_path, as_attachment=False)
+    return send_file(file_path, as_attachment=False, conditional=False)

@@ -40,6 +40,7 @@ from app.services.match_start_eligibility import (
     why_sections_to_dict,
 )
 from app.services.permission_service import PermissionService
+from app.services.schedule_item_service import schedule_items_payload
 from app.services.registration_resolver import (
     is_player_registered,
     is_team_registered,
@@ -299,15 +300,7 @@ def _check_to(tournament_url):
 
 
 def _schedule_published_check(tournament_url, tournament):
-    if tournament.schedule_published:
-        return True
-    if not current_user.is_authenticated:
-        return False
-    if PermissionService.is_tournament_organizer(tournament_url, current_user):
-        return True
-    if is_player(current_user) and can_head_ref_match(tournament_url, current_user.id, match=None):
-        return True
-    return False
+    return PermissionService.can_view_schedule(tournament, current_user)
 
 
 def _team_pseudonym_and_photo(tournament, team_id):
@@ -426,6 +419,7 @@ def tournament_detail(tournament_url):
                 "player_count": counts_by_team.get(team_reg.team, 0),
                 "registered_at": dt_iso(getattr(team_reg, "registered_at", None)),
                 "profile_photo": team.profile_photo if team else None,
+                "placeholder": bool(team and team.placeholder_event),
             }
         )
     unattached_prs = list(
@@ -468,8 +462,9 @@ def tournament_detail(tournament_url):
         else:
             user = to_teams_by_id.get(e.user_id)
         user_name = user.name if user else e.user_id
-        is_current = (
-            current_user.is_authenticated and current_user.id == e.user_id and current_user_type() == e.user_type
+        is_current = current_user.is_authenticated and (
+            (current_user.id == e.user_id and current_user_type() == e.user_type)
+            or (e.user_type == "team" and PermissionService.can_manage_team(e.user_id, current_user))
         )
         to_entries.append(
             {
@@ -499,6 +494,7 @@ def tournament_detail(tournament_url):
             "to_entries": to_entries,
             "is_current_team_registered": is_current_team_registered,
             "is_current_player_registered": is_current_player_registered,
+            "can_view_schedule": PermissionService.can_view_schedule(tournament, current_user),
             "penalty_types": penalty_types_data,
         }
     )
@@ -531,8 +527,9 @@ def tournament_manage_api(tournament_url):
 @bp.route("/tournaments/<tournament_url>/invitations", methods=["GET"])
 @login_required
 def tournament_invitations_api(tournament_url):
-    if not is_team(current_user):
-        return jsonify({"error": "Only teams can view invitations"}), 403
+    from app.utils.team_access import requested_team_id
+
+    team_id = requested_team_id()
 
     tournament = Tournament.query.filter_by(url=tournament_url).first_or_404()
     # League events register at the league scope — point teams there.
@@ -548,14 +545,14 @@ def tournament_invitations_api(tournament_url):
         )
 
     team_registration = TeamRegistration.query.filter_by(
-        event=tournament_url, team=current_user.id, status=RegistrationStatus.CONFIRMED
+        event=tournament_url, team=team_id, status=RegistrationStatus.CONFIRMED
     ).first()
     if not team_registration:
         return jsonify({"error": "Not registered"}), 404
 
     pending_regs = PlayerRegistration.query.filter_by(
         event=tournament_url,
-        team=current_user.id,
+        team=team_id,
         status=RegistrationStatus.PENDING_TEAM_APPROVAL,
     ).all()
     pending_with_players = []
@@ -565,10 +562,10 @@ def tournament_invitations_api(tournament_url):
             pending_with_players.append({"registration": reg, "player": player})
 
     current_team_size = PlayerRegistration.query.filter_by(
-        event=tournament_url, team=current_user.id, status=RegistrationStatus.CONFIRMED
+        event=tournament_url, team=team_id, status=RegistrationStatus.CONFIRMED
     ).count()
 
-    all_player_registrations = PlayerRegistration.query.filter_by(event=tournament_url, team=current_user.id).all()
+    all_player_registrations = PlayerRegistration.query.filter_by(event=tournament_url, team=team_id).all()
     team_roster = []
     for reg in all_player_registrations:
         player = Player.query.get(reg.player)
@@ -686,6 +683,7 @@ def tournament_schedule(tournament_url):
         {
             "tournament": tournament_to_dict(tournament),
             "matches": match_list,
+            "schedule_items": schedule_items_payload(tournament_url),
             "fields": fields,
             "team_options": team_options,
         }
@@ -881,6 +879,7 @@ def tournament_schedule_setup(tournament_url):
         {
             "tournament": tournament_to_dict(tournament),
             "matches": match_list,
+            "schedule_items": schedule_items_payload(tournament_url),
             "fields": fields_data,
             "tags": tags_data,
             "script_variables": script_variables_data,
@@ -1268,12 +1267,15 @@ def tournament_match_detail(tournament_url):
             "match_notes": match_notes,
             "point_notes_map": point_notes_map,
             "is_head_ref": is_head_ref,
+            "schedule_published": bool(tournament.schedule_published),
+            "can_view_schedule": PermissionService.can_view_schedule(tournament, current_user),
             "can_start": can_start,
             "block_reasons": block_reasons,
             "why_sections": why_sections_to_dict(why_sections),
             "conflicting_match": conflicting_match,
             "match_players": match_players,
             "penalty_types": penalty_types_data,
+            "historical": bool(tournament.historical),
         }
     )
 

@@ -221,13 +221,16 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
     rsx! {
         style { r#"
             .sc-enter {{
+                box-sizing: border-box;
                 display: flex;
                 flex-direction: column;
+                height: 100vh;
                 height: 100dvh;
                 max-width: 560px;
                 margin: 0 auto;
-                background: #f7f7f8;
-                color: #111;
+                padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+                background: var(--ui-bg);
+                color: var(--ui-text);
                 overflow: hidden;
             }}
             .sc-enter-top {{
@@ -239,10 +242,10 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
                 font-weight: 600;
                 letter-spacing: 0.04em;
                 min-height: 2.2rem;
-                color: #111;
+                color: var(--ui-text);
             }}
-            .sc-search-display.placeholder {{
-                color: #9aa0a6;
+            .sc-search-display.is-placeholder {{
+                color: var(--ui-muted);
                 font-weight: 500;
             }}
             .sc-results {{
@@ -256,7 +259,7 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
                 grid-template-columns: 2.4rem 3.2rem minmax(0, 1fr) 2.4rem 3.2rem;
                 gap: 0.35rem;
                 align-items: center;
-                background: #fff;
+                background: var(--ui-surface);
                 border-radius: 0.75rem;
                 padding: 0.55rem 0.45rem;
                 margin-bottom: 0.55rem;
@@ -266,7 +269,7 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
                 display: flex;
                 flex-direction: column;
                 align-items: center;
-                color: #b26a00;
+                color: var(--bs-warning-text-emphasis);
                 font-size: 1.3rem;
                 line-height: 1;
             }}
@@ -317,7 +320,7 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
                 align-items: center;
                 gap: 0.35rem;
                 font-size: 0.82rem;
-                color: #444;
+                color: var(--ui-muted);
                 min-width: 0;
             }}
             .sc-meta-text {{
@@ -327,9 +330,9 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
             }}
             .sc-history {{
                 flex-shrink: 0;
-                border-top: 1px solid #ddd;
-                border-bottom: 1px solid #ddd;
-                background: #fff;
+                border-top: 1px solid var(--ui-border);
+                border-bottom: 1px solid var(--ui-border);
+                background: var(--ui-surface);
                 padding: 0.3rem 0.35rem;
                 overflow-x: auto;
                 display: flex;
@@ -345,7 +348,7 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
                 position: relative;
                 flex: 0 0 auto;
                 width: 4.9rem;
-                background: #f3f4f6;
+                background: var(--ui-surface-muted);
                 border-radius: 0.45rem;
                 padding: 0.22rem 0.25rem 0.2rem;
                 font-size: 0.66rem;
@@ -360,14 +363,14 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
                 gap: 0.05rem;
             }}
             .sc-hist-card.flagged {{
-                border-color: #c62828;
-                background: #fff5f5;
+                border-color: var(--bs-danger-border-subtle);
+                background: var(--bs-danger-bg-subtle);
             }}
             .sc-hist-flag {{
                 position: absolute;
                 top: 0.1rem;
                 right: 0.15rem;
-                color: #c62828;
+                color: var(--bs-danger-text-emphasis);
                 font-size: 0.6rem;
             }}
             .sc-hist-line {{
@@ -385,26 +388,42 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
                 font-size: 0.85rem;
                 font-weight: 800;
             }}
-            .sc-hist-points.win {{ color: #2e7d32; }}
-            .sc-hist-points.loss {{ color: #c62828; }}
+            .sc-hist-points.win {{ color: var(--bs-success-text-emphasis); }}
+            .sc-hist-points.loss {{ color: var(--bs-danger-text-emphasis); }}
             .sc-numpad {{
                 flex-shrink: 0;
                 display: grid;
                 grid-template-columns: repeat(3, 1fr);
                 gap: 0.35rem;
                 padding: 0.55rem;
-                background: #ebecef;
+                background: var(--ui-surface-muted);
             }}
             .sc-num-btn {{
                 border: none;
                 border-radius: 0.55rem;
-                background: #fff;
+                background: var(--ui-surface);
+                color: var(--ui-text);
                 font-size: 1.45rem;
                 font-weight: 600;
                 padding: 0.7rem 0;
                 box-shadow: 0 1px 1px rgba(0,0,0,0.05);
             }}
-            .sc-num-btn:active {{ background: #e8e8e8; }}
+            .sc-num-btn:active {{ background: var(--ui-surface-hover); }}
+            /* A short landscape viewport must not clip the nonshrinking keypad. */
+            @media (max-height: 500px) {{
+                .sc-enter {{
+                    height: auto;
+                    min-height: 100vh;
+                    min-height: 100dvh;
+                    overflow: visible;
+                }}
+                .sc-results {{
+                    flex: 0 1 auto;
+                    min-height: 6rem;
+                    max-height: 40vh;
+                    max-height: 40dvh;
+                }}
+            }}
         "# }
 
         div { class: "sc-enter",
@@ -415,7 +434,7 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
                     "Back"
                 }
                 div {
-                    class: if query().is_empty() { "sc-search-display placeholder flex-grow-1 text-center" } else { "sc-search-display flex-grow-1 text-center" },
+                    class: if query().is_empty() { "sc-search-display is-placeholder flex-grow-1 text-center" } else { "sc-search-display flex-grow-1 text-center" },
                     if query().is_empty() { "type to search" } else { "{query}" }
                 }
                 button {

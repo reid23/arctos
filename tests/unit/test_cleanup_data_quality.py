@@ -47,6 +47,7 @@ def _drop_unique_indexes_for_dirty_seeding():
         "uq_team_registrations_team_event",
         "uq_team_registrations_team_league",
         "uq_player_registrations_player_event",
+        "uq_player_registrations_player_event_requested",
         "uq_player_registrations_player_league",
         "unique_with_field",
         "unique_without_field",

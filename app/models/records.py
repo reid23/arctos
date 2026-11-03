@@ -18,7 +18,8 @@ class Injury(db.Model):
         player: ID of the affected player.
         message: Description of the injury or concern.
         stamp: Timestamp when the record was created.
-        show: Whether the record is visible to other officials.
+        show: Whether the record is visible on the public player profile.
+            Active records are also available to authorized match referees.
         active: Whether the injury is currently active / unresolved.
     """
 
@@ -28,7 +29,7 @@ class Injury(db.Model):
     player = db.Column(db.String(USER_ID_LEN), db.ForeignKey("players.id"), nullable=False)
     message = db.Column(db.Text, nullable=False)
     stamp = db.Column(db.DateTime, default=now_utc_naive)
-    show = db.Column(db.Boolean, default=True)
+    show = db.Column(db.Boolean, default=False)
     active = db.Column(db.Boolean, default=True)
 
 

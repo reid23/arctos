@@ -10,6 +10,43 @@ docstring to see what it covers. `dual_write.py` is the canonical
 interface for the four normalised join tables - call its helpers
 instead of querying those tables directly.
 
+## Public documents and application entry
+
+[`public_page_service.py`](public_page_service.py) builds immutable Events and
+event Info view models. Routes pass the visitor, current calendar day, and
+URL prefix. The service applies permissions, selects one directory page, and
+batches registration configuration, confirmed team counts, and personal status.
+League events use league registration scope. Descriptions pass through the
+existing Markdown sanitizer.
+
+[`public_league_service.py`](public_league_service.py) builds the Leagues directory
+and league Info models. It paginates in SQL, filters Active/Past counts by the
+search query, and batches visible round summaries and registration status.
+Season lifecycle uses all rounds; displayed dates and counts use only visible
+rounds. League Info includes sanitized description, live fees and capacity,
+waiver requirements, and the requesting account's status.
+
+`DirectoryPage` is shared by the Jinja directory and `GET /_api/public/events`.
+It contains bounded cards, counts, search state, and pagination links. Event
+models include public facts and permitted actions. Account-specific status
+belongs to the requesting visitor; the HTTP layer serves these responses with
+`private, no-store`. Unknown fees remain distinct from free registration.
+
+[`frontend_shell.py`](frontend_shell.py) validates the build manifest and URL
+prefix, renders application entry, and serves prepared assets for local/staging
+use. Missing application assets produce a recoverable 503. Public HTML warms
+a parked runtime; marked reading links fetch another document while startup
+is pending or unavailable. Navigation activates the application once its bridge
+is ready. Interactive entries display feedback until their route and styles
+are ready. Data comes from the configured database and permission services.
+
+Jinja handles document rendering; Dioxus handles application workflows. Shared
+styles and appearance preferences preserve the existing design. See
+[architecture](../../docs/public-html-architecture.md) for the data and startup
+contracts, [deployment](../../docs/DEPLOY.md#public-html-rollout) for asset
+serving, and [verification](../../docs/public-html-verification.md) for external
+performance measurements.
+
 ## `RegistrationService` methods
 
 The registration service provides the following key methods:
@@ -20,8 +57,30 @@ The registration service provides the following key methods:
 - **`register_player(tournament_url, player_id, team_id=None, ...)`** — Register a
   player to a tournament (optionally under a team). Returns `PENDING_TEAM_APPROVAL`
   or `CONFIRMED` depending on config.
-- **`register_player_as_to(tournament_url, *, actor_user_id, actor_user_type, player_id, team_id=None, ...)`** — Register a player on behalf of a TO. The actor must be a TO for the tournament. Always returns a `CONFIRMED`, fully-paid `PlayerRegistration` with `paid=True, amount_paid=0`. Existing `CANCELLED`/`REJECTED` registrations for the same (tournament, player) are reused; existing `CONFIRMED` rows return a duplicate-error.
-- **`register_team_as_to(tournament_url, *, actor_user_id, actor_user_type, team_id, pseudonym="")`** - Register a team on behalf of a TO. The actor must be a TO for the tournament. Returns a CONFIRMED, fully-paid `TeamRegistration` with `paid=True, amount_paid=0`. Honors `n_max_teams` (error message includes the count and limit). Existing `CANCELLED` rows for the same (tournament, team) are reused; existing `CONFIRMED` rows return a duplicate-error.
+- **`register_player_as_to(tournament_url, *, actor_user_id, actor_user_type, player_id, team_id=None, ...)`** — Register a player on behalf of a TO. The actor must be a TO for the tournament. Always returns a `CONFIRMED`, fully-paid `PlayerRegistration` with `paid=True, amount_paid=0`. Existing `CANCELLED`/`REJECTED` registrations for the same (tournament, player) are reused; existing `CONFIRMED` rows return a duplicate-error. Rejects historical tournaments, whose rosters are managed by `HistoricalClaimsService`.
+- **`register_team_as_to(tournament_url, *, actor_user_id, actor_user_type, team_id, pseudonym="")`** - Register a team on behalf of a TO. The actor must be a TO for the tournament. Returns a CONFIRMED, fully-paid `TeamRegistration` with `paid=True, amount_paid=0`. Honors `n_max_teams` (error message includes the count and limit). Existing `CANCELLED` rows for the same (tournament, team) are reused; existing `CONFIRMED` rows return a duplicate-error. Rejects historical tournaments, whose teams are added by `HistoricalRecordsService`.
+
+## Team roster changes
+
+`team_management_service.change_roster(scope, team_id, registration_id, action)`
+updates a player's team assignment within a standalone event or league. Pass
+`Scope.event(event_url)` or `Scope.league(league_url)` from `_common.py`. The
+calling route authorizes the team account or its manager before calling the service.
+
+| Action | Required player state | Result |
+| --- | --- | --- |
+| `add` | Confirmed registration, unattached | Joins the team's confirmed roster. |
+| `approve` | Pending approval for this team | Joins the team's confirmed roster. |
+| `decline` | Pending approval for this team | Becomes a confirmed, unattached player. |
+| `remove` | Confirmed on this team | Becomes a confirmed, unattached player. |
+
+The team must have a confirmed registration in the same scope. Adding and removing
+players require open player registration; pending requests remain reviewable after
+registration closes. Adding and approving players respect the roster limit, with
+writes serialized per team to keep concurrent approvals within capacity.
+
+The service preserves payment, waiver, and jersey details. It commits a successful
+change and returns `Ok(None)`, or returns `Err(ArctosError)` for a rejected action.
 
 ## Conventions
 

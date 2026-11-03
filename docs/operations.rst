@@ -9,3 +9,6 @@ maintain the Arctos backend.
 
    DEPLOY
    env-vars
+   public-html-architecture
+   public-html-indexing
+   public-html-verification

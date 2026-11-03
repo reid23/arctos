@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from app.models.base import db
 from app.models.constants import (
+    AUTH_STRING_LEN,
     LONG_NAME_LEN,
     SHORT_CODE_LEN,
     SHORT_NAME_LEN,
@@ -31,6 +32,7 @@ class Tournament(db.Model):
     Attributes:
         url: URL slug used as the primary key and public identifier.
         name: Human-readable tournament name.
+        banner_photo: Static-relative path to an optional organizer-uploaded banner.
         start_date: Date and time the tournament begins (UTC, naive).
         end_date: Date and time the tournament ends, or ``None``.
         location: Venue name or address.
@@ -46,6 +48,11 @@ class Tournament(db.Model):
         bracket: TOML string defining bracket visualisation config.
         about: Markdown description shown on the tournament homepage.
         published: Whether the tournament is publicly visible.
+        historical: Whether this is a record of a past tournament whose
+            results were entered after the fact, rather than one run live
+            in Arctos. Historical tournaments never open registration;
+            their teams start as placeholder :class:`~app.models.user.Team`
+            rows that real teams can claim.
         registrable_config_id: FK to the registration config for standalone
             tournaments.
         registrable_config: Relationship to the
@@ -56,6 +63,7 @@ class Tournament(db.Model):
 
     url = db.Column(db.String(URL_SLUG_LEN), primary_key=True)
     name = db.Column(db.String(LONG_NAME_LEN), nullable=False)
+    banner_photo = db.Column(db.String(AUTH_STRING_LEN), nullable=True)
     start_date = db.Column(db.DateTime, nullable=False)
     end_date = db.Column(db.DateTime, nullable=True)
     location = db.Column(db.String(LONG_NAME_LEN))
@@ -70,6 +78,7 @@ class Tournament(db.Model):
     # Per-event fields (every tournament)
     about = db.Column(db.Text)
     published = db.Column(db.Boolean, default=False, nullable=False)
+    historical = db.Column(db.Boolean, default=False, nullable=False)
 
     # Registration config: used only when league_id is null (standalone tournament).
     # When league_id is set, use league's config. Mutual exclusivity enforced by constraint.

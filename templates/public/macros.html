@@ -1,0 +1,21 @@
+{% from 'public/icons.html' import icon %}
+
+{% macro personal_status(status) -%}
+{% if status %}
+{% set tone = {'CONFIRMED': 'success', 'PENDING_TEAM_APPROVAL': 'warning', 'REJECTED': 'danger'}.get(status.status, 'neutral') %}
+{% set status_icon = {'CONFIRMED': 'circle-check', 'PENDING_TEAM_APPROVAL': 'clock', 'REJECTED': 'circle-xmark', 'CANCELLED': 'circle-minus'}.get(status.status, 'circle-question') %}
+<div class="arctos-registration-summary" aria-label="Your registration">
+  <span class="badge arctos-registration-badge arctos-badge-{{ tone }}"><i aria-hidden="true">{{ icon(status_icon) }}</i>{{ status.status_label }}</span>
+  <span class="badge arctos-registration-badge {{ 'arctos-badge-success' if status.paid else 'arctos-badge-danger' }}"><i aria-hidden="true">{{ icon('check' if status.paid else 'receipt') }}</i>{{ 'Paid' if status.paid else 'Unpaid' }}</span>
+  {% if status.waiver_status %}<span class="badge arctos-registration-badge arctos-badge-{{ 'success' if status.waiver_status == 'Signed' else 'warning' if status.waiver_status == 'Needs updating' else 'danger' }}"><i aria-hidden="true">{{ icon('check' if status.waiver_status == 'Signed' else 'file-signature') }}</i>{{ {'Signed':'Waiver valid','Needs updating':'Waiver needs re-signing','Not signed':'Waiver not signed'}.get(status.waiver_status, 'Waiver status unknown') }}</span>{% endif %}
+</div>
+{% endif %}
+{%- endmacro %}
+
+{% macro facts(items) -%}
+<dl class="event-detail-list">{% for item in items %}<div><dt>{{ item.label }}</dt><dd>{% if item.label in ['Team registration', 'Player registration'] %}<span class="badge {{ 'arctos-badge-success' if item.value == 'Open' else 'arctos-badge-neutral' }}">{{ item.value }}</span>{% else %}{{ item.value }}{% endif %}</dd></div>{% endfor %}</dl>
+{%- endmacro %}
+
+{% macro dates(card) -%}
+{% set labels = card.date_label.split(' – ') %}<time datetime="{{ card.date_start }}">{{ labels[0] }}</time>{% if card.date_end and card.date_end != card.date_start %} – <time datetime="{{ card.date_end }}">{{ labels[-1] }}</time>{% endif %}
+{%- endmacro %}

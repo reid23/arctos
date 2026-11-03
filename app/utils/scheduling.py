@@ -13,6 +13,7 @@ import threading
 from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
+from app.error_values import Some
 from app.domain.enums import (
     STRUCTURAL_SCHEDULE_TYPES,
     MatchStatus,
@@ -716,9 +717,9 @@ def validate_match_input(match, tournament_url: str) -> Tuple[bool, Optional[str
     """
     if not match.name or not match.name.strip():
         return False, "Match name is required."
-    mn_err = match_name_char_error(match.name)
-    if mn_err:
-        return False, mn_err
+    match match_name_char_error(match.name):
+        case Some(error):
+            return False, error
     from app.models.match import Match
 
     schedule_type = getattr(match, "schedule_type", None)

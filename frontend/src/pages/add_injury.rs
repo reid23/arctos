@@ -1,7 +1,8 @@
 use crate::api;
-use dioxus::prelude::*;
-use dioxus::prelude::use_navigator;
+use crate::form_validation::focus_after_render;
 use crate::Route;
+use dioxus::prelude::use_navigator;
+use dioxus::prelude::*;
 
 #[component]
 pub fn AddInjury(player_id: String) -> Element {
@@ -9,17 +10,26 @@ pub fn AddInjury(player_id: String) -> Element {
     let mut message = use_signal(|| "".to_string());
     let mut date = use_signal(|| "".to_string());
     let mut active = use_signal(|| true);
-    let mut show = use_signal(|| true);
+    let mut show = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
-    let mut loading = use_signal(|| false);
+    let mut saving = use_signal(|| false);
+    use_effect(move || {
+        if error().is_some() {
+            focus_after_render("injury-error");
+        }
+    });
 
     let player_id_for_submit = player_id.clone();
-    let onsubmit = move |_evt: Event<FormData>| {
+    let onsubmit = move |evt: Event<FormData>| {
+        evt.prevent_default();
         let player_id = player_id_for_submit.clone();
         async move {
-            loading.set(true);
+            if saving() {
+                return;
+            }
+            saving.set(true);
             error.set(None);
-            
+
             let req = serde_json::json!({
                 "message": message(),
                 "custom_date": if date().is_empty() { None } else { Some(date()) },
@@ -29,11 +39,13 @@ pub fn AddInjury(player_id: String) -> Element {
 
             match api::create_injury(&player_id, &req).await {
                 Ok(_) => {
-                    nav.push(Route::PlayerProfilePage { id: player_id.clone() });
+                    nav.push(Route::PlayerProfilePage {
+                        id: player_id.clone(),
+                    });
                 }
                 Err(e) => {
                     error.set(Some(e));
-                    loading.set(false);
+                    saving.set(false);
                 }
             }
         }
@@ -53,20 +65,24 @@ pub fn AddInjury(player_id: String) -> Element {
                 }
             }
         }
-        
+
         div { class: "row justify-content-center",
             div { class: "col-md-6",
-                div { class: "card",
-                    div { class: "card-header", h5 { class: "mb-0", "Injury Details" } }
-                    div { class: "card-body",
+                div { class: "edit-section",
+                    div { class: "edit-section-heading", h2 { class: "h5 mb-0", "Injury details" } }
+                    div { class: "edit-section-body",
                         if let Some(err) = error() {
-                            div { class: "alert alert-danger", "{err}" }
+                            div { id: "injury-error", tabindex: "-1", class: "alert alert-danger", role: "alert", "{err}" }
                         }
                         form {
                             onsubmit: onsubmit,
+                            oninput: move |_| { error.set(None); },
+                            onchange: move |_| { error.set(None); },
+                            fieldset { class: "border-0 p-0 m-0", disabled: saving(),
                             div { class: "mb-3",
-                                label { class: "form-label", "Injury Message" }
+                                label { class: "form-label", r#for: "injury-message", "Injury Message" }
                                 input {
+                                    id: "injury-message",
                                     class: "form-control",
                                     "type": "text",
                                     value: "{message}",
@@ -75,8 +91,9 @@ pub fn AddInjury(player_id: String) -> Element {
                                 }
                             }
                             div { class: "mb-3",
-                                label { class: "form-label", "Date (Optional)" }
+                                label { class: "form-label", r#for: "injury-date", "Date (Optional)" }
                                 input {
+                                    id: "injury-date",
                                     class: "form-control",
                                     "type": "date",
                                     value: "{date}",
@@ -86,24 +103,32 @@ pub fn AddInjury(player_id: String) -> Element {
                             div { class: "mb-3 form-check",
                                 input {
                                     class: "form-check-input",
+                                    id: "injury-active",
                                     "type": "checkbox",
                                     checked: active(),
                                     onchange: move |e| active.set(e.checked())
                                 }
-                                label { class: "form-check-label", "Active (currently injured)" }
+                                label { class: "form-check-label", r#for: "injury-active", "Active (currently injured)" }
                             }
                             div { class: "mb-3 form-check",
                                 input {
                                     class: "form-check-input",
+                                    id: "injury-public", aria_describedby: "injury-visibility-help",
                                     "type": "checkbox",
                                     checked: show(),
                                     onchange: move |e| show.set(e.checked())
                                 }
-                                label { class: "form-check-label", "Show publicly" }
+                                label { class: "form-check-label", r#for: "injury-public", "Show publicly" }
                             }
+                            p { id: "injury-visibility-help", class: "form-text", "Public injuries are visible to anyone. Private injuries are hidden from your public profile. Active injuries are still shown to authorized match referees during match setup at events you are registered for." }
                             div { class: "d-grid gap-2",
-                                button { class: "btn btn-primary", "type": "submit", disabled: "{loading}", "Add Injury" }
-                                Link { class: "btn btn-outline-secondary", to: Route::PlayerProfilePage { id: player_id.clone() }, "Cancel" }
+                                button { class: "btn btn-primary", "type": "submit", disabled: saving(), if saving() { "Adding injury…" } else { "Add Injury" } }
+                                if saving() {
+                                    span { class: "btn btn-outline-secondary disabled", aria_disabled: "true", "Cancel" }
+                                } else {
+                                    Link { class: "btn btn-outline-secondary", to: Route::PlayerProfilePage { id: player_id.clone() }, "Cancel" }
+                                }
+                            }
                             }
                         }
                     }

@@ -3,6 +3,7 @@ Jinja2 template filters for the tournament site.
 """
 
 import json
+import re
 from datetime import timezone, timedelta
 from flask import Blueprint
 from markupsafe import Markup
@@ -12,6 +13,61 @@ import markdown
 import bleach
 
 bp = Blueprint("filters", __name__)
+
+# Markdown output is inserted into the page as HTML. Keep document formatting,
+# not the site's application controls or author-supplied executable markup.
+_MARKDOWN_TAGS = frozenset(
+    "a abbr acronym b blockquote br caption cite code col colgroup dd del details div dl dt em "
+    "h1 h2 h3 h4 h5 h6 hr i img kbd li mark ol p pre s samp small span strong sub summary sup "
+    "table tbody td tfoot th thead tr u ul var".split()
+)
+_MARKDOWN_CLASSES = frozenset(
+    "markdown-content admonition admonition-title note attention caution danger error hint important tip warning "
+    "abstract summary tldr info todo success check done question help faq failure fail missing bug example quote "
+    "cite toc toclink footnote footnote-ref footnote-backref".split()
+)
+
+
+def _markdown_attribute(tag: str, name: str, value: str) -> bool:
+    """Allow semantic Markdown attributes without app CSS classes or handlers."""
+    if name == "class":
+        return bool(value.split()) and all(
+            token in _MARKDOWN_CLASSES or re.fullmatch(r"language-[\w.+#-]+", token) for token in value.split()
+        )
+    if name == "id":
+        # Preserve generated heading/footnote anchors and explicit Markdown IDs.
+        return bool(re.fullmatch(r"[\w][\w.:-]{0,127}", value))
+    if name in ("title", "aria-label"):
+        return True
+    if name == "dir":
+        return value in ("ltr", "rtl", "auto")
+    if tag == "a":
+        return name in ("href", "rel") or (name == "target" and value in ("_blank", "_self"))
+    if tag == "img":
+        return name in ("src", "alt") or (
+            name in ("width", "height")
+            and len(value) <= 4
+            and value.isascii()
+            and value.isdigit()
+            and 0 < int(value) <= 8192
+        )
+    if tag in ("td", "th"):
+        return (
+            name in ("colspan", "rowspan")
+            and len(value) <= 4
+            and value.isascii()
+            and value.isdigit()
+            and 0 < int(value) <= 1000
+        ) or (name == "scope" and value in ("row", "col", "rowgroup", "colgroup"))
+    if tag in ("ol", "li") and name in ("start", "value"):
+        return bool(re.fullmatch(r"-?\d{1,9}", value))
+    return False
+
+
+def _markdown_link_attributes(attrs, new=False):
+    """Retain links while preventing opener access for an explicit new tab."""
+    attrs[(None, "rel")] = "nofollow noopener noreferrer"
+    return attrs
 
 
 @bp.app_template_filter("team_registration_for_tournament")
@@ -155,7 +211,17 @@ def render_markdown(text: str | None) -> str:
         output_format="html5",
     )
 
-    html = bleach.linkify(html)
+    # Linkification alone does not sanitize raw HTML, attributes, or URLs.
+    # Clean last so both Markdown and linkify output follow the same policy.
+    html = bleach.linkify(html, callbacks=[_markdown_link_attributes], skip_tags=["pre", "code"])
+    # A Cleaner owns mutable parser state, so use one per render/request.
+    html = bleach.Cleaner(
+        tags=_MARKDOWN_TAGS,
+        attributes=_markdown_attribute,
+        protocols=frozenset(("http", "https", "mailto")),
+        strip=True,
+        strip_comments=True,
+    ).clean(html)
     # Wrap in a class so CSS can scale images to fit their container
     html = f'<div class="markdown-content">{html}</div>'
     return Markup(html)

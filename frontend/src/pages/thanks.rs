@@ -1,4 +1,3 @@
-use crate::api;
 use dioxus::prelude::*;
 use reqwest::Client;
 
@@ -25,7 +24,7 @@ async fn load_contributors() -> Result<Vec<GithubContributor>, String> {
 
 #[component]
 pub fn Thanks() -> Element {
-    let contributors = use_resource(load_contributors);
+    let mut contributors = use_resource(load_contributors);
     let contributors_val = contributors.value();
 
     rsx! {
@@ -59,9 +58,12 @@ pub fn Thanks() -> Element {
                             }
                         }
                     } else if let Some(Err(e)) = contributors_val.read().as_ref() {
-                        p { class: "text-muted", "Could not load contributors: {e}" }
+                        div { role: "alert",
+                            p { class: "text-muted", "Could not load contributors: {e}" }
+                            button { r#type: "button", class: "btn btn-outline-secondary", onclick: move |_| contributors.restart(), "Try again" }
+                        }
                     } else {
-                        p { class: "text-muted", "Loading contributors…" }
+                        p { class: "text-muted", role: "status", "Loading contributors…" }
                     }
 
 		    br {}

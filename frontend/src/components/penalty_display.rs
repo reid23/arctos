@@ -4,7 +4,7 @@ use crate::api;
 use crate::Route;
 use dioxus::prelude::*;
 /// One penalty display row: left border + background by color, optional "target: " (linked if profile_id given), text, optional ? icon.
-/// Layout: block with margin-bottom so multiple penalties stack vertically. Icon uses /static/question-mark.svg in Bootstrap primary blue.
+/// Layout: block with margin-bottom so multiple penalties stack vertically.
 #[component]
 pub fn PenaltyDisplay(
     /// Hex color without # (e.g. "808080")
@@ -41,13 +41,21 @@ pub fn PenaltyDisplay(
             }
             "{display_text}"
             if show_help {
-                span {
-                    class: "ms-1 cursor-pointer d-inline-flex align-items-center",
-                    title: "Description",
-                    onclick: move |_| on_description_click.call(desc.clone()),
+                button {
+                    r#type: "button",
+                    class: "btn btn-link p-0 ms-1 text-decoration-none align-middle",
+                    style: "min-width: 44px; min-height: 44px; font-size: inherit;",
+                    aria_label: "Read description: {display_text}",
+                    aria_haspopup: "dialog",
+                    title: "Description: {display_text}",
+                    onclick: move |event| {
+                        event.stop_propagation();
+                        on_description_click.call(desc.clone());
+                    },
                     img {
                         src: format!("{}/static/question-mark.svg", api::base_url()),
-                        alt: "?",
+                        alt: "",
+                        aria_hidden: "true",
                         style: "width: 1em; height: 1em; object-fit: contain; vertical-align: 0.15em;",
                     }
                 }

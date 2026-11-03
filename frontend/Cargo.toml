@@ -21,8 +21,8 @@ uuid = { version = "1", features = ["v4", "js"] }
 chrono = { version = "0.4", features = ["serde"] }
 wasm-bindgen = "0.2"
 web-sys = { version = "0.3", features = [
-    "Window", "Document", "Location", "UrlSearchParams", "Element", "Performance",
-    "HtmlElement", "KeyboardEvent", "Navigator", "Clipboard",
+    "Window", "Document", "Location", "UrlSearchParams", "Element", "Performance", "VisualViewport", "ResizeObserver",
+    "HtmlElement", "HtmlDialogElement", "FocusOptions", "FontFaceSet", "KeyboardEvent", "Navigator", "Clipboard",
     "AudioContext", "AudioContextState", "AudioBuffer", "AudioBufferSourceNode", "AudioDestinationNode",
     "BaseAudioContext", "AudioContextOptions", "MediaStreamAudioDestinationNode",
     "OscillatorNode", "GainNode", "OscillatorType", "AudioParam",
@@ -39,7 +39,9 @@ web-sys = { version = "0.3", features = [
     "Storage",
     "StorageManager",
     "StorageEvent",
+    "MediaQueryList", "MediaQueryListEvent",
 ] }
+imagesize = { version = "0.15.0", default-features = false, features = ["jpeg", "png", "webp"] }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 dioxus-web = "0.7"
 gloo-timers = { version = "0.3", features = ["futures"] }

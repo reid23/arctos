@@ -19,6 +19,7 @@ from app.models.constants import (
     LONG_NAME_LEN,
     PHONE_LEN,
     SHORT_NAME_LEN,
+    URL_SLUG_LEN,
     USER_ID_LEN,
 )
 
@@ -42,8 +43,11 @@ class Player(UserMixin, db.Model):
             inbox).
         phone: Optional contact phone number.
         profile_photo: Server-relative path to the uploaded profile image.
+        banner_photo: Server-relative path to the optional profile banner.
         bio: Free-text biography.
         location: Player's city or region.
+        pronouns: Optional publicly displayed pronouns.
+        pompfen: Canonical names of the player's selected pompfen roles.
     """
 
     __tablename__ = "players"
@@ -55,8 +59,11 @@ class Player(UserMixin, db.Model):
     email = db.Column(db.String(AUTH_STRING_LEN), nullable=True)
     phone = db.Column(db.String(PHONE_LEN))
     profile_photo = db.Column(db.String(AUTH_STRING_LEN))
+    banner_photo = db.Column(db.String(AUTH_STRING_LEN), nullable=True)
     bio = db.Column(db.Text)
     location = db.Column(db.String(SHORT_NAME_LEN))
+    pronouns = db.Column(db.String(64), nullable=True)
+    pompfen = db.Column(db.JSON, nullable=False, default=list, server_default="[]")
 
     def set_password(self, password: str) -> None:
         """Hash *password* and store it in :attr:`pw_hash`.
@@ -95,16 +102,22 @@ class Team(UserMixin, db.Model):
         pw_hash: Werkzeug password hash; ``None`` for OAuth-only accounts.
         google_id: Google OAuth subject identifier.
         phone: Optional contact phone number.
-        email: Contact email address (may come from Google OAuth).
+        email: Public contact email address, provided by the team owner.
             Never used to authenticate the team — login is by ``id`` +
             password or by ``google_id``. Not unique: multiple teams in
             the same club may share an inbox.
         icon: Base64-encoded team icon image.
         profile_photo: Server-relative path to the uploaded profile photo.
+        banner_photo: Server-relative path to the optional profile banner.
         socials: Free-text social media links.
         website: Team website URL.
         location: Team's city or region.
         about: Free-text team biography / description.
+        placeholder_event: For a placeholder team, the URL slug of the
+            historical tournament it stands in for; ``None`` for real team
+            accounts. Placeholders have no credentials, ids that start with
+            ``_`` (which real usernames cannot), and are merged into a real
+            team when it claims them.
     """
 
     __tablename__ = "teams"
@@ -117,10 +130,17 @@ class Team(UserMixin, db.Model):
     email = db.Column(db.String(AUTH_STRING_LEN), nullable=True)
     icon = db.Column(db.Text)  # base64 image
     profile_photo = db.Column(db.String(AUTH_STRING_LEN))  # Path to uploaded photo
+    banner_photo = db.Column(db.String(AUTH_STRING_LEN), nullable=True)
     socials = db.Column(db.Text)
     website = db.Column(db.String(LONG_NAME_LEN))
     location = db.Column(db.String(SHORT_NAME_LEN))
     about = db.Column(db.Text)
+    placeholder_event = db.Column(
+        db.String(URL_SLUG_LEN),
+        db.ForeignKey("tournaments.url"),
+        nullable=True,
+        index=True,
+    )
 
     def set_password(self, password: str) -> None:
         """Hash *password* and store it in :attr:`pw_hash`.
@@ -144,3 +164,12 @@ class Team(UserMixin, db.Model):
         if not self.pw_hash:
             return False
         return check_password_hash(self.pw_hash, password)
+
+
+class TeamManager(db.Model):
+    """A player allowed to manage a team without sharing its login."""
+
+    __tablename__ = "team_managers"
+    team_id = db.Column(db.String(USER_ID_LEN), db.ForeignKey("teams.id", ondelete="CASCADE"), primary_key=True)
+    player_id = db.Column(db.String(USER_ID_LEN), db.ForeignKey("players.id", ondelete="CASCADE"), primary_key=True)
+    __table_args__ = (db.Index("ix_team_managers_player_id", "player_id"),)

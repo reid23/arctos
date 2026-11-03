@@ -5,17 +5,20 @@ Arctos database. Read it top to bottom once; keep it open during a deploy.
 
 ## One-time setup (per database)
 
-The first time alembic is introduced to a database that was previously
-managed by `db.create_all()`, stamp it at the current baseline so
-subsequent migrations can be applied normally:
+Before introducing Alembic to an unversioned database, back it up and inspect
+its schema. Stamp the revision that matches the columns and tables already
+present, then apply the remaining migrations:
 
 ```bash
-just db-baseline
+uv run alembic stamp <matching_revision>
+just db-migrate
 ```
 
-This only inserts a row into the `alembic_version` table; it does not
-modify any data. **Run this once per database, ever.** After this point,
-every schema change goes through `just db-migrate`.
+Stamping records a revision; it does not add missing columns or transform data.
+Use `just db-baseline` only when the verified schema already matches the current
+head. For a database that already has an Alembic revision, use `just db-current`
+and `just db-migrate` without stamping. See
+[the migration guide](../migrations/README.md) for known schema transitions.
 
 ## Scoreboard overlay rendering
 
@@ -138,6 +141,80 @@ author; the fix is usually in the script, not in the data.
 
 No database change. Just a code deploy.
 
+## Public HTML rollout
+
+Document entry requires matching Flask source, a prepared frontend build, and
+reverse-proxy routing. `ARCTOS_PUBLIC_HTML_ENABLED` defaults to `0`. Enable it
+in local/staging first. Flask serves Events, Leagues, and their published Info
+pages from current database data, with reading, search, and pagination available
+while the runtime starts. Review the [verification guide](public-html-verification.md)
+for acceptance checks and measured content readiness.
+
+1. Build the frontend with `cd frontend && dx bundle --web --release`.
+2. From the repository root, run `uv run python scripts/prepare_public_assets.py
+   --dist frontend/dist/public`. Use Dioxus's actual public output directory if
+   different. This validates module/Wasm references, prepares gzip companions,
+   writes `arctos-assets.json`, and generates shared presentation styles in
+   `static/public/`. These CSS files are build outputs; prepare them before
+   starting Flask in a fresh checkout.
+3. Stage the build with `uv run python scripts/stage_frontend.py
+   frontend/dist/public /var/www/html/public` on the dev host. The production
+   destination is `/var/www/reid/arctos/public`. These paths match the
+   `FRONTEND_SERVER_ROOT` values in the deploy workflows, with `/public`
+   appended. Serialize deployments. Staging validates the build, retains prior
+   fingerprinted assets, publishes the manifest last, and saves
+   `index.html.previous` and `arctos-assets.json.previous` for rollback. It
+   sets directories within the release to `0755` and files to `0644`.
+   Provision ancestor directories so nginx can traverse them; staging changes
+   permissions only within its target.
+4. Set `ARCTOS_FRONTEND_DIST` in gunicorn to the staged directory: use
+   `/var/www/html/public` on dev or `/var/www/reid/arctos/public` on production.
+   Set `ARCTOS_PUBLIC_ORIGIN` to the trusted public origin. Restart Flask with
+   public rendering initially disabled.
+5. Adapt [the nginx example](../setup/nginx-public-html.conf.example) to the
+   host. The example's `root` is the dev directory; use
+   `/var/www/reid/arctos/public` for production. Port `8081` is the Flask
+   backend. When nginx terminates TLS, gunicorn must listen on plain HTTP at
+   `127.0.0.1:8081` (for example, `just bind=127.0.0.1:8081 certfile= keyfile=
+   run`). Preserve API, upload, timeout, TLS, and external documentation rules.
+   Route documents to Flask. Serve `/assets/` from the prepared directory with
+   correct MIME types, gzip negotiation, immutable caching, and missing-file
+   404s. Route `/static/public/` through the presentation proxy or provide its
+   equivalent versioned caching, validators, gzip, and `Vary` handling.
+6. Validate nginx, enable `ARCTOS_PUBLIC_HTML_ENABLED=1`,
+   restart Flask, and run the [verification checks](public-html-verification.md)
+   externally against the target environment.
+
+`update.sh` prepares the manifest on each build. With `ARCTOS_FRONTEND_DIST`
+configured in its environment, it stages the build there; otherwise it stages
+to `FRONTEND_SERVER_ROOT/public`. Both paths use the same staged deployment.
+The gunicorn `ARCTOS_FRONTEND_DIST` and nginx asset `root` must point to that
+same directory. Service environment and nginx changes remain explicit
+deployment steps. The implementation uses the existing Flask process and schema.
+
+Validate event/league visibility, real 404/503 responses, authorized previews,
+registration/login returns, Back/Forward, and dedicated scoreboard/OBS outputs.
+Verify JavaScript-disabled reading, public navigation during blocked startup,
+interactive loading feedback, stylesheet handoff, and Retry. Ordinary
+application navigation must retain one runtime.
+
+Check identity and gzip asset responses, `Vary: Accept-Encoding`, and matching
+cache headers. Production nginx should serve fingerprinted assets directly.
+Flask precompresses fixed presentation files per worker; its asset fallback
+uses private responses when session cookies may be refreshed.
+
+For a subpath deployment, compile Dioxus with the matching asset base and
+preserve `SCRIPT_NAME` in the proxy/WSGI configuration. The manifest records the
+compiled base. A mismatch produces a recoverable 503. Verify the complete
+prefix configuration in a browser through the deployed proxy.
+
+To disable public reading documents, set `ARCTOS_PUBLIC_HTML_ENABLED=0` and
+restart Flask. Application routes display startup feedback while Dioxus loads.
+To roll back a frontend release, restore its matching manifest/index and Flask source as
+needed, then restart. The `.previous` files cover the preceding staged release.
+Retain older assets for open tabs and the rollback window. HTML responses use
+`private, no-store` throughout.
+
 ---
 
 ## Destructive migration
@@ -199,7 +276,7 @@ was taken at) and a smoke test before considering the rollback complete.
 
 | Command | Purpose |
 |---|---|
-| `just db-baseline` | One-shot — stamp alembic baseline on a DB that has never had alembic |
+| `just db-baseline` | Record head only for an unversioned DB whose schema has been verified to match head |
 | `just db-backup [tag]` | Snapshot to `backups/tournament-<tag>-<unix_ts>.db` |
 | `just db-check-duplicates` | Report rows that would block a future UNIQUE constraint |
 | `just db-migrate` | Apply all pending migrations (`alembic upgrade head`) |

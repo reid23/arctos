@@ -61,6 +61,7 @@ def league_to_dict(league) -> dict:
     return {
         "league_url": league.url,
         "name": league.name,
+        "banner_photo": league.banner_photo,
         "about": getattr(league, "about", None),
         "team_reg_fee": rc.team_reg_fee if rc else None,
         "player_reg_fee": rc.player_reg_fee if rc else None,

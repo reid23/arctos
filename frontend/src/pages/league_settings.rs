@@ -1,5 +1,5 @@
 use crate::api;
-use crate::components::LeaguePenaltyTypesTable;
+use crate::components::{BannerAccountKind, BannerUpload, EventBannerPhoto, LeaguePenaltyTypesTable, SettingsSaveActions, SettingsSaveJump, ToolPageHeader};
 use crate::types::ToEntry;
 use crate::Route;
 use dioxus::prelude::*;
@@ -104,11 +104,19 @@ pub fn LeagueSettings(league_url: String) -> Element {
         async move { api::league_detail(&u).await.map_err(|e| e.to_string()) }
     });
     let trigger_refresh = move |_| refresh.set(refresh() + 1);
+    let mut draft_values = use_signal(HashMap::<String, String>::new);
+    let mut draft_checks = use_signal(HashMap::<String, bool>::new);
+    let mut draft_initialized = use_signal(|| false);
+    let local_banner_photo = use_signal(|| None::<String>);
+    let mut banner_photo = try_use_context::<EventBannerPhoto>().map_or(local_banner_photo, |shared| shared.0);
+    let banner_busy = use_signal(|| false);
+    let mut banner_initialized = use_signal(|| false);
+    let mut saving = use_signal(|| false);
+    let penalty_pending = use_signal(|| false);
     let mut save_error = use_signal(|| None::<String>);
     let mut save_success = use_signal(|| false);
     let mut to_error = use_signal(|| None as Option<String>);
     let navigator = use_navigator();
-    let _backend = api::base_url();
     let mut waiver_file_bytes = use_signal(|| None as Option<bytes::Bytes>);
     let mut waiver_file_name = use_signal(|| None as Option<String>);
     let mut waiver_reading = use_signal(|| false);
@@ -119,6 +127,27 @@ pub fn LeagueSettings(league_url: String) -> Element {
     // Initialize waiver requirement toggle from backend state.
     use_effect(move || {
         if let Some(Ok(d)) = data.value().read().as_ref() {
+            // Upload progress and organizer edits must not replace the settings draft.
+            if !draft_initialized() {
+                draft_values.set(HashMap::from([
+                    ("about".into(), d.league.about.clone().unwrap_or_default()),
+                    ("team_reg_fee".into(), d.league.team_reg_fee.unwrap_or(0.0).to_string()),
+                    ("player_reg_fee".into(), d.league.player_reg_fee.unwrap_or(0.0).to_string()),
+                    ("n_max_teams".into(), d.league.n_max_teams.map(|value| value.to_string()).unwrap_or_default()),
+                    ("max_team_size_roster".into(), d.league.max_team_size_roster.map(|value| value.to_string()).unwrap_or_default()),
+                    ("max_team_size_field".into(), d.league.max_team_size_field.map(|value| value.to_string()).unwrap_or_default()),
+                ]));
+                draft_checks.set(HashMap::from([
+                    ("team_registration_open".into(), d.league.team_registration_open),
+                    ("player_registration_open".into(), d.league.player_registration_open),
+                    ("published".into(), d.league.published),
+                ]));
+                draft_initialized.set(true);
+            }
+            if !banner_initialized() {
+                banner_photo.set(d.league.banner_photo.clone());
+                banner_initialized.set(true);
+            }
             if !waiver_toggle_initialized() {
                 require_waiver_signature_ui.set(d.league.waiver_required);
                 waiver_toggle_initialized.set(true);
@@ -132,36 +161,25 @@ pub fn LeagueSettings(league_url: String) -> Element {
     });
 
     rsx! {
+        style { {include_str!("../components/organizer_tools.css")} }
         if let Some(Ok(d)) = data.value().read().as_ref() {
-            div { class: "row",
-                div { class: "col-12",
-                    h1 { "{d.league.name} - Settings" }
-                    nav { aria_label: "breadcrumb",
-                        ol { class: "breadcrumb",
-                            li { class: "breadcrumb-item",
-                                Link { to: Route::LeagueHome { league_url: league_url.clone() }, "{d.league.name}" }
-                            }
-                            li { class: "breadcrumb-item active", "Settings" }
-                        }
-                    }
-                }
-            }
+            ToolPageHeader { title: "Settings", actions: rsx! { SettingsSaveJump {} } }
             if save_success() {
-                div { class: "alert alert-success", "Settings saved." }
+                div { class: "alert alert-success ordinary-form-rail", role: "status", "Settings saved." }
             }
-            if let Some(ref err) = save_error() {
-                div { class: "alert alert-danger", "{err}" }
-            }
-            div { class: "row",
-                div { class: "col-md-8",
+            div { class: "row organizer-settings",
+                div { class: "col-12",
             form {
+                class: "ordinary-form-rail",
                 onsubmit: move |ev| {
                     ev.prevent_default();
+                    if saving() || penalty_pending() || banner_busy() || waiver_reading() { return; }
+                    saving.set(true);
                     save_error.set(None);
                     save_success.set(false);
                     let about = get_form_textarea("about");
-                    let team_reg_fee: f64 = get_form_value("team_reg_fee").parse().unwrap_or(0.0);
-                    let player_reg_fee: f64 = get_form_value("player_reg_fee").parse().unwrap_or(0.0);
+                    let team_reg_fee = get_form_value("team_reg_fee");
+                    let player_reg_fee = get_form_value("player_reg_fee");
                     let team_registration_open = get_form_check("team_registration_open");
                     let player_registration_open = get_form_check("player_registration_open");
                     let published = get_form_check("published");
@@ -180,39 +198,31 @@ pub fn LeagueSettings(league_url: String) -> Element {
                     let n_max_teams = get_form_value("n_max_teams");
                     let max_roster = get_form_value("max_team_size_roster");
                     let max_field = get_form_value("max_team_size_field");
-                    params.insert("n_max_teams".to_string(), serde_json::json!(if n_max_teams.trim().is_empty() { serde_json::Value::Null } else { serde_json::json!(n_max_teams.parse::<u32>().unwrap_or(0)) }));
-                    params.insert("max_team_size_roster".to_string(), serde_json::json!(if max_roster.trim().is_empty() { serde_json::Value::Null } else { serde_json::json!(max_roster.parse::<u32>().unwrap_or(0)) }));
-                    params.insert("max_team_size_field".to_string(), serde_json::json!(if max_field.trim().is_empty() { serde_json::Value::Null } else { serde_json::json!(max_field.parse::<u32>().unwrap_or(0)) }));
+                    params.insert("n_max_teams".to_string(), serde_json::json!(if n_max_teams.trim().is_empty() { serde_json::Value::Null } else { serde_json::json!(n_max_teams) }));
+                    params.insert("max_team_size_roster".to_string(), serde_json::json!(if max_roster.trim().is_empty() { serde_json::Value::Null } else { serde_json::json!(max_roster) }));
+                    params.insert("max_team_size_field".to_string(), serde_json::json!(if max_field.trim().is_empty() { serde_json::Value::Null } else { serde_json::json!(max_field) }));
                     let lu = lu_form1_submit.clone();
                     let nav = navigator.clone();
                     let league_url_for_nav = lu.clone();
                     let waiver_bytes_for_save = waiver_file_bytes();
                     let waiver_name_for_save = waiver_file_name();
                     spawn(async move {
-                        match api::league_update_settings(&lu, &params).await {
+                        match api::save_league_settings(&lu, &params, waiver_bytes_for_save, waiver_name_for_save).await {
                                     Ok(res) if res.success => {
-                                        if let Some(bytes) = waiver_bytes_for_save {
-                                            let filename =
-                                                waiver_name_for_save.as_deref().unwrap_or("waiver");
-                                            match api::league_upload_waiver(&lu, bytes.to_vec(), filename).await {
-                                                Ok(_) => {}
-                                                Err(e) => {
-                                                    save_error.set(Some(e));
-                                                    return;
-                                                }
-                                            }
-                                        }
                                         save_success.set(true);
                                         let _ = nav.push(Route::LeagueHome { league_url: league_url_for_nav.clone() });
                                     }
                             Ok(res) => save_error.set(Some(res.error.unwrap_or_else(|| "Save failed.".to_string()))),
                             Err(e) => save_error.set(Some(e)),
                         }
+                        saving.set(false);
                     });
                 },
-                div { class: "card mb-3",
-                    div { class: "card-header", h5 { class: "mb-0", "League settings" } }
-                    div { class: "card-body",
+                fieldset { disabled: saving(), class: "border-0 p-0 m-0",
+                div { class: "edit-section mb-3",
+                    div { class: "edit-section-heading", h3 { class: "h5 mb-0", "League information" } }
+                    div { class: "edit-section-body",
+                        BannerUpload { kind: BannerAccountKind::League, account_id: league_url.clone(), photo: banner_photo, busy: banner_busy }
                         div { class: "mb-3",
                             label { r#for: "about", class: "form-label", "About (markdown)" }
                             textarea {
@@ -220,7 +230,8 @@ pub fn LeagueSettings(league_url: String) -> Element {
                                 id: "about",
                                 name: "about",
                                 rows: "6",
-                                "{d.league.about.as_deref().unwrap_or(\"\")}"
+                                value: draft_values.read().get("about").cloned().unwrap_or_default(),
+                                oninput: move |event| { draft_values.write().insert("about".into(), event.value()); },
                             }
                         }
                         div { class: "row mb-3",
@@ -232,7 +243,8 @@ pub fn LeagueSettings(league_url: String) -> Element {
                                     min: "0",
                                     class: "form-control",
                                     id: "team_reg_fee",
-                                    value: "{d.league.team_reg_fee.unwrap_or(0.0)}"
+                                    value: draft_values.read().get("team_reg_fee").cloned().unwrap_or_default(),
+                                    oninput: move |event| { draft_values.write().insert("team_reg_fee".into(), event.value()); }
                                 }
                             }
                             div { class: "col-md-6",
@@ -243,17 +255,19 @@ pub fn LeagueSettings(league_url: String) -> Element {
                                     min: "0",
                                     class: "form-control",
                                     id: "player_reg_fee",
-                                    value: "{d.league.player_reg_fee.unwrap_or(0.0)}"
+                                    value: draft_values.read().get("player_reg_fee").cloned().unwrap_or_default(),
+                                    oninput: move |event| { draft_values.write().insert("player_reg_fee".into(), event.value()); }
                                 }
                             }
                         }
                         div { class: "mb-3",
-                            h5 { class: "mb-2", "Waiver Upload" }
+                            h3 { class: "h5 mb-2", "Waiver" }
                             div { class: "form-check mb-2",
                                 input {
                                     class: "form-check-input",
                                     r#type: "checkbox",
                                     id: "require_waiver_signature",
+                                    disabled: waiver_reading(),
                                     checked: require_waiver_signature_ui(),
                                     onchange: move |ev| {
                                         let checked = ev.checked();
@@ -277,7 +291,7 @@ pub fn LeagueSettings(league_url: String) -> Element {
                                 }
                                 if let Some(link) = d.league.waiver_filepath.as_deref() {
                                     a {
-                                        href: "{_backend}{link}",
+                                        href: api::static_file_url(link),
                                         class: "d-block small mb-3",
                                         target: "_blank",
                                         rel: "noreferrer",
@@ -285,15 +299,19 @@ pub fn LeagueSettings(league_url: String) -> Element {
                                     }
                                 }
 
+                                label { r#for: "settings-waiver-file", class: "form-label", "Waiver file" }
+
                                 input {
+                                    id: "settings-waiver-file",
+                                    aria_invalid: waiver_upload_error().is_some(),
+                                    aria_describedby: if waiver_upload_error().is_some() { "settings-waiver-help settings-waiver-error" } else { "settings-waiver-help" },
                                     r#type: "file",
                                     class: "form-control",
                                     accept: "*/*",
-                                    disabled: waiver_reading(),
+                                    disabled: waiver_reading() || saving(),
                                     onchange: move |evt| {
                                         #[cfg(target_arch = "wasm32")]
                                         {
-                                            use dioxus::html::HasFileData;
                                             let files = evt.files();
                                             if let Some(file) = files.into_iter().next() {
                                                 waiver_upload_error.set(None);
@@ -318,15 +336,15 @@ pub fn LeagueSettings(league_url: String) -> Element {
                                     }
                                 }
 
-                                if waiver_file_bytes().is_some() {
-                                    p { class: "text-muted small mt-2 mb-2", "Ready to upload the selected waiver file." }
+                                if let Some(filename) = waiver_file_name() {
+                                    p { class: "text-muted small mt-2 mb-2", "Selected waiver: {filename}" }
                                 }
 
                                 if let Some(ref err) = waiver_upload_error() {
-                                    div { class: "alert alert-danger small py-2 mt-2", "{err}" }
+                                    div { id: "settings-waiver-error", class: "alert alert-danger small py-2 mt-2", role: "alert", "{err}" }
                                 }
 
-                                div { class: "form-text mt-2", "Selected waiver uploads when you click Save Settings." }
+                                div { id: "settings-waiver-help", class: "form-text mt-2", "Settings and the selected waiver save together when you choose Save settings." }
                             } else {
                                 div { class: "form-text text-muted mt-2", "Waiver signature will not be required." }
                             }
@@ -340,7 +358,8 @@ pub fn LeagueSettings(league_url: String) -> Element {
                                     class: "form-control",
                                     id: "n_max_teams",
                                     name: "n_max_teams",
-                                    value: "{d.league.n_max_teams.map(|v| v.to_string()).unwrap_or_default()}"
+                                    value: draft_values.read().get("n_max_teams").cloned().unwrap_or_default(),
+                                    oninput: move |event| { draft_values.write().insert("n_max_teams".into(), event.value()); }
                                 }
                             }
                             div { class: "col-md-4",
@@ -351,7 +370,8 @@ pub fn LeagueSettings(league_url: String) -> Element {
                                     class: "form-control",
                                     id: "max_team_size_roster",
                                     name: "max_team_size_roster",
-                                    value: "{d.league.max_team_size_roster.map(|v| v.to_string()).unwrap_or_default()}"
+                                    value: draft_values.read().get("max_team_size_roster").cloned().unwrap_or_default(),
+                                    oninput: move |event| { draft_values.write().insert("max_team_size_roster".into(), event.value()); }
                                 }
                             }
                             div { class: "col-md-4",
@@ -362,7 +382,8 @@ pub fn LeagueSettings(league_url: String) -> Element {
                                     class: "form-control",
                                     id: "max_team_size_field",
                                     name: "max_team_size_field",
-                                    value: "{d.league.max_team_size_field.map(|v| v.to_string()).unwrap_or_default()}"
+                                    value: draft_values.read().get("max_team_size_field").cloned().unwrap_or_default(),
+                                    oninput: move |event| { draft_values.write().insert("max_team_size_field".into(), event.value()); }
                                 }
                             }
                         }
@@ -372,7 +393,8 @@ pub fn LeagueSettings(league_url: String) -> Element {
                                     r#type: "checkbox",
                                     class: "form-check-input",
                                     id: "team_registration_open",
-                                    checked: d.league.team_registration_open,
+                                    checked: draft_checks.read().get("team_registration_open").copied().unwrap_or(false),
+                                    onchange: move |event| { draft_checks.write().insert("team_registration_open".into(), event.checked()); },
                                 }
                                 label { r#for: "team_registration_open", class: "form-check-label", "Team registration open" }
                             }
@@ -381,7 +403,8 @@ pub fn LeagueSettings(league_url: String) -> Element {
                                     r#type: "checkbox",
                                     class: "form-check-input",
                                     id: "player_registration_open",
-                                    checked: d.league.player_registration_open,
+                                    checked: draft_checks.read().get("player_registration_open").copied().unwrap_or(false),
+                                    onchange: move |event| { draft_checks.write().insert("player_registration_open".into(), event.checked()); },
                                 }
                                 label { r#for: "player_registration_open", class: "form-check-label", "Player registration open" }
                             }
@@ -392,46 +415,37 @@ pub fn LeagueSettings(league_url: String) -> Element {
                                     r#type: "checkbox",
                                     class: "form-check-input",
                                     id: "published",
-                                    checked: d.league.published,
+                                    checked: draft_checks.read().get("published").copied().unwrap_or(false),
+                                    onchange: move |event| { draft_checks.write().insert("published".into(), event.checked()); },
                                 }
-                                label { r#for: "published", class: "form-check-label", "Published (visible on homepage)" }
+                                label { r#for: "published", class: "form-check-label", "Published (visible in Leagues)" }
                             }
                         }
-                        button { r#type: "submit", class: "btn btn-primary", "Save settings" }
-                    }
-                }
-            }
-
-                }
-                div { class: "col-md-4",
-            div { class: "card mb-3",
-                div { class: "card-header", h5 { class: "mb-0", "Penalty Types" } }
-                div { class: "card-body",
-                    div { class: "table-responsive",
-                        table { class: "table table-sm",
-                            thead {
-                                tr {
-                                    th { "Name" }
-                                    th { "Color" }
-                                    th { "Description" }
-                                    th { style: "width: 1%; white-space: nowrap;", "Actions" }
-                                }
-                            }
-                            tbody {
-                                LeaguePenaltyTypesTable {
-                                    penalty_types: d.penalty_types.clone(),
-                                    league_url: league_url.clone(),
-                                    on_refresh: trigger_refresh,
-                                }
-                            }
+                        SettingsSaveActions {
+                            saving: saving(), error: save_error(),
+                            blocked_reason: if waiver_reading() { Some("Reading the waiver file. Save will be available when it is ready.".into()) }
+                                else if banner_busy() { Some("Finish or cancel the banner change before saving settings.".into()) }
+                                else if penalty_pending() { Some("Wait for the penalty change to finish before saving settings.".into()) }
+                                else { None },
                         }
                     }
                 }
             }
+                }
 
-            div { class: "card mb-3",
-                div { class: "card-header", h5 { class: "mb-0", "League Organizers" } }
-                div { class: "card-body",
+                }
+                div { class: "col-12",
+            LeaguePenaltyTypesTable {
+                penalty_types: d.penalty_types.clone(),
+                league_url: league_url.clone(),
+                on_refresh: trigger_refresh,
+                mutation_pending: penalty_pending,
+                settings_saving: saving,
+            }
+
+            details { class: "edit-section section-disclosure mb-3", open: true,
+                summary { class: "edit-section-heading", h3 { class: "h5 mb-0", "League organizers ({d.to_entries.len()})" } }
+                div { class: "edit-section-body",
                     ul { class: "list-group list-group-flush mb-3",
                         for to_entry in &d.to_entries {
                             LeagueToRow {
@@ -443,7 +457,7 @@ pub fn LeagueSettings(league_url: String) -> Element {
                         }
                     }
                     if let Some(ref e) = to_error() {
-                        div { class: "alert alert-danger mb-3", "{e}" }
+                        div { class: "alert alert-danger mb-3", role: "alert", "{e}" }
                     }
                     form {
                         onsubmit: move |ev| {
@@ -451,7 +465,7 @@ pub fn LeagueSettings(league_url: String) -> Element {
                             let user_id = get_form_value("to_user_id").trim().to_string();
                             let user_type = get_form_select_value("to_user_type");
                             if user_id.is_empty() {
-                                to_error.set(Some("User ID is required.".to_string()));
+                                to_error.set(Some("Username is required.".to_string()));
                                 return;
                             }
                             to_error.set(None);
@@ -471,8 +485,8 @@ pub fn LeagueSettings(league_url: String) -> Element {
                             });
                         },
                         div { class: "row g-2 align-items-end",
-                            div { class: "col-auto",
-                                label { class: "form-label", r#for: "to_user_type", "User Type" }
+                            div { class: "col-12 col-sm-auto",
+                                label { class: "form-label", r#for: "to_user_type", "Account type" }
                                 select {
                                     class: "form-select form-select-sm",
                                     id: "to_user_type",
@@ -481,20 +495,22 @@ pub fn LeagueSettings(league_url: String) -> Element {
                                     option { value: "team", "Team" }
                                 }
                             }
-                            div { class: "col-auto",
-                                label { class: "form-label", r#for: "to_user_id", "User ID" }
+                            div { class: "col-12 col-sm",
+                                label { class: "form-label", r#for: "to_user_id", "Username" }
                                 input {
                                     class: "form-control form-control-sm",
                                     id: "to_user_id",
                                     name: "to_user_id",
                                     r#type: "text",
-                                    placeholder: "Case-sensitive",
+                                    autocomplete: "off", autocapitalize: "none", spellcheck: "false",
+                                    required: true, aria_describedby: "organizer-id-help",
                                 }
                             }
-                            div { class: "col-auto",
-                                button { r#type: "submit", class: "btn btn-primary btn-sm", "Add organizer" }
+                            div { class: "col-12 col-sm-auto d-grid",
+                                button { r#type: "submit", class: "btn btn-primary", "Add organizer" }
                             }
                         }
+                        p { id: "organizer-id-help", class: "form-text mb-0", "Enter the exact player or team username, including its capitalization." }
                     }
                 }
             }

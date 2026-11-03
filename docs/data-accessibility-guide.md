@@ -1,20 +1,43 @@
 # Data Accessibility Guide
 
-Updated: Feb 20, 2026
+Updated: Oct 26, 2026
 
 This document details when and how data that you explicitly enter is
 accessible to others.
 
-## Never published, in any way
+## Account and contact information
 
-Arctos will never publish, to anyone, your email address, phone number
-(if entered), password/oauth secret info.
+Player email addresses and phone numbers are not displayed on public
+profiles. Passwords and OAuth credentials are not published.
+
+A team's **public contact email** is visible to anyone on its profile.
+The team account and its managers can add, change or remove this address in Edit profile.
+Creating a new team with Google does not automatically publish the Google
+email address. Existing team contact addresses remain visible until the
+team account or a manager changes or removes them.
+
+## Team managers
+
+Only a team account can appoint or remove its managers. Managers are player
+accounts with access to the team's profile, registrations, rosters, and private
+team notes. If the team organizes an event or league, its managers also have
+organizer access to that event or league and the information available to its
+organizers.
+
+Manager access does not expose the team account's password or OAuth credentials.
+It does not grant access to a player's private profile information beyond the
+permissions held for a particular event or match. Removing a manager ends the
+access granted through the team; separately assigned roles still apply.
 
 ## Injuries
  
-If injuries are set to Public, they are visible to everyone.  If they
-are set to Private, then if they are not healed, they are shown to
-refs when they start a match you are participating in.
+New injuries are private by default. Injuries set to **Public** are visible
+to everyone on the player's profile. **Private** injuries are hidden from
+the public profile; the player can still view and edit them.
+
+Active injuries, including private ones, are shown to authorized match
+referees during match setup at events the player is registered for. Marking
+an injury healed removes it from this active-injury information. The visibility setting on an existing injury changes only when it is edited.
 
 In either case, injury (description, date, and status) may be
 published anonymously. This could be in the form of statistics or
@@ -32,7 +55,7 @@ attached, we will never group injuries by user, etc.).
  - are visible to head refs when starting, running, or viewing a match in 
    the same tournament in which they were logged
  - may be shown in aggregate statistics, but timestamp will be rounded
-   to the day, and no information about author or target will not be
+   to the day, and no information about the author or target will be
    shown besides the target type (team or player)
    
  The [user docs](docs.md#penalties) have more information on the types
@@ -46,10 +69,7 @@ attached, we will never group injuries by user, etc.).
 
 ## Encryption/sysadmin disclaimer
 
-All of this being said, none of the data dealt with by Arctos is
-actually encrypted for server side operations - as described in the
-second paragraph of the privacy policy, anyone with server access
-could view private information with some minimal technical knowledge
-(though authentication data is actually secure). The server itself is
-very secure, but you do have to trust the sysadmins to not leak
-information (to be clear, they will not).
+Arctos does not provide end-to-end encryption. Administrators with database or server access can
+inspect stored records, including private records. Passwords are stored as
+hashes; this does not make other account data inaccessible to administrators.
+See the [privacy policy](privacy-policy.md) for how the service handles data.

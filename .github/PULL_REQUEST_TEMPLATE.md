@@ -38,7 +38,8 @@ Refs   #
 
 ## Screenshots / repro
 
-<!-- For UI changes, include before/after. For API changes, a curl invocation
+<!-- For UI changes, attach before/after screenshots directly to the PR.
+     Include the viewport size and state shown. For API changes, a curl invocation
      or response sample is just as useful (see #181 for the format). -->
 
 ---

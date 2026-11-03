@@ -1141,6 +1141,8 @@ fn collect_match_options(query: &str, matches: &[MatchSetupData]) -> Vec<AcOptio
 pub fn AssEntry(
     /// Unique suffix for input ID (e.g. "create", "edit", "modal"). Multiple instances need distinct IDs.
     id_suffix: String,
+    #[props(optional)] aria_label: Option<String>,
+    #[props(optional)] described_by: Option<String>,
     value: String,
     on_change: EventHandler<String>,
     team_options: Vec<TeamOption>,
@@ -1163,6 +1165,11 @@ pub fn AssEntry(
     on_validity_change: Option<EventHandler<Option<Result<(), String>>>>,
 ) -> Element {
     let input_id = format!("ass-entry-{}", id_suffix);
+    let feedback_id = format!("{input_id}-feedback");
+    let input_description = match described_by {
+        Some(help) => format!("{help} {feedback_id}"),
+        None => feedback_id.clone(),
+    };
 
     let value_rc = Rc::new(value.clone());
     let team_options_rc = Rc::new(team_options);
@@ -1955,6 +1962,9 @@ pub fn AssEntry(
                 }
                 textarea {
                     id: "{input_id}",
+                    aria_label: aria_label,
+                    aria_describedby: input_description,
+                    aria_invalid: error_msg().is_some(),
                     class: "form-control font-monospace ass-entry-input",
                     rows: "1",
                     placeholder: "{placeholder}",
@@ -1991,12 +2001,14 @@ pub fn AssEntry(
                     }
                 }
             }
-            if let Some(err) = error_msg() {
-                div { class: "form-text text-danger ass-entry-error", "✗ {err}" }
-            } else if simplified_value.is_some() {
-                div { class: "form-text text-success", "✓ Valid" }
-            } else if !value.trim().is_empty() {
-                div { class: "form-text text-success", "✓" }
+            div { id: "{feedback_id}", role: "status",
+                if let Some(err) = error_msg() {
+                    div { class: "form-text text-danger ass-entry-error", "✗ {err}" }
+                } else if simplified_value.is_some() {
+                    div { class: "form-text text-success", "✓ Valid" }
+                } else if !value.trim().is_empty() {
+                    div { class: "form-text text-success", "✓" }
+                }
             }
         }
     }

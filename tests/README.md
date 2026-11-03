@@ -146,6 +146,11 @@ will fail with "transaction already in progress".
 
 ## Adding a test
 
+Static API contracts live in `typecheck/` and run through `just typecheck`.
+They verify inferred types and deliberately rejected calls. See
+[type-check guidance](../TESTING.md#type-checks) for the checked scope and
+how to extend it.
+
 1. Pick `unit/` or `integration/` (or a top-level file) based on
    whether it touches HTTP / the DB.
 2. Mark it (`@pytest.mark.unit` or `@pytest.mark.integration`).
