@@ -357,7 +357,7 @@ def create_app(config: dict | None = None) -> Flask:
 
     # The public API (/api/) authenticates with bearer tokens, never cookies, so any origin may call it.
     def _is_public_api(path: str) -> bool:
-        return path.startswith("/api/")
+        return path.startswith("/api/") or path == "/.well-known/openid-configuration"
 
     def _add_public_api_cors_headers(headers):
         headers["Access-Control-Allow-Origin"] = "*"

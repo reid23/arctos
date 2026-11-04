@@ -2095,6 +2095,8 @@ pub struct OAuthConsent {
     pub client: OAuthConsentClient,
     pub scopes: Vec<OAuthScope>,
     pub user: OAuthConsentUser,
+    #[serde(default)]
+    pub already_allowed: bool,
 }
 
 /// The authorization request either needs the user's consent or must

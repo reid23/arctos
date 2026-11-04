@@ -26,6 +26,7 @@ from authlib.oauth2.rfc6750 import BearerTokenValidator
 from authlib.oauth2.rfc6750.errors import InsufficientScopeError, InvalidTokenError
 from authlib.oauth2.rfc7009 import RevocationEndpoint
 from authlib.oauth2.rfc7636 import CodeChallenge
+from authlib.oidc.core.grants import OpenIDCode, OpenIDToken
 from flask import g, request
 
 from app.models.base import db
@@ -34,10 +35,16 @@ from app.services.permission_service import PermissionService
 from app.utils.datetime_helpers import now_utc_naive
 
 SCOPES = {
+    "openid": "Confirm your identity",
+    "profile": "See your profile photo",
     "injuries": "Read all of your injury records, including private ones",
     "footage": "See tournaments you organize, including unpublished ones, and upload match footage to them",
 }
 """Scopes a client may request. Reading public data needs no scope."""
+
+# Clients send this standard scope by habit. Arctos has no address to release,
+# so the request succeeds and the scope is dropped.
+IGNORED_SCOPES = frozenset({"email"})
 
 ACCESS_TOKEN_LIFETIME_SECONDS = 3600
 LAST_USED_RESOLUTION_SECONDS = 60
@@ -94,9 +101,10 @@ class AuthorizationCodeGrant(grants.AuthorizationCodeGrant):
                 user_id=oauth_request.user.id,
                 user_type=_user_type(oauth_request.user),
                 redirect_uri=oauth_request.payload.redirect_uri or "",
-                scope=oauth_request.payload.scope or "",
+                scope=oauth_request.client.get_allowed_scope(oauth_request.payload.scope or ""),
                 code_challenge=oauth_request.payload.data.get("code_challenge"),
                 code_challenge_method=oauth_request.payload.data.get("code_challenge_method"),
+                nonce=oauth_request.payload.data.get("nonce"),
             )
         )
         db.session.commit()
@@ -177,6 +185,50 @@ class _TokenValidator(BearerTokenValidator):
 _token_validator = _TokenValidator()
 
 
+class _OpenIDToken(OpenIDCode):
+    """Adds an ID token when the granted scope includes ``openid``."""
+
+    def exists_nonce(self, nonce, oauth_request):
+        from app.utils.oidc import nonce_was_used
+
+        return nonce_was_used(nonce, oauth_request)
+
+    def get_jwt_config(self, grant):
+        from app.utils.oidc import jwt_config
+
+        return jwt_config()
+
+    def generate_user_info(self, user, scope):
+        from app.utils.oidc import identity_claims
+
+        return identity_claims(user, scope)
+
+
+class _OpenIDRefresh(OpenIDToken):
+    """Issues a fresh ID token when a refresh grant still includes ``openid``."""
+
+    def get_jwt_config(self, grant):
+        from app.utils.oidc import jwt_config
+
+        return jwt_config()
+
+    def generate_user_info(self, user, scope):
+        from app.utils.oidc import identity_claims
+
+        return identity_claims(user, scope)
+
+    def __call__(self, grant):
+        grant.register_hook("after_create_token_response", self.process_token)
+
+
+def _validate_requested_scope(scope):
+    if scope:
+        scope = " ".join(part for part in scope.split() if part not in IGNORED_SCOPES)
+    if scope and authorization_server.scopes_supported:
+        if not set(authorization_server.scopes_supported).issuperset(scope.split()):
+            raise InvalidScopeError()
+
+
 def init_oauth_server(app) -> None:
     """Configure the authorization server on *app*."""
     app.config.setdefault("OAUTH2_REFRESH_TOKEN_GENERATOR", True)
@@ -189,8 +241,9 @@ def init_oauth_server(app) -> None:
     )
     app.config.setdefault("OAUTH2_SCOPES_SUPPORTED", list(SCOPES))
     authorization_server.init_app(app, query_client=_query_client, save_token=_save_token)
-    authorization_server.register_grant(AuthorizationCodeGrant, [S256CodeChallenge(required=True)])
-    authorization_server.register_grant(RefreshTokenGrant)
+    authorization_server.validate_requested_scope = _validate_requested_scope
+    authorization_server.register_grant(AuthorizationCodeGrant, [S256CodeChallenge(required=True), _OpenIDToken()])
+    authorization_server.register_grant(RefreshTokenGrant, [_OpenIDRefresh()])
     authorization_server.register_grant(ClientCredentialsGrant)
     authorization_server.register_endpoint(TokenRevocationEndpoint)
 

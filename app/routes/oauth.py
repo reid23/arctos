@@ -1,4 +1,4 @@
-"""OAuth 2.0 provider routes ("Sign in with Arctos").
+"""OAuth 2.0 and OpenID Connect provider routes ("Sign in with Arctos").
 
 Hosts the ``oauth`` blueprint. Two audiences:
 
@@ -16,7 +16,8 @@ connected-app management in :mod:`app.services.oauth_service`.
 from __future__ import annotations
 
 from authlib.oauth2 import OAuth2Error
-from flask import Blueprint, g, jsonify
+from authlib.oidc.core.errors import ConsentRequiredError, LoginRequiredError
+from flask import Blueprint, g, jsonify, request
 from flask_login import current_user, login_required
 
 from app.error_values import Ok
@@ -25,6 +26,7 @@ from app.services.oauth_service import OAuthService
 from app.utils.datetime_helpers import to_iso_z
 from app.utils.decorators import require_json_body
 from app.utils.oauth_server import SCOPES, authorization_server, require_bearer
+from app.utils.oidc import json_web_key, provider_metadata, userinfo_document
 from app.utils.responses import json_error
 from app.utils.result_helpers import json_from_result
 
@@ -54,12 +56,28 @@ def revoke():
     return authorization_server.create_endpoint_response("revocation")
 
 
-@bp.route("/api/oauth/userinfo")
+@bp.route("/api/oauth/userinfo", methods=["GET", "POST"])
 @require_bearer(user_required=True)
 def userinfo():
-    """Who the access token acts for: ``{"id", "name", "type"}``."""
+    """Who the access token acts for.
+
+    Always includes the OpenID ``sub`` plus the historical ``id``, ``name``,
+    and ``type`` fields. ``picture`` is added for the profile scope.
+    """
     user = g.oauth_user
-    return jsonify({"id": user.id, "name": user.name, "type": g.oauth_token.user_type})
+    return jsonify(userinfo_document(user, g.oauth_token.user_type, g.oauth_token.scope or ""))
+
+
+@bp.route("/.well-known/openid-configuration")
+def openid_configuration():
+    """OpenID Connect discovery document."""
+    return jsonify(provider_metadata())
+
+
+@bp.route("/api/oauth/jwks")
+def jwks():
+    """Public signing keys for ID tokens."""
+    return jsonify({"keys": [json_web_key()]})
 
 
 def _authorization_outcome(response):
@@ -75,19 +93,46 @@ def _authorization_outcome(response):
     return json_error(body.get("error_description") or body.get("error") or "Invalid authorization request")
 
 
+def _prompt_values() -> list[str]:
+    return request.args.get("prompt", "").split()
+
+
+def _signed_in_user():
+    return current_user if current_user.is_authenticated else None
+
+
 @bp.route("/_api/oauth/authorize")
-@login_required
 def authorization_request():
     """Validate an authorization request and describe it for the consent page.
 
-    Takes the authorization request's query parameters unchanged.
+    Takes the authorization request's query parameters unchanged. ``prompt=none``
+    never returns a page: it redirects with a code when this account already
+    allowed every requested scope, and otherwise with ``login_required`` or
+    ``consent_required``.
     """
+    user = _signed_in_user()
+    prompts = _prompt_values()
+    if user is None and "none" not in prompts:
+        return json_error("Sign in to continue.", status_code=401)
     try:
-        grant = authorization_server.get_consent_grant(end_user=current_user)
+        grant = authorization_server.get_consent_grant(end_user=user)
     except OAuth2Error as error:
         return _authorization_outcome(authorization_server.handle_error_response(None, error))
+    if user is None:
+        error = LoginRequiredError(redirect_uri=grant.redirect_uri, state=request.args.get("state"))
+        return _authorization_outcome(authorization_server.handle_error_response(None, error))
     client = grant.client
-    requested = (grant.request.payload.scope or "").split()
+    requested = [scope for scope in (grant.request.payload.scope or "").split() if scope in SCOPES]
+    already_allowed = "consent" not in prompts and OAuthService.grant_covers(
+        user.id, current_user_type(), client.client_id, requested
+    )
+    if "none" in prompts:
+        if not already_allowed:
+            error = ConsentRequiredError(redirect_uri=grant.redirect_uri, state=request.args.get("state"))
+            return _authorization_outcome(authorization_server.handle_error_response(None, error))
+        return _authorization_outcome(
+            authorization_server.create_authorization_response(grant_user=user._get_current_object(), grant=grant)
+        )
     return jsonify(
         {
             "client": {
@@ -96,8 +141,9 @@ def authorization_request():
                 "homepage_url": client.homepage_url,
                 "owner_id": client.owner_id,
             },
-            "scopes": [{"name": scope, "description": SCOPES[scope]} for scope in requested if scope in SCOPES],
-            "user": {"id": current_user.id, "name": current_user.name},
+            "scopes": [{"name": scope, "description": SCOPES[scope]} for scope in requested],
+            "user": {"id": user.id, "name": user.name},
+            "already_allowed": already_allowed,
         }
     )
 

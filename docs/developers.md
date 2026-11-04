@@ -5,8 +5,11 @@ some functionality. This page explains how to register an app, how to
 let people "Sign in with Arctos", and how to call Arctos endpoints
 with the resulting tokens.
 
-Arctos is an OAuth 2.0 authorization server. If you have used "Sign in
-with Google" or GitHub OAuth apps before, this works the same way.
+Arctos is an OAuth 2.0 authorization server and an OpenID Connect
+provider. If you have used "Sign in with Google" or GitHub OAuth apps
+before, this works the same way. OpenID Connect clients can discover
+the endpoints from
+`https://<arctos host>/.well-known/openid-configuration`.
 
 ## Registering an app
 
@@ -44,8 +47,10 @@ libraries handle all of this for you; the endpoints are:
 
 | Endpoint | URL |
 |----------|-----|
+| Discovery | `https://<arctos host>/.well-known/openid-configuration` |
 | Authorization | `https://<arctos host>/oauth/authorize` |
 | Token | `https://<arctos host>/api/oauth/token` |
+| JSON Web Key Set | `https://<arctos host>/api/oauth/jwks` |
 | Revocation | `https://<arctos host>/api/oauth/revoke` |
 | User info | `https://<arctos host>/api/oauth/userinfo` |
 
@@ -68,8 +73,16 @@ https://<arctos host>/oauth/authorize
 Only `S256` is accepted as the challenge method. PKCE is required for
 public apps and recommended for confidential ones.
 
-The user logs in if needed, then sees which app is asking and what it
-will be able to do, and chooses **Allow** or **Cancel**.
+The user logs in if needed. The first time, they see which app is
+asking and what it will be able to do, and choose **Allow** or
+**Cancel**. If they already allowed this app every scope in the
+request, Arctos only asks them to confirm signing in as the current
+account. Either screen can switch to a different Arctos account before
+approving. Include `scope=openid` to receive an ID token. `nonce` is
+copied into that token. `prompt=none` returns to your app without a
+page (`login_required` or `consent_required` when Arctos would
+otherwise have to ask). `prompt=consent` always shows the permission
+list again.
 
 ### 2. Handle the redirect
 
@@ -100,9 +113,17 @@ is:
   "token_type": "Bearer",
   "expires_in": 3600,
   "refresh_token": "...",
-  "scope": "..."
+  "scope": "...",
+  "id_token": "..."
 }
 ```
+
+`id_token` is present when the grant includes `openid`. It is an
+RS256 JWT. Verify it with the keys from the JSON Web Key Set. The
+issuer is the Arctos origin (`iss`), the audience is your client id
+(`aud`), and `sub` is the account's username. `nonce` is present when
+you sent one. A refreshed token includes a new ID token too, without
+the original nonce.
 
 Codes expire after 5 minutes and work once.
 
@@ -113,8 +134,11 @@ GET /api/oauth/userinfo
 Authorization: Bearer <access token>
 ```
 
-returns `{"id": "<username>", "name": "<display name>", "type": "player" | "team"}`.
-`id` is the stable identifier for the account.
+returns the account. `sub` and `id` are both the username, which is
+the stable identifier. `preferred_username` is the same value, `name`
+is the display name, and `type` is `"player"` or `"team"`. `picture`
+is included for the `profile` scope when the account has a photo. The
+ID token carries the same identity claims, without `id` and `type`.
 
 ## Tokens
 
@@ -170,8 +194,15 @@ only for the scopes you need:
 
 | Scope | Lets the app |
 |-------|--------------|
+| `openid` | Sign in with OpenID Connect and receive an ID token |
+| `profile` | See the account's profile photo |
 | `injuries` | Read all of the user's injury records, including private ones |
 | `footage` | See tournaments the user organizes, including unpublished ones, and upload match footage to them |
+
+Every user grant can see the account's name and username, with or
+without `profile`. A client may include `email` in the scope list.
+Arctos accepts that request and drops `email`; it does not return an
+address.
 
 ## Errors
 

@@ -127,7 +127,13 @@ def test_pkce_flow_on_any_loopback_port(client, player):
     assert token["token_type"].lower() == "bearer"
     assert "refresh_token" in token
     userinfo = client.get("/api/oauth/userinfo", headers=_bearer(token["access_token"]))
-    assert userinfo.get_json() == {"id": player.id, "name": player.name, "type": "player"}
+    assert userinfo.get_json() == {
+        "sub": player.id,
+        "preferred_username": player.id,
+        "id": player.id,
+        "name": player.name,
+        "type": "player",
+    }
 
 
 def test_public_client_needs_code_verifier(client, player):
@@ -229,6 +235,78 @@ def test_rotate_secret_and_delete(client, player):
     assert rotated["client_secret"] != registered["client_secret"]
     assert client.delete(f"/_api/oauth/clients/{client_id}").status_code == 200
     assert client.get("/_api/oauth/clients").get_json()["clients"] == []
+
+
+def test_openid_connect_code_flow(client, player):
+    from authlib.jose import JsonWebKey, jwt
+
+    player.email = "player@example.com"
+    from models import db
+
+    db.session.commit()
+    login_as(client, player)
+    client_id = _register(client)["client"]["client_id"]
+    discovery = client.get("/.well-known/openid-configuration")
+    assert discovery.status_code == 200
+    metadata = discovery.get_json()
+    assert metadata["authorization_endpoint"].endswith("/oauth/authorize")
+    assert metadata["jwks_uri"].endswith("/api/oauth/jwks")
+    assert "RS256" in metadata["id_token_signing_alg_values_supported"]
+    assert metadata["issuer"] == metadata["jwks_uri"].removesuffix("/api/oauth/jwks")
+    assert "email" not in metadata["scopes_supported"]
+    assert "email" not in metadata["claims_supported"]
+
+    rejected = client.get(f"/_api/oauth/authorize?{_authorization_query(client_id, scope='openid address')}")
+    assert parse_qs(urlsplit(rejected.get_json()["redirect"]).query)["error"] == ["invalid_scope"]
+
+    first = client.get(f"/_api/oauth/authorize?{_authorization_query(client_id, scope='openid profile email')}")
+    assert first.get_json()["already_allowed"] is False
+    assert "email" not in {scope["name"] for scope in first.get_json()["scopes"]}
+    code = _authorize(client, client_id, scope="openid profile email", nonce="nonce-1")["code"][0]
+    token = _exchange(client, client_id, code).get_json()
+    assert set(token["scope"].split()) == {"openid", "profile"}
+    keys = JsonWebKey.import_key_set(client.get("/api/oauth/jwks").get_json())
+    claims = jwt.decode(token["id_token"], keys)
+    claims.validate()
+    assert claims["iss"] == metadata["issuer"]
+    assert claims["sub"] == player.id
+    assert claims["nonce"] == "nonce-1"
+    assert client_id in claims["aud"] or claims["aud"] == client_id
+    assert "email" not in claims
+    assert "email_verified" not in claims
+    assert claims["name"] == player.name
+
+    userinfo = client.get("/api/oauth/userinfo", headers=_bearer(token["access_token"])).get_json()
+    assert userinfo["sub"] == player.id
+    assert "email" not in userinfo
+    assert userinfo["id"] == player.id
+
+    refreshed = client.post(
+        "/api/oauth/token",
+        data={"grant_type": "refresh_token", "client_id": client_id, "refresh_token": token["refresh_token"]},
+    )
+    assert refreshed.status_code == 200, refreshed.get_json()
+    refreshed_claims = jwt.decode(refreshed.get_json()["id_token"], keys)
+    refreshed_claims.validate()
+    assert refreshed_claims["sub"] == player.id
+    assert "nonce" not in refreshed_claims
+
+    again = client.get(f"/_api/oauth/authorize?{_authorization_query(client_id, scope='openid profile email')}")
+    assert again.get_json()["already_allowed"] is True
+    wider = client.get(f"/_api/oauth/authorize?{_authorization_query(client_id, scope='openid injuries')}")
+    assert wider.get_json()["already_allowed"] is False
+
+    silent = client.get(f"/_api/oauth/authorize?{_authorization_query(client_id, scope='openid', prompt='none')}")
+    silent_params = parse_qs(urlsplit(silent.get_json()["redirect"]).query)
+    assert "code" in silent_params
+    denied = client.get(
+        f"/_api/oauth/authorize?{_authorization_query(client_id, scope='openid injuries', prompt='none')}"
+    )
+    assert parse_qs(urlsplit(denied.get_json()["redirect"]).query)["error"] == ["consent_required"]
+
+    client.get("/_api/logout")
+    logged_out = client.get(f"/_api/oauth/authorize?{_authorization_query(client_id, scope='openid', prompt='none')}")
+    assert parse_qs(urlsplit(logged_out.get_json()["redirect"]).query)["error"] == ["login_required"]
 
 
 def test_apps_are_private_to_their_owner(client, player, team):
