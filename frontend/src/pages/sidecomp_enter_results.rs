@@ -152,6 +152,7 @@ impl MatchSide {
 
 #[derive(Clone, Debug, PartialEq)]
 struct MatchupParty {
+    player_id: String,
     entry_number: i32,
     display_name: String,
     profile_photo: Option<String>,
@@ -170,6 +171,7 @@ struct MatchupEvent {
 
 fn party_from_player(player: &SideCompEnterRosterPlayer) -> MatchupParty {
     MatchupParty {
+        player_id: player.player_id.clone(),
         entry_number: player.entry_number,
         display_name: player.display_name.clone(),
         profile_photo: player.profile_photo.clone(),
@@ -177,6 +179,19 @@ fn party_from_player(player: &SideCompEnterRosterPlayer) -> MatchupParty {
         team_known: player.team_id.is_some() || player.team_shortname.is_some() || player.team_profile_photo.is_some(),
         weapon: player.weapon.clone().filter(|weapon| !weapon.is_empty()),
     }
+}
+
+/// Wins since this person's latest loss in the results entered on this page.
+fn consecutive_wins(history: &[MatchupEvent], player_id: &str) -> u32 {
+    let mut wins = 0;
+    for event in history {
+        if event.winner.as_ref().is_some_and(|party| party.player_id == player_id) {
+            wins += 1;
+        } else if event.loser.as_ref().is_some_and(|party| party.player_id == player_id) {
+            break;
+        }
+    }
+    wins
 }
 
 fn party_class(side: MatchSide, selected: bool, known: bool) -> String {
@@ -276,8 +291,55 @@ fn log_side_win(
     });
 }
 
-fn team_label(player: &SideCompEnterRosterPlayer) -> String {
-    player.team_shortname.clone().unwrap_or_else(|| "merc".to_string())
+fn team_known(player: &SideCompEnterRosterPlayer) -> bool {
+    player.team_id.is_some() || player.team_shortname.is_some() || player.team_profile_photo.is_some()
+}
+
+#[component]
+fn MatchupPlayerLine(
+    name: String,
+    entry_number: i32,
+    photo: Option<String>,
+    team_photo: Option<String>,
+    team_known: bool,
+    weapon: String,
+    #[props(default)] consecutive_wins: u32,
+    #[props(default)] in_search: bool,
+) -> Element {
+    let line_class = if in_search { "sc-player-line search" } else { "sc-player-line selected" };
+    let selected_name = name.clone();
+    rsx! {
+        div { class: "{line_class}",
+            div { class: "sc-player-main",
+                div { class: "sc-avatar-stack",
+                    span { class: "sc-avatar-player",
+                        AvatarCircle { photo, size: "2.15rem".to_string(), is_team: false }
+                    }
+                    if team_known {
+                        span { class: "sc-avatar-subscript",
+                            AvatarCircle { photo: team_photo, size: "0.95rem".to_string(), is_team: true }
+                        }
+                    }
+                }
+                if !weapon.is_empty() {
+                    PompfenIcon { weapon, size: "2.2em".to_string() }
+                }
+                if in_search {
+                    div { class: "sc-player-name",
+                        span { class: "sc-player-number", "#{entry_number}" }
+                        span { class: "sc-player-label", "{name}" }
+                    }
+                }
+            }
+            if !in_search {
+                div { class: "sc-player-name",
+                    span { class: "sc-player-label", "{selected_name}" }
+                    span { class: "sc-player-number", "#{entry_number}" }
+                }
+                div { class: "sc-consecutive-wins", "consecutive wins: {consecutive_wins}" }
+            }
+        }
+    }
 }
 
 #[component]
@@ -301,16 +363,19 @@ fn MatchupBoard(
                 {
                     let known = player.is_some();
                     let card_class = party_class(side, selected == side, known);
-                    let name = player.as_ref().map(|person| person.display_name.clone()).unwrap_or_else(|| "Unknown".into());
-                    let entry_label = player.as_ref().map(|person| format!("#{}", person.entry_number));
-                    let photo = player.as_ref().and_then(|person| person.profile_photo.clone());
-                    let team_photo = player.as_ref().and_then(|person| person.team_profile_photo.clone());
-                    let team_known = player.as_ref().is_some_and(|person| {
-                        person.team_id.is_some() || person.team_shortname.is_some() || person.team_profile_photo.is_some()
-                    });
-                    let weapon = player.as_ref().and_then(|person| person.weapon.clone()).unwrap_or_default();
                     let side_key = side.label().to_string();
                     let clear_label = format!("Clear {}", side.label());
+                    let identity = player.as_ref().map(|person| {
+                        (
+                            person.display_name.clone(),
+                            person.entry_number,
+                            person.profile_photo.clone(),
+                            person.team_profile_photo.clone(),
+                            team_known(person),
+                            person.weapon.clone().unwrap_or_default(),
+                            consecutive_wins(&matchup_history(), &person.player_id),
+                        )
+                    });
                     rsx! {
                         div {
                             class: "{card_class}",
@@ -329,22 +394,18 @@ fn MatchupBoard(
                                     "×"
                                 }
                             }
-                            if known {
-                                AvatarCircle { photo: photo.clone(), size: "2.4rem".to_string(), is_team: false }
-                            }
-                            div { class: "sc-party-name", "{name}" }
-                            if let Some(entry_label) = entry_label {
-                                div { class: "sc-party-meta", "{entry_label}" }
-                            }
-                            if team_known || !weapon.is_empty() {
-                                div { class: "sc-party-marks",
-                                    if team_known {
-                                        AvatarCircle { photo: team_photo.clone(), size: "1.2rem".to_string(), is_team: true }
-                                    }
-                                    if !weapon.is_empty() {
-                                        PompfenIcon { weapon: weapon.clone(), size: "1.2em".to_string() }
-                                    }
+                            if let Some((name, entry_number, photo, team_photo, known_team, weapon, wins)) = identity {
+                                MatchupPlayerLine {
+                                    name,
+                                    entry_number,
+                                    photo,
+                                    team_photo,
+                                    team_known: known_team,
+                                    weapon,
+                                    consecutive_wins: wins,
                                 }
+                            } else {
+                                div { class: "sc-party-name", "Unknown" }
                             }
                         }
                     }
@@ -417,11 +478,10 @@ fn MatchupPicker(
         for player in matches {
             {
                 let chosen = player.clone();
-                let shortname = team_label(&player);
                 let weapon = player.weapon.clone().unwrap_or_default();
                 let photo = player.profile_photo.clone();
                 let team_photo = player.team_profile_photo.clone();
-                let team_known = player.team_id.is_some() || player.team_shortname.is_some() || player.team_profile_photo.is_some();
+                let known_team = team_known(&player);
                 rsx! {
                     button {
                         class: "sc-pick-row",
@@ -440,17 +500,14 @@ fn MatchupPicker(
                                 query.set(String::new());
                             }
                         },
-                        AvatarCircle { photo: photo, size: "2.2rem".to_string(), is_team: false }
-                        div { class: "sc-pick-num", "#{player.entry_number}" }
-                        div { class: "sc-pick-text",
-                            div { class: "sc-display-name", "{player.display_name}" }
-                            div { class: "sc-meta-text", "{shortname}" }
-                        }
-                        if team_known {
-                            AvatarCircle { photo: team_photo, size: "1.25rem".to_string(), is_team: true }
-                        }
-                        if !weapon.is_empty() {
-                            PompfenIcon { weapon: weapon, size: "1.4em".to_string() }
+                        MatchupPlayerLine {
+                            name: player.display_name.clone(),
+                            entry_number: player.entry_number,
+                            photo,
+                            team_photo,
+                            team_known: known_team,
+                            weapon,
+                            in_search: true,
                         }
                     }
                 }
@@ -790,19 +847,24 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
             .sc-party {{
                 position: relative;
                 min-width: 0;
-                min-height: 6.4rem;
+                min-height: 0;
                 box-sizing: border-box;
                 display: flex;
                 flex-direction: column;
-                align-items: center;
+                align-items: stretch;
                 justify-content: center;
-                gap: 0.15rem;
                 border-radius: 0.9rem;
                 border: 3px solid var(--ui-border);
                 background: var(--ui-surface);
-                padding: 0.4rem 0.35rem 0.45rem;
-                text-align: center;
+                padding: 0.3rem 0.45rem 0.32rem;
+                text-align: left;
                 overflow: hidden;
+            }}
+            .sc-party.unknown {{
+                min-height: 2.8rem;
+                align-items: center;
+                padding: 0.35rem;
+                text-align: center;
             }}
             .sc-party.left.selected {{ border-color: #1565c0; }}
             .sc-party.right.selected {{ border-color: #ef6c00; }}
@@ -820,21 +882,72 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
                 color: var(--ui-muted);
                 font-weight: 600;
             }}
-            .sc-party-meta {{
-                max-width: 100%;
-                font-size: 0.82rem;
+            .sc-player-line {{
+                min-width: 0;
+                width: 100%;
+                display: flex;
+                flex-direction: column;
+                gap: 0.05rem;
+            }}
+            .sc-player-main {{
+                min-width: 0;
+                display: flex;
+                align-items: center;
+                gap: 0.4rem;
+            }}
+            .sc-player-line.selected .sc-player-main {{
+                padding-right: 2rem;
+            }}
+            .sc-avatar-stack {{
+                position: relative;
+                width: 2.45rem;
+                height: 2.3rem;
+                flex: 0 0 auto;
+            }}
+            .sc-avatar-player {{
+                position: absolute;
+                top: 0;
+                left: 0;
+                line-height: 0;
+            }}
+            .sc-avatar-subscript {{
+                position: absolute;
+                right: 0;
+                bottom: 0;
+                line-height: 0;
+                border-radius: 50%;
+                box-shadow: 0 0 0 2px var(--ui-surface);
+            }}
+            .sc-player-name {{
+                min-width: 0;
+                flex: 1;
+                display: flex;
+                align-items: baseline;
+                gap: 0.35rem;
+                font-size: 0.95rem;
+                font-weight: 800;
+                line-height: 1.15;
+            }}
+            .sc-player-line.selected .sc-player-name {{
+                width: 100%;
+                flex: none;
+            }}
+            .sc-player-label {{
+                min-width: 0;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }}
+            .sc-player-number {{
+                flex: 0 0 auto;
+            }}
+            .sc-consecutive-wins {{
                 color: var(--ui-muted);
+                font-size: 0.78rem;
+                line-height: 1.15;
                 white-space: nowrap;
                 overflow: hidden;
                 text-overflow: ellipsis;
-            }}
-            .sc-party-marks {{
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                gap: 0.35rem;
-                max-width: 100%;
-                min-width: 0;
             }}
             .sc-party-clear {{
                 position: absolute;
@@ -889,32 +1002,16 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
                 box-sizing: border-box;
                 display: flex;
                 align-items: center;
-                gap: 0.5rem;
                 text-align: left;
                 border: none;
-                border-radius: 0.8rem;
+                border-radius: 0.7rem;
                 background: var(--ui-surface);
                 color: inherit;
-                padding: 0.55rem 0.6rem;
-                margin-bottom: 0.45rem;
-                min-height: 3.6rem;
+                padding: 0.22rem 0.45rem;
+                margin-bottom: 0.28rem;
                 overflow: hidden;
             }}
-            .sc-pick-num {{
-                font-weight: 800;
-                font-size: 1.2rem;
-                min-width: 2.6rem;
-            }}
-            .sc-pick-text {{
-                min-width: 0;
-                flex: 1;
-            }}
             .sc-hist-card.matchup {{ width: 7.8rem; }}
-            .sc-hist-beat {{
-                color: var(--ui-muted);
-                font-size: 0.62rem;
-                font-weight: 700;
-            }}
             /* A short landscape viewport must not clip the nonshrinking keypad. */
             @media (max-height: 500px) {{
                 .sc-enter {{
@@ -1261,7 +1358,6 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
                                                     }
                                                 }
                                             }
-                                            div { class: "sc-hist-beat", "beat" }
                                             div { class: "sc-hist-person",
                                                 div { class: "sc-hist-line sc-hist-points loss",
                                                     if event.loser.is_some() {
@@ -1403,8 +1499,29 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
 
 #[cfg(test)]
 mod tests {
-    use super::merge_roster_lookup;
+    use super::{consecutive_wins, merge_roster_lookup, MatchupEvent, MatchupParty};
     use crate::types::{SideCompEnterRoster, SideCompEnterRosterPlayer};
+
+    fn party(player_id: &str) -> MatchupParty {
+        MatchupParty {
+            player_id: player_id.to_string(),
+            entry_number: 1,
+            display_name: player_id.to_string(),
+            profile_photo: None,
+            team_profile_photo: None,
+            team_known: false,
+            weapon: None,
+        }
+    }
+
+    fn recorded(winner: Option<&str>, loser: Option<&str>) -> MatchupEvent {
+        MatchupEvent {
+            winner: winner.map(party),
+            loser: loser.map(party),
+            result_uuids: vec!["result".to_string()],
+            flagged: false,
+        }
+    }
 
     fn player(player_id: &str, entry_number: i32, display_name: &str) -> SideCompEnterRosterPlayer {
         SideCompEnterRosterPlayer {
@@ -1450,5 +1567,21 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["keep", "fresh", "new"]
         );
+    }
+
+    #[test]
+    fn consecutive_wins_use_only_the_latest_unbroken_local_streak() {
+        // Newest result is first. Other people's bouts do not break a streak.
+        let history = vec![
+            recorded(Some("ada"), Some("bo")),
+            recorded(Some("cy"), Some("dee")),
+            recorded(Some("ada"), Some("bo")),
+            recorded(Some("bo"), Some("ada")),
+            recorded(Some("ada"), None),
+        ];
+        assert_eq!(consecutive_wins(&history, "ada"), 2);
+        assert_eq!(consecutive_wins(&history, "bo"), 0);
+        assert_eq!(consecutive_wins(&history, "cy"), 1);
+        assert_eq!(consecutive_wins(&[], "ada"), 0);
     }
 }

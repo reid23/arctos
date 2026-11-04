@@ -1989,6 +1989,12 @@ pub struct SideCompStandingRow {
     pub losses: Option<i32>,
     pub win_percentage: Option<f64>,
     pub rank: i32,
+    #[serde(default)]
+    pub ranked_count: i32,
+    #[serde(default)]
+    pub weapon_rank: i32,
+    #[serde(default)]
+    pub weapon_ranked_count: i32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

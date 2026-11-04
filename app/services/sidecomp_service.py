@@ -1445,7 +1445,9 @@ class SideCompService:
         with valid results. The public table shows the configured number of
         leaders, or one leader when a weapon is selected. Filtered table ranks
         are relative to that weapon. Personal standings retain the whole-table
-        rank and are independent of the selected weapon. The external API uses
+        rank and are independent of the selected weapon. They also include that
+        table's size and the same ordering restricted to the player's weapon.
+        The external API uses
         the default summary with the configured limit for every selection.
 
         ``include_below_cut`` returns complete standings for an organizer.
@@ -1577,6 +1579,12 @@ class SideCompService:
                 for rank, reg in enumerate(ranked, start=1):
                     if reg.player == viewer_player_id:
                         personal_row = row_for(reg, rank, track_losses)
+                        same_weapon = [member for member in ranked if member.weapon == reg.weapon]
+                        personal_row["ranked_count"] = len(ranked)
+                        personal_row["weapon_rank"] = next(
+                            index for index, member in enumerate(same_weapon, start=1) if member.id == reg.id
+                        )
+                        personal_row["weapon_ranked_count"] = len(same_weapon)
                         break
                 visible = ranked
                 if selected_weapon is not None:

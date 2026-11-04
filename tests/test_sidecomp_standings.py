@@ -112,6 +112,9 @@ def test_sort_selection_precedes_limit_and_respects_each_tables_loss_setting(cli
     g.pop("_login_user", None)
     [personal] = client.get(path, query_string={**selection, "sort": "wins"}).get_json()["tables"]
     assert personal["personal_row"]["rank"] == 4
+    assert personal["personal_row"]["ranked_count"] == 7
+    assert personal["personal_row"]["weapon_rank"] == 1
+    assert personal["personal_row"]["weapon_ranked_count"] == 4
     assert personal["personal_row"]["wins"] == 6
     assert personal["personal_row"]["losses"] == 6
     assert personal["personal_row"]["win_percentage"] == 50
@@ -194,6 +197,9 @@ def test_only_organizers_receive_complete_tables(client, tournament, chain_pit, 
     if viewer_kind == "participant":
         assert table["personal_row"]["player_id"] == "florentine-3"
         assert table["personal_row"]["rank"] == 7
+        assert table["personal_row"]["ranked_count"] == 7
+        assert table["personal_row"]["weapon_rank"] == 4
+        assert table["personal_row"]["weapon_ranked_count"] == 4
     else:
         assert table["personal_row"] is None
 
@@ -204,6 +210,9 @@ def test_participant_below_the_leaders_cut_can_find_their_rank(client, chain_pit
     breaks = client.get(path).get_json()["tables"][1]
     own_row = breaks["personal_row"]
     assert own_row["rank"] == 7
+    assert own_row["ranked_count"] == 7
+    assert own_row["weapon_rank"] == 4
+    assert own_row["weapon_ranked_count"] == 4
     assert len(breaks["rows"]) == 3
     assert all(row["player_id"] != "florentine-3" for row in breaks["rows"])
 

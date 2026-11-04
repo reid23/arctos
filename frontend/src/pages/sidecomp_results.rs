@@ -190,24 +190,112 @@ fn StandingRowView(
 }
 
 #[component]
-fn PersonalResult(table: SideCompStandingTable, row: SideCompStandingRow) -> Element {
+fn PersonalResult(comp_id: i32, table: SideCompStandingTable, row: SideCompStandingRow) -> Element {
+    let track_losses = table.track_losses;
+    let mut sort = use_signal(move || StandingSort::default_for(track_losses));
+    let selected_sort = if track_losses { sort() } else { StandingSort::Wins };
+    let uses_default_sort = selected_sort == StandingSort::default_for(track_losses);
+    let table_id = table.id.clone();
+    let mut ranked = use_resource(
+        use_reactive(
+            &(comp_id, table_id.clone(), track_losses, selected_sort),
+            move |(comp_id, table_id, track_losses, selected_sort)| async move {
+                if !track_losses || selected_sort == StandingSort::default_for(track_losses) {
+                    return (selected_sort, Ok(None));
+                }
+                let result = api::sidecomp_standings(
+                    comp_id,
+                    Some(&table_id),
+                    None,
+                    Some(selected_sort.query_value()),
+                )
+                .await
+                .and_then(|data| {
+                    if !data.results_page_enabled {
+                        return Err(api::StandingsError::Request(
+                            "Results are not being shown for this side competition.".to_string(),
+                        ));
+                    }
+                    Ok(data
+                        .tables
+                        .into_iter()
+                        .find(|table| table.id == table_id)
+                        .and_then(|table| table.personal_row))
+                });
+                (selected_sort, result)
+            },
+        ),
+    );
+    use_future(move || async move {
+        #[cfg(target_arch = "wasm32")]
+        loop {
+            TimeoutFuture::new(1000).await;
+            if sort() != StandingSort::default_for(track_losses) && ranked.finished() {
+                ranked.restart();
+            }
+        }
+    });
+    let ranked_snapshot = ranked.read().clone();
+    let (ready, failure, missing) = if uses_default_sort {
+        (Some(row.clone()), None, false)
+    } else {
+        match ranked_snapshot.as_ref() {
+            Some((loaded_sort, Ok(Some(loaded)))) if *loaded_sort == selected_sort => {
+                (Some(loaded.clone()), None, false)
+            }
+            Some((loaded_sort, Ok(None))) if *loaded_sort == selected_sort => (None, None, true),
+            Some((loaded_sort, Err(error))) if *loaded_sort == selected_sort => {
+                (None, Some(error.to_string()), false)
+            }
+            _ => (None, None, false),
+        }
+    };
     let weapon = row
         .weapon
         .as_deref()
         .map(|weapon| pompfen_by_id(weapon).map_or(weapon, |option| option.label))
         .unwrap_or("—");
-    let group = if table.id == "all" { "Overall" } else { table.title.as_str() };
+    let rank_select_id = format!("sidecomp-{comp_id}-{}-personal-rank", table.id);
     rsx! {
         section { class: "card mb-4", aria_label: "Your result",
             div { class: "card-body",
-                h3 { class: "h5 mb-1", "Your result" }
-                p { class: "small text-muted mb-2",
-                    "{group} · {weapon}"
+                div { class: "d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2",
+                    h3 { class: "h5 mb-0", "Your result" }
+                    if track_losses {
+                        div { class: "sidecomp-personal-rank",
+                            label {
+                                r#for: rank_select_id.clone(),
+                                class: "form-label mb-0",
+                                "Rank by"
+                            }
+                            select {
+                                id: rank_select_id,
+                                class: "form-select form-select-sm",
+                                value: selected_sort.query_value(),
+                                onchange: move |event| {
+                                    sort.set(match event.value().as_str() {
+                                        "wins" => StandingSort::Wins,
+                                        _ => StandingSort::WinRatio,
+                                    });
+                                },
+                                option { value: "win_percentage", "Win percentage" }
+                                option { value: "wins", "Wins" }
+                            }
+                        }
+                    }
                 }
                 div { class: "d-flex flex-wrap gap-3",
-                    strong { "Rank: {row.rank}" }
+                    if let Some(ranked_row) = ready.as_ref() {
+                        strong {
+                            "Rank: {ranked_row.rank}/{ranked_row.ranked_count} ({weapon}: {ranked_row.weapon_rank}/{ranked_row.weapon_ranked_count})"
+                        }
+                    } else if missing {
+                        span { "Your rank is unavailable." }
+                    } else if failure.is_none() {
+                        span { role: "status", "Loading rank…" }
+                    }
                     span { "Wins: {row.wins}" }
-                    if table.track_losses {
+                    if track_losses {
                         span { "Losses: {row.losses.unwrap_or(0)}" }
                         span {
                             "Win percentage: "
@@ -216,6 +304,17 @@ fn PersonalResult(table: SideCompStandingTable, row: SideCompStandingRow) -> Ele
                                     .map(|value| format!("{value:.0}%"))
                                     .unwrap_or_else(|| "—".to_string())
                             }
+                        }
+                    }
+                }
+                if let Some(message) = failure.as_ref() {
+                    div { role: "alert", class: "alert alert-danger mt-3 mb-0",
+                        p { class: "mb-2", "Could not load your rank: {message}" }
+                        button {
+                            r#type: "button",
+                            class: "btn btn-outline-secondary",
+                            onclick: move |_| ranked.restart(),
+                            "Retry rank"
                         }
                     }
                 }
@@ -541,7 +640,12 @@ pub fn SideCompResults(url: String, comp_id: i32) -> Element {
                                         .as_ref()
                                         .filter(|row| viewer_player_id.as_deref() == Some(row.player_id.as_str()))
                                     {
-                                        PersonalResult { table: table.clone(), row: row.clone() }
+                                        PersonalResult {
+                                            key: "{table.id}",
+                                            comp_id,
+                                            table: table.clone(),
+                                            row: row.clone(),
+                                        }
                                     }
                                 }
                                 if tables.len() > 1 {
