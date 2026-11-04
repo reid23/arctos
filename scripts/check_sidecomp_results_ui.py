@@ -170,9 +170,7 @@ class StandingsFixture:
             personal_row["ranked_count"] = ranked_count
             personal_row["weapon_ranked_count"] = len(same_weapon)
             personal_row["weapon_rank"] = next(
-                index
-                for index, row in enumerate(same_weapon, start=1)
-                if row["player_id"] == personal_row["player_id"]
+                index for index, row in enumerate(same_weapon, start=1) if row["player_id"] == personal_row["player_id"]
             )
         if weapon is not None:
             rows = [row for row in rows if row["weapon"] == weapon] if weapon in available_weapons else []
