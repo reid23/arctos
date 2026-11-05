@@ -31,9 +31,20 @@ def save(client, player, request):
 def test_defaults_are_public_empty_and_team_profiles_unchanged(client, player, team):
     public = client.get(f"/_api/players/{player.id}").get_json()["player"]
     assert public["pronouns"] is None and public["pompfen"] == []
+    assert "phone" not in public
     assert player.pronouns is None and player.pompfen == []
     team_public = client.get(f"/_api/teams/{team.id}").get_json()["team"]
     assert "pronouns" not in team_public and "pompfen" not in team_public
+
+
+def test_stored_phone_is_kept_and_omitted_from_the_profile(client, player, save):
+    player.phone = "555-0100"
+    db.session.commit()
+    login_as(client, player)
+    assert save({"name": "Shown name", "phone": "999"}).status_code == 200
+    db.session.refresh(player)
+    assert player.name == "Shown name" and player.phone == "555-0100"
+    assert "phone" not in client.get(f"/_api/players/{player.id}").get_json()["player"]
 
 
 def test_owner_can_save_clear_and_keep_public_details(client, player, save):

@@ -11,7 +11,6 @@ struct ProfileFields {
     about: String,
     pronouns: String,
     pompfen: Vec<String>,
-    phone: String,
     email: String,
     website: String,
 }
@@ -73,8 +72,8 @@ pub fn ProfileEditPage(account_id: String, team: bool) -> Element {
             let value = response.player;
             Ok(Some(ProfileEditData {
                 fields: ProfileFields { name: value.name, location: value.location.unwrap_or_default(),
-                    about: value.bio.unwrap_or_default(), phone: value.phone.unwrap_or_default(),
-                    pronouns: value.pronouns.unwrap_or_default(), pompfen: value.pompfen, ..Default::default() },
+                    about: value.bio.unwrap_or_default(), pronouns: value.pronouns.unwrap_or_default(),
+                    pompfen: value.pompfen, ..Default::default() },
                 photo: value.profile_photo, banner: value.banner_photo,
                 past_count: response.past_event_count, has_password: user.has_password,
                 owns_account: user.id == id && user.user_type == if team { "team" } else { "player" },
@@ -172,7 +171,7 @@ fn ProfileEditForm(account_id: String, team: bool, data: ProfileEditData) -> Ele
                     serde_json::json!({"name": draft.name, "location": draft.location, "about": draft.about,
                         "email": draft.email, "website": draft.website})
                 } else {
-                    serde_json::json!({"name": draft.name, "location": draft.location, "bio": draft.about, "phone": draft.phone,
+                    serde_json::json!({"name": draft.name, "location": draft.location, "bio": draft.about,
                         "pronouns": draft.pronouns, "pompfen": draft.pompfen})
                 };
                 api::save_profile_edit(if team { "teams" } else { "players" }, &id, &details,
@@ -269,8 +268,6 @@ fn ProfileEditForm(account_id: String, team: bool, data: ProfileEditData) -> Ele
                         if team {
                             ProfileField { state: fields, field_error, field: Field::Website, label: "Website", input_type: "url", disabled: saving() }
                             ProfileField { state: fields, field_error, field: Field::Email, label: "Public contact email", input_type: "email", help: "Optional. Anyone can see this address on your team's profile.", disabled: saving() }
-                        } else {
-                            ProfileField { state: fields, field_error, field: Field::Phone, label: "Phone number", input_type: "tel", help: "Only you can see this.", disabled: saving() }
                         }
                     }
                 }
@@ -308,23 +305,23 @@ fn ProfileEditForm(account_id: String, team: bool, data: ProfileEditData) -> Ele
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum Field { Name, Location, About, Pronouns, Phone, Email, Website }
+enum Field { Name, Location, About, Pronouns, Email, Website }
 
 impl Field {
     fn id(self) -> &'static str {
         match self { Self::Name => "profile-edit-name", Self::Location => "profile-edit-location",
-            Self::About => "profile-edit-about", Self::Pronouns => "profile-edit-pronouns", Self::Phone => "profile-edit-phone", Self::Email => "profile-edit-email", Self::Website => "profile-edit-website" }
+            Self::About => "profile-edit-about", Self::Pronouns => "profile-edit-pronouns", Self::Email => "profile-edit-email", Self::Website => "profile-edit-website" }
     }
     fn get(self, fields: &ProfileFields) -> &str {
         match self { Self::Name => &fields.name, Self::Location => &fields.location, Self::About => &fields.about, Self::Pronouns => &fields.pronouns,
-            Self::Phone => &fields.phone, Self::Email => &fields.email, Self::Website => &fields.website }
+            Self::Email => &fields.email, Self::Website => &fields.website }
     }
     fn set(self, fields: &mut ProfileFields, value: String) {
         *match self { Self::Name => &mut fields.name, Self::Location => &mut fields.location, Self::About => &mut fields.about, Self::Pronouns => &mut fields.pronouns,
-            Self::Phone => &mut fields.phone, Self::Email => &mut fields.email, Self::Website => &mut fields.website } = value;
+            Self::Email => &mut fields.email, Self::Website => &mut fields.website } = value;
     }
     fn limit(self) -> usize {
-        match self { Self::Name | Self::Location => 100, Self::Pronouns => 64, Self::Phone => 20, Self::Email => 255, Self::Website => 200, Self::About => 20000 }
+        match self { Self::Name | Self::Location => 100, Self::Pronouns => 64, Self::Email => 255, Self::Website => 200, Self::About => 20000 }
     }
 }
 

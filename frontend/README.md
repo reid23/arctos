@@ -177,7 +177,7 @@ attendance.
 Profile editing stages text, avatar, and cover changes locally. Save sends one
 multipart request; failed saves retain the draft. Preview renders Markdown
 through the shared backend sanitizer and shows escaped text while formatting is
-unavailable. Player phone numbers are excluded from the public preview.
+unavailable.
 
 Image editors support drag/tap positioning, arrow keys, Zoom, and Reset position.
 Reset centers the pan without changing zoom. Profile images save with the
