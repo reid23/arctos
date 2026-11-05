@@ -24,7 +24,7 @@ from app.models.records import Injury, HeadRef
 from app.models.sidecomp import SideComp, SideCompEntryNumber, SideCompRegistration, SideCompResult
 from app.models.camera import Camera
 from app.models.historical import TeamClaimInvitation, TeamClaimRequest
-from app.models.oauth import OAuthAuthorizationCode, OAuthClient, OAuthToken
+from app.models.oauth import OAuthAuthorizationCode, OAuthClient, OAuthToken, OidcSigningKey
 from app.models.normalised import (
     CameraTimepoint,
     HeadRefAllowList,
@@ -59,6 +59,7 @@ __all__ = [
     "OAuthClient",
     "OAuthAuthorizationCode",
     "OAuthToken",
+    "OidcSigningKey",
     "PenaltyType",
     "Injury",
     "HeadRef",

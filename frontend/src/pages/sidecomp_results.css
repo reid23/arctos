@@ -1,4 +1,7 @@
 .arctos-app .sidecomp-weapon-filter { display: flex; align-items: center; gap: .75rem; max-width: 100%; }
+.arctos-app .sidecomp-personal-rank { display: flex; align-items: center; gap: .75rem; }
+.arctos-app .sidecomp-personal-rank .form-select { width: auto; }
+.arctos-app .sidecomp-personal-rank .form-select:focus-visible { outline: 3px solid var(--ui-link); outline-offset: 2px; }
 .arctos-app .sidecomp-weapon-filter .form-select { width: 12rem; max-width: 100%; }
 .arctos-app .sidecomp-weapon-filter .form-select:focus-visible { outline: 3px solid var(--ui-link); outline-offset: 2px; }
 .arctos-app .sidecomp-standings-table { width: 100%; min-width: 17.5rem; }

@@ -151,6 +151,7 @@ class OAuthAuthorizationCode(db.Model):
     scope = db.Column(db.String(SCOPE_LEN), nullable=False, default="")
     code_challenge = db.Column(db.String(AUTH_STRING_LEN), nullable=True)
     code_challenge_method = db.Column(db.String(SHORT_CODE_LEN), nullable=True)
+    nonce = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=now_utc_naive)
 
     def is_expired(self) -> bool:
@@ -162,11 +163,17 @@ class OAuthAuthorizationCode(db.Model):
     def get_scope(self) -> str:
         return self.scope
 
-    def get_nonce(self) -> None:
-        return None
+    def get_nonce(self) -> str | None:
+        return self.nonce
 
     def get_auth_time(self) -> int:
         return int(self.created_at.timestamp())
+
+    def get_acr(self) -> None:
+        return None
+
+    def get_amr(self) -> None:
+        return None
 
 
 class OAuthToken(db.Model):
@@ -235,3 +242,18 @@ class OAuthToken(db.Model):
 
     def get_client(self) -> OAuthClient:
         return self.client
+
+
+class OidcSigningKey(db.Model):
+    """The RSA key Arctos uses to sign OpenID Connect ID tokens.
+
+    One row, shared by every worker. The private key stays in the database;
+    only the public half is published at the JWKS endpoint.
+    """
+
+    __tablename__ = "oidc_signing_keys"
+
+    id = db.Column(db.Integer, primary_key=True)
+    kid = db.Column(db.String(AUTH_STRING_LEN), nullable=False)
+    private_pem = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=now_utc_naive)

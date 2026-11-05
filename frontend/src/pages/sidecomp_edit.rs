@@ -17,6 +17,7 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
     let mut track_losses = use_signal(|| false);
     let mut track_chain_losses = use_signal(|| false);
     let mut track_break_losses = use_signal(|| false);
+    let mut track_matchups = use_signal(|| false);
     let mut allowed_weapons = use_signal(default_allowed_weapons);
     let mut top_n_text = use_signal(String::new);
     let mut initialised = use_signal(|| false);
@@ -35,6 +36,7 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
             track_losses.set(d.track_losses);
             track_chain_losses.set(d.track_chain_losses);
             track_break_losses.set(d.track_break_losses);
+            track_matchups.set(d.track_matchups);
             if d.allowed_weapons.is_empty() {
                 allowed_weapons.set(Vec::new());
             } else {
@@ -101,6 +103,12 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
                         let losses = (!is_chain_breaking).then_some(track_losses());
                         let chain_losses = is_chain_breaking.then_some(track_chain_losses());
                         let break_losses = is_chain_breaking.then_some(track_break_losses());
+                        let loss_tracking = if is_chain_breaking {
+                            track_chain_losses() || track_break_losses()
+                        } else {
+                            track_losses()
+                        };
+                        let matchups = Some(loss_tracking && track_matchups());
                         let weapons = allowed_weapons();
                         let top_n = {
                             let raw = top_n_text().trim().to_string();
@@ -129,6 +137,7 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
                                 losses,
                                 chain_losses,
                                 break_losses,
+                                matchups,
                                 Some(&weapons),
                                 top_n,
                             ).await {
@@ -227,7 +236,13 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
                                 r#type: "checkbox",
                                 id: "track-chain-losses-toggle",
                                 checked: track_chain_losses(),
-                                onchange: move |evt| track_chain_losses.set(evt.checked()),
+                                onchange: move |evt| {
+                                    let checked = evt.checked();
+                                    track_chain_losses.set(checked);
+                                    if !checked && !track_break_losses() {
+                                        track_matchups.set(false);
+                                    }
+                                },
                             }
                             label {
                                 class: "form-check-label",
@@ -241,7 +256,13 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
                                 r#type: "checkbox",
                                 id: "track-break-losses-toggle", aria_describedby: "track-break-losses-toggle-help",
                                 checked: track_break_losses(),
-                                onchange: move |evt| track_break_losses.set(evt.checked()),
+                                onchange: move |evt| {
+                                    let checked = evt.checked();
+                                    track_break_losses.set(checked);
+                                    if !checked && !track_chain_losses() {
+                                        track_matchups.set(false);
+                                    }
+                                },
                             }
                             label {
                                 class: "form-check-label",
@@ -252,6 +273,25 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
                                 "When unchecked, only wins are entered and ranked for that group."
                             }
                         }
+                        if track_chain_losses() || track_break_losses() {
+                            div { class: "mb-3 form-check ms-4",
+                                input {
+                                    class: "form-check-input",
+                                    r#type: "checkbox",
+                                    id: "track-matchups-toggle", aria_describedby: "track-matchups-toggle-help",
+                                    checked: track_matchups(),
+                                    onchange: move |evt| track_matchups.set(evt.checked()),
+                                }
+                                label {
+                                    class: "form-check-label",
+                                    r#for: "track-matchups-toggle",
+                                    "Track matchups"
+                                }
+                                div { id: "track-matchups-toggle-help", class: "form-text",
+                                    "Score two people at a time. A win for one is a loss for the other."
+                                }
+                            }
+                        }
                     } else {
                         div { class: "mb-3 form-check",
                             input {
@@ -259,7 +299,13 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
                                 r#type: "checkbox",
                                 id: "track-losses-toggle", aria_describedby: "track-losses-toggle-help",
                                 checked: track_losses(),
-                                onchange: move |evt| track_losses.set(evt.checked()),
+                                onchange: move |evt| {
+                                    let checked = evt.checked();
+                                    track_losses.set(checked);
+                                    if !checked {
+                                        track_matchups.set(false);
+                                    }
+                                },
                             }
                             label {
                                 class: "form-check-label",
@@ -268,6 +314,25 @@ pub fn SideCompEdit(url: String, comp_id: i32) -> Element {
                             }
                             div { id: "track-losses-toggle-help", class: "form-text",
                                 "When checked, standings rank by win percentage. Otherwise, only wins are entered and ranked."
+                            }
+                        }
+                        if track_losses() {
+                            div { class: "mb-3 form-check ms-4",
+                                input {
+                                    class: "form-check-input",
+                                    r#type: "checkbox",
+                                    id: "track-matchups-toggle", aria_describedby: "track-matchups-toggle-help",
+                                    checked: track_matchups(),
+                                    onchange: move |evt| track_matchups.set(evt.checked()),
+                                }
+                                label {
+                                    class: "form-check-label",
+                                    r#for: "track-matchups-toggle",
+                                    "Track matchups"
+                                }
+                                div { id: "track-matchups-toggle-help", class: "form-text",
+                                    "Score two people at a time. A win for one is a loss for the other."
+                                }
                             }
                         }
                     }

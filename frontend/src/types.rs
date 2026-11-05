@@ -1170,7 +1170,6 @@ pub struct PlayerProfileData {
     pub profile_photo: Option<String>,
     #[serde(default)]
     pub banner_photo: Option<String>,
-    pub phone: Option<String>,
     pub location: Option<String>,
     pub bio: Option<String>,
     #[serde(default)]
@@ -1868,6 +1867,8 @@ pub struct SideCompDetail {
     #[serde(default)]
     pub track_break_losses: bool,
     #[serde(default)]
+    pub track_matchups: bool,
+    #[serde(default)]
     pub allowed_weapons: Vec<String>,
     pub only_show_top_n_results: Option<i32>,
     #[serde(default)]
@@ -1946,6 +1947,8 @@ pub struct SideCompEnterRoster {
     pub type_: String,
     #[serde(default)]
     pub active: bool,
+    #[serde(default)]
+    pub track_matchups: bool,
     pub registrants: Vec<SideCompEnterRosterPlayer>,
 }
 
@@ -1985,6 +1988,12 @@ pub struct SideCompStandingRow {
     pub losses: Option<i32>,
     pub win_percentage: Option<f64>,
     pub rank: i32,
+    #[serde(default)]
+    pub ranked_count: i32,
+    #[serde(default)]
+    pub weapon_rank: i32,
+    #[serde(default)]
+    pub weapon_ranked_count: i32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -2085,6 +2094,8 @@ pub struct OAuthConsent {
     pub client: OAuthConsentClient,
     pub scopes: Vec<OAuthScope>,
     pub user: OAuthConsentUser,
+    #[serde(default)]
+    pub already_allowed: bool,
 }
 
 /// The authorization request either needs the user's consent or must

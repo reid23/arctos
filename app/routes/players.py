@@ -307,7 +307,6 @@ def player_profile(player_id):
                 "name": player.name,
                 "profile_photo": player.profile_photo,
                 "banner_photo": player.banner_photo,
-                "phone": (player.phone if (current_user.is_authenticated and current_user.id == player_id) else None),
                 "location": player.location,
                 "bio": player.bio,
                 "pronouns": player.pronouns,

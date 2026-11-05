@@ -149,6 +149,23 @@ class OAuthService:
         db.session.commit()
 
     @staticmethod
+    def grant_covers(user_id: str, user_type: str, client_id: str, requested: list[str]) -> bool:
+        """Whether this user already allowed *client_id* every scope in *requested*.
+
+        A disconnected app has no usable token, so the next sign-in asks again.
+        """
+        tokens = OAuthToken.query.filter_by(client_id=client_id, user_id=user_id, user_type=user_type).all()
+        usable = [
+            token
+            for token in tokens
+            if token.is_refresh_token_usable() or not (token.is_revoked() or token.is_expired())
+        ]
+        if not usable:
+            return False
+        granted = {scope for token in usable for scope in token.scope.split() if scope}
+        return set(requested).issubset(granted)
+
+    @staticmethod
     def connected_apps(user_id: str, user_type: str) -> list[ConnectedApp]:
         """Apps holding a token for this user that is still usable."""
         tokens = OAuthToken.query.filter_by(user_id=user_id, user_type=user_type).all()

@@ -5,8 +5,14 @@ some functionality. This page explains how to register an app, how to
 let people "Sign in with Arctos", and how to call Arctos endpoints
 with the resulting tokens.
 
-Arctos is an OAuth 2.0 authorization server. If you have used "Sign in
-with Google" or GitHub OAuth apps before, this works the same way.
+Arctos is an OAuth 2.0 authorization server and an OpenID Connect
+provider. If you have used "Sign in with Google" or GitHub OAuth apps
+before, this works the same way. OpenID Connect clients discover the
+provider at
+`https://events.californiajugger.org/.well-known/openid-configuration`.
+That origin is the issuer: discovery and ID tokens name it. The site
+is also served at `https://arctos.usnja.org`, and ordinary API calls
+work on either host, but that host is not the issuer.
 
 ## Registering an app
 
@@ -14,22 +20,22 @@ Anyone with an Arctos account can register apps on the
 [Your apps](/developers/apps) page. You'll choose:
 
 - **Name** and optional **homepage**: shown to people on the consent
-  screen when they sign in.
+  screen when they sign in.  
 - **Redirect URIs**: where Arctos sends people back to after they sign in.
-  Each must be one of:
-  - an `https://` URL,
-  - an `http://127.0.0.1/...` (or `http://[::1]/...`, `http://localhost/...`)
-    loopback URL, for apps running on the user's own computer. Any port
-    matches, so your app can listen on whichever port is free, or
-  - a reverse-domain private-use scheme like `com.example.app:/callback`
-    for mobile apps.
-- **Type**:
-  - **Public** apps run on the user's device (desktop, mobile, and
-    single-page browser apps). They can't keep a secret, so they must use
-    PKCE.
-  - **Confidential** apps run on a server you control. They get a
-    **client secret**, which is shown once when you create the app (or
-    generate a new one). Arctos only stores a hash of it.
+  Each must be one of:  
+    - an `https://` URL,  
+    - an `http://127.0.0.1/...` (or `http://[::1]/...`, `http://localhost/...`)
+      loopback URL, for apps running on the user's own computer. Any port
+      matches, so your app can listen on whichever port is free, or  
+    - a reverse-domain private-use scheme like `com.example.app:/callback`
+      for mobile apps.  
+- **Type**:  
+    - **Public** apps run on the user's device (desktop, mobile, and
+      single-page browser apps). They can't keep a secret, so they must use
+      PKCE.  
+    - **Confidential** apps run on a server you control. They get a
+      **client secret**, which is shown once when you create the app (or
+      generate a new one). Arctos only stores a hash of it.  
 
 Every app gets a **client ID**, which is not secret.
 
@@ -40,14 +46,17 @@ Arctos implements the
 with [PKCE](https://www.rfc-editor.org/rfc/rfc7636). Native apps should
 follow [RFC 8252](https://www.rfc-editor.org/rfc/rfc8252) (open the
 system browser and listen on a loopback redirect URI). Most OAuth client
-libraries handle all of this for you; the endpoints are:
+libraries handle all of this for you. On 
+`https://events.californiajugger.org` the endpoints are:
 
-| Endpoint | URL |
-|----------|-----|
-| Authorization | `https://<arctos host>/oauth/authorize` |
-| Token | `https://<arctos host>/api/oauth/token` |
-| Revocation | `https://<arctos host>/api/oauth/revoke` |
-| User info | `https://<arctos host>/api/oauth/userinfo` |
+| Endpoint | Path |
+|----------|------|
+| Discovery | `/.well-known/openid-configuration` |
+| Authorization | `/oauth/authorize` |
+| Token | `/api/oauth/token` |
+| JSON Web Key Set | `/api/oauth/jwks` |
+| Revocation | `/api/oauth/revoke` |
+| User info | `/api/oauth/userinfo` |
 
 ### 1. Send the user to Arctos
 
@@ -55,7 +64,7 @@ Generate a random `code_verifier` (43 to 128 characters from
 `A-Z a-z 0-9 - . _ ~`) and a random `state`, then open:
 
 ```
-https://<arctos host>/oauth/authorize
+https://events.californiajugger.org/oauth/authorize
     ?response_type=code
     &client_id=<client id>
     &redirect_uri=<one of your redirect URIs>
@@ -68,8 +77,16 @@ https://<arctos host>/oauth/authorize
 Only `S256` is accepted as the challenge method. PKCE is required for
 public apps and recommended for confidential ones.
 
-The user logs in if needed, then sees which app is asking and what it
-will be able to do, and chooses **Allow** or **Cancel**.
+The user logs in if needed. The first time, they see which app is
+asking and what it will be able to do, and choose **Allow** or
+**Cancel**. If they already allowed this app every scope in the
+request, Arctos only asks them to confirm signing in as the current
+account. Either screen can switch to a different Arctos account before
+approving. Include `scope=openid` to receive an ID token. `nonce` is
+copied into that token. `prompt=none` returns to your app without a
+page (`login_required` or `consent_required` when Arctos would
+otherwise have to ask). `prompt=consent` always shows the permission
+list again.
 
 ### 2. Handle the redirect
 
@@ -100,9 +117,17 @@ is:
   "token_type": "Bearer",
   "expires_in": 3600,
   "refresh_token": "...",
-  "scope": "..."
+  "scope": "...",
+  "id_token": "..."
 }
 ```
+
+`id_token` is present when the grant includes `openid`. It is an
+RS256 JWT. Verify it with the keys from the JSON Web Key Set. The
+issuer (`iss`) is `https://events.californiajugger.org`, the audience
+is your client id (`aud`), and `sub` is the account's username. `nonce` is present when
+you sent one. A refreshed token includes a new ID token too, without
+the original nonce.
 
 Codes expire after 5 minutes and work once.
 
@@ -113,8 +138,11 @@ GET /api/oauth/userinfo
 Authorization: Bearer <access token>
 ```
 
-returns `{"id": "<username>", "name": "<display name>", "type": "player" | "team"}`.
-`id` is the stable identifier for the account.
+returns the account. `sub` and `id` are both the username, which is
+the stable identifier. `preferred_username` is the same value, `name`
+is the display name, and `type` is `"player"` or `"team"`. `picture`
+is included for the `profile` scope when the account has a photo. The
+ID token carries the same identity claims, without `id` and `type`.
 
 ## Tokens
 
@@ -170,8 +198,15 @@ only for the scopes you need:
 
 | Scope | Lets the app |
 |-------|--------------|
+| `openid` | Sign in with OpenID Connect and receive an ID token |
+| `profile` | See the account's profile photo |
 | `injuries` | Read all of the user's injury records, including private ones |
 | `footage` | See tournaments the user organizes, including unpublished ones, and upload match footage to them |
+
+Every user grant can see the account's name and username, with or
+without `profile`. A client may include `email` in the scope list.
+Arctos accepts that request and drops `email`; it does not return an
+address.
 
 ## Errors
 
@@ -196,10 +231,10 @@ grant, and call the API:
 ```sh
 TOKEN=$(curl -s -u "$CLIENT_ID:$CLIENT_SECRET" \
   -d grant_type=client_credentials \
-  https://<arctos host>/api/oauth/token | jq -r .access_token)
+  https://events.californiajugger.org/api/oauth/token | jq -r .access_token)
 
 curl -H "Authorization: Bearer $TOKEN" \
-  "https://<arctos host>/api/v1/tournaments?when=upcoming"
+  "https://events.californiajugger.org/api/v1/tournaments?when=upcoming"
 ```
 
 To act for a user (to read their private injuries, or upload footage to
@@ -209,7 +244,7 @@ browser) must do this, since they can't use client credentials.
 
 ### Conventions
 
-- **Base URL**: `https://<arctos host>/api/v1`.
+- **Base URL**: `https://events.californiajugger.org/api/v1`.
 - **Authentication**: every request needs `Authorization: Bearer <access token>`.
   Any valid token can read public data. The Arctos session cookie is not
   accepted.
@@ -552,6 +587,7 @@ Side competitions (duels, chains and breaks, and the like), oldest first.
       "track_losses": true,
       "track_chain_losses": false,
       "track_break_losses": false,
+      "track_matchups": false,
       "results_available": true,
       "registrant_count": 12,
       "created_at": "2026-04-20T10:00:00Z"
@@ -569,6 +605,9 @@ Side competitions (duels, chains and breaks, and the like), oldest first.
 - Whether losses count is `track_losses`, except in `CHAIN_BREAKING`, where
   chains follow `track_chain_losses` and everyone else follows
   `track_break_losses`.
+- `track_matchups` is available when loss tracking is on, including chain
+  and breaker loss tracking. Scoring then records two people at a time: a
+  win for one and a loss for the other. Either person may be unknown.
 - `results_available` is `false` when the organizers have hidden the
   results.
 
