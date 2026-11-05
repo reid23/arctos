@@ -7,9 +7,12 @@ with the resulting tokens.
 
 Arctos is an OAuth 2.0 authorization server and an OpenID Connect
 provider. If you have used "Sign in with Google" or GitHub OAuth apps
-before, this works the same way. OpenID Connect clients can discover
-the endpoints from
-`https://<arctos host>/.well-known/openid-configuration`.
+before, this works the same way. OpenID Connect clients discover the
+provider at
+`https://events.californiajugger.org/.well-known/openid-configuration`.
+That origin is the issuer: discovery and ID tokens name it. The site
+is also served at `https://arctos.usnja.org`, and ordinary API calls
+work on either host, but that host is not the issuer.
 
 ## Registering an app
 
@@ -17,22 +20,22 @@ Anyone with an Arctos account can register apps on the
 [Your apps](/developers/apps) page. You'll choose:
 
 - **Name** and optional **homepage**: shown to people on the consent
-  screen when they sign in.
+  screen when they sign in.  
 - **Redirect URIs**: where Arctos sends people back to after they sign in.
-  Each must be one of:
-  - an `https://` URL,
-  - an `http://127.0.0.1/...` (or `http://[::1]/...`, `http://localhost/...`)
-    loopback URL, for apps running on the user's own computer. Any port
-    matches, so your app can listen on whichever port is free, or
-  - a reverse-domain private-use scheme like `com.example.app:/callback`
-    for mobile apps.
-- **Type**:
-  - **Public** apps run on the user's device (desktop, mobile, and
-    single-page browser apps). They can't keep a secret, so they must use
-    PKCE.
-  - **Confidential** apps run on a server you control. They get a
-    **client secret**, which is shown once when you create the app (or
-    generate a new one). Arctos only stores a hash of it.
+  Each must be one of:  
+    - an `https://` URL,  
+    - an `http://127.0.0.1/...` (or `http://[::1]/...`, `http://localhost/...`)
+      loopback URL, for apps running on the user's own computer. Any port
+      matches, so your app can listen on whichever port is free, or  
+    - a reverse-domain private-use scheme like `com.example.app:/callback`
+      for mobile apps.  
+- **Type**:  
+    - **Public** apps run on the user's device (desktop, mobile, and
+      single-page browser apps). They can't keep a secret, so they must use
+      PKCE.  
+    - **Confidential** apps run on a server you control. They get a
+      **client secret**, which is shown once when you create the app (or
+      generate a new one). Arctos only stores a hash of it.  
 
 Every app gets a **client ID**, which is not secret.
 
@@ -43,16 +46,17 @@ Arctos implements the
 with [PKCE](https://www.rfc-editor.org/rfc/rfc7636). Native apps should
 follow [RFC 8252](https://www.rfc-editor.org/rfc/rfc8252) (open the
 system browser and listen on a loopback redirect URI). Most OAuth client
-libraries handle all of this for you; the endpoints are:
+libraries handle all of this for you. On 
+`https://events.californiajugger.org` the endpoints are:
 
-| Endpoint | URL |
-|----------|-----|
-| Discovery | `https://<arctos host>/.well-known/openid-configuration` |
-| Authorization | `https://<arctos host>/oauth/authorize` |
-| Token | `https://<arctos host>/api/oauth/token` |
-| JSON Web Key Set | `https://<arctos host>/api/oauth/jwks` |
-| Revocation | `https://<arctos host>/api/oauth/revoke` |
-| User info | `https://<arctos host>/api/oauth/userinfo` |
+| Endpoint | Path |
+|----------|------|
+| Discovery | `/.well-known/openid-configuration` |
+| Authorization | `/oauth/authorize` |
+| Token | `/api/oauth/token` |
+| JSON Web Key Set | `/api/oauth/jwks` |
+| Revocation | `/api/oauth/revoke` |
+| User info | `/api/oauth/userinfo` |
 
 ### 1. Send the user to Arctos
 
@@ -60,7 +64,7 @@ Generate a random `code_verifier` (43 to 128 characters from
 `A-Z a-z 0-9 - . _ ~`) and a random `state`, then open:
 
 ```
-https://<arctos host>/oauth/authorize
+https://events.californiajugger.org/oauth/authorize
     ?response_type=code
     &client_id=<client id>
     &redirect_uri=<one of your redirect URIs>
@@ -120,8 +124,8 @@ is:
 
 `id_token` is present when the grant includes `openid`. It is an
 RS256 JWT. Verify it with the keys from the JSON Web Key Set. The
-issuer is the Arctos origin (`iss`), the audience is your client id
-(`aud`), and `sub` is the account's username. `nonce` is present when
+issuer (`iss`) is `https://events.californiajugger.org`, the audience
+is your client id (`aud`), and `sub` is the account's username. `nonce` is present when
 you sent one. A refreshed token includes a new ID token too, without
 the original nonce.
 
@@ -227,10 +231,10 @@ grant, and call the API:
 ```sh
 TOKEN=$(curl -s -u "$CLIENT_ID:$CLIENT_SECRET" \
   -d grant_type=client_credentials \
-  https://<arctos host>/api/oauth/token | jq -r .access_token)
+  https://events.californiajugger.org/api/oauth/token | jq -r .access_token)
 
 curl -H "Authorization: Bearer $TOKEN" \
-  "https://<arctos host>/api/v1/tournaments?when=upcoming"
+  "https://events.californiajugger.org/api/v1/tournaments?when=upcoming"
 ```
 
 To act for a user (to read their private injuries, or upload footage to
@@ -240,7 +244,7 @@ browser) must do this, since they can't use client credentials.
 
 ### Conventions
 
-- **Base URL**: `https://<arctos host>/api/v1`.
+- **Base URL**: `https://events.californiajugger.org/api/v1`.
 - **Authentication**: every request needs `Authorization: Bearer <access token>`.
   Any valid token can read public data. The Arctos session cookie is not
   accepted.

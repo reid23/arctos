@@ -177,6 +177,31 @@ def test_markdown_linkifies_plain_urls():
     assert any(tag == "a" and attrs.get("href") == "https://example.org" for tag, attrs in nodes)
 
 
+def test_code_keeps_angle_brackets_and_stays_unlinked():
+    html = str(
+        render_markdown("Use `https://<arctos host>/oauth` and see https://example.org/docs. Also `a & b` and `&lt;`.")
+    )
+    assert "<code>https://&lt;arctos host&gt;/oauth</code>" in html
+    assert "<code>a &amp; b</code>" in html
+    assert "<code>&amp;lt;</code>" in html
+    assert "&amp;amp;" not in html
+    assert 'href="https://example.org/docs"' in html
+    fenced = str(render_markdown("```\nAuthorization: Bearer <access token>\n```"))
+    assert "&amp;lt;" not in fenced
+    assert "&lt;access token&gt;" in fenced
+    assert "<a " not in fenced
+
+
+def test_code_inside_a_table_stays_in_its_cell():
+    html = str(
+        render_markdown("| Endpoint | URL |\n|----------|-----|\n| Discovery | `https://<host>/.well-known` |\n")
+    )
+    table = html[html.index("<table>") : html.index("</table>")]
+    assert html.count("<table>") == 1
+    assert "<code>https://&lt;host&gt;/.well-known</code>" in table
+    assert "&amp;lt;" not in html
+
+
 @pytest.mark.parametrize("tag,attribute", [("img", "width"), ("img", "height"), ("td", "colspan"), ("th", "rowspan")])
 def test_oversized_numeric_attributes_are_removed_without_integer_conversion_errors(tag, attribute):
     markup = f'<{tag} {attribute}="{"9" * 5000}">content</{tag}>'
