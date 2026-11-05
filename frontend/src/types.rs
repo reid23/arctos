@@ -1170,7 +1170,6 @@ pub struct PlayerProfileData {
     pub profile_photo: Option<String>,
     #[serde(default)]
     pub banner_photo: Option<String>,
-    pub phone: Option<String>,
     pub location: Option<String>,
     pub bio: Option<String>,
     #[serde(default)]

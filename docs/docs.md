@@ -37,7 +37,6 @@ Overview
 
 For Players
 
- - [Phone Number](#phone-number)
  - [Logging Injuries](#logging-injuries)
 
 For Head Refs
@@ -386,11 +385,6 @@ Penalties are visible to:
   player's profile, start match page, and run match page
 
 ---
-
-## Phone Number
-
-A player can store a phone number in Edit profile. It is not shown on the public
-profile. Arctos does not currently send match or schedule notifications to it.
 
 ## Logging Injuries
 

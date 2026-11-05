@@ -222,14 +222,9 @@ pub fn PlayerProfile(id: Signal<String>, tab: String) -> Element {
             div { class: "profile-detail-content",
                     section { id: "player-section-info", class: "profile-section", hidden: active_tab != "info", aria_labelledby: "player-tab-info",
                         div { class: "profile-section-body",
-                            if let Some(phone) = d.player.phone.as_ref().filter(|value| !value.trim().is_empty()) {
-                                p { strong { "Phone: " } "{phone}" }
-                            }
                             if let Some(source) = d.player.bio.as_ref().filter(|value| !value.trim().is_empty()) {
                                 ProfileBio { source: source.clone() }
-                            }
-                            if d.player.phone.as_ref().is_none_or(|value| value.trim().is_empty())
-                                && d.player.bio.as_ref().is_none_or(|value| value.trim().is_empty()) {
+                            } else {
                                 p { class: "text-muted mb-0", "No profile details added yet." }
                             }
                         }

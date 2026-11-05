@@ -241,7 +241,7 @@ def test_all_supported_fields_preserve_values_and_optional_fields_can_be_cleared
     login_as(client, account)
     data = {"name": "Profile name", "location": "City"}
     data |= (
-        {"phone": "12345", "bio": "Player bio"}
+        {"bio": "Player bio"}
         if kind == "player"
         else {"email": "team@example.test", "website": "https://example.test", "about": "Team about"}
     )

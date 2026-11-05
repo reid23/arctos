@@ -23,7 +23,7 @@ from models import db
 
 MAX_PROFILE_EDIT_BYTES = 17 * 1024 * 1024
 _FIELDS = {
-    "player": ("name", "phone", "location", "bio", "pronouns"),
+    "player": ("name", "location", "bio", "pronouns"),
     "team": ("name", "location", "email", "website", "about"),
 }
 _IMAGES = ("profile_photo", "banner_photo")

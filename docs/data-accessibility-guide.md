@@ -7,8 +7,8 @@ accessible to others.
 
 ## Account and contact information
 
-Player email addresses and phone numbers are not displayed on public
-profiles. Passwords and OAuth credentials are not published.
+Player email addresses are not displayed on public profiles. Passwords
+and OAuth credentials are not published.
 
 A team's **public contact email** is visible to anyone on its profile.
 The team account and its managers can add, change or remove this address in Edit profile.
