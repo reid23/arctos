@@ -16,6 +16,43 @@ fn query_param(query: &str, name: &str) -> Option<String> {
     }
 }
 
+fn prompt_contains(query: &str, value: &str) -> bool {
+    query_param(query, "prompt")
+        .is_some_and(|prompt| prompt.split_whitespace().any(|part| part == value))
+}
+
+fn needs_fresh_login(query: &str) -> bool {
+    prompt_contains(query, "login") || query_param(query, "max_age").as_deref() == Some("0")
+}
+
+fn take_reauthentication(query: &str) -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let Some(storage) = web_sys::window().and_then(|window| window.session_storage().ok().flatten()) else {
+            return false;
+        };
+        let marked = storage.get_item("arctos.oauth.reauth").ok().flatten().as_deref() == Some(query);
+        if marked {
+            let _ = storage.remove_item("arctos.oauth.reauth");
+        }
+        return marked;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = query;
+        false
+    }
+}
+
+fn mark_reauthentication(query: &str) {
+    #[cfg(target_arch = "wasm32")]
+    if let Some(storage) = web_sys::window().and_then(|window| window.session_storage().ok().flatten()) {
+        let _ = storage.set_item("arctos.oauth.reauth", query);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = query;
+}
+
 /// Consent must not be clickjackable, so refuse to show it inside a frame.
 fn is_framed() -> bool {
     #[cfg(target_arch = "wasm32")]
@@ -64,18 +101,34 @@ pub fn OAuthAuthorize() -> Element {
     let mut deciding = use_signal(|| false);
 
     let account = crate::auth::use_account();
+    let mut reauth_checked = use_signal(|| false);
     let mut request = use_resource(move || async move {
         let state = account.read().clone();
+        let current_query = query();
         match state {
             Some(Err(api::AccountError::Unauthenticated)) => {
-                let next = format!("/oauth/authorize?{}", query());
-                navigate_away(&format!("/login?next={}", urlencoding::encode(&next)));
-                return None;
+                if !prompt_contains(&current_query, "none") {
+                    let next = format!("/oauth/authorize?{current_query}");
+                    navigate_away(&format!("/login?next={}", urlencoding::encode(&next)));
+                    return None;
+                }
             }
-            Some(Ok(_)) => {},
+            Some(Ok(_)) => {
+                if needs_fresh_login(&current_query) && !*reauth_checked.peek() {
+                    if take_reauthentication(&current_query) {
+                        reauth_checked.set(true);
+                    } else {
+                        mark_reauthentication(&current_query);
+                        let next = format!("/oauth/authorize?{current_query}");
+                        let _ = api::logout().await;
+                        navigate_away(&format!("/login?next={}", urlencoding::encode(&next)));
+                        return None;
+                    }
+                }
+            }
             _ => return None,
         }
-        Some(api::oauth_authorization_request(&query()).await)
+        Some(api::oauth_authorization_request(&current_query).await)
     });
 
     let mut decide = move |approve: bool| {
@@ -93,6 +146,14 @@ pub fn OAuthAuthorize() -> Element {
 
     let redirect_uri = query_param(&query(), "redirect_uri");
     let checking_request = *request.state().read() == UseResourceState::Pending;
+    let mut switch_account = move |_| {
+        deciding.set(true);
+        let next = format!("/oauth/authorize?{}", query());
+        spawn(async move {
+            let _ = api::logout().await;
+            navigate_away(&format!("/login?next={}", urlencoding::encode(&next)));
+        });
+    };
 
     let body = match &*request.read() {
         _ if is_framed() => rsx! {
@@ -116,47 +177,63 @@ pub fn OAuthAuthorize() -> Element {
             rsx! { p { "Returning to the app…" } }
         }
         Some(Some(Ok(OAuthAuthorizationRequest::Consent(consent)))) => rsx! {
-            p {
-                strong { "{consent.client.name}" }
-                " wants to sign in with your Arctos account "
-                strong { "{consent.user.name}" }
-                " (@{consent.user.id})."
-            }
-            p { class: "mb-1", "It will be able to:" }
-            ul {
-                li { "See your name and username" }
-                li { "Read public Arctos data" }
-                for scope in consent.scopes.iter() {
-                    li { key: "{scope.name}", "{scope.description}" }
+            if consent.already_allowed {
+                p { class: "mb-0",
+                    "Sign in to "
+                    strong { "{consent.client.name}" }
+                    " as "
+                    strong { "{consent.user.name}" }
+                    " (@{consent.user.id})?"
                 }
-            }
-            p { class: "text-muted small mb-1",
-                "Registered by @{consent.client.owner_id}. "
-                if let Some(homepage) = consent.client.homepage_url.as_ref() {
-                    a { href: "{homepage}", target: "_blank", rel: "noopener noreferrer", "{homepage}" }
+            } else {
+                p {
+                    strong { "{consent.client.name}" }
+                    " wants to sign in with your Arctos account "
+                    strong { "{consent.user.name}" }
+                    " (@{consent.user.id})."
                 }
-            }
-            if let Some(uri) = redirect_uri.as_ref() {
-                p { class: "text-muted small", "You'll be sent back to " code { "{uri}" } "." }
-            }
-            p { class: "text-muted small",
-                "The app never sees your password. You can disconnect it at any time from your profile."
+                p { class: "mb-1", "It will be able to:" }
+                ul {
+                    li { "See your name and username" }
+                    li { "Read public Arctos data" }
+                    for scope in consent.scopes.iter().filter(|scope| scope.name != "openid") {
+                        li { key: "{scope.name}", "{scope.description}" }
+                    }
+                }
+                p { class: "text-muted small mb-1",
+                    "Registered by @{consent.client.owner_id}. "
+                    if let Some(homepage) = consent.client.homepage_url.as_ref() {
+                        a { href: "{homepage}", target: "_blank", rel: "noopener noreferrer", "{homepage}" }
+                    }
+                }
+                if let Some(uri) = redirect_uri.as_ref() {
+                    p { class: "text-muted small", "You'll be sent back to " code { "{uri}" } "." }
+                }
+                p { class: "text-muted small",
+                    "The app never sees your password. You can disconnect it at any time from your profile."
+                }
             }
             if let Some(message) = error() {
                 div { class: "alert alert-danger", "{message}" }
             }
-            div { class: "d-flex gap-2",
+            div { class: "d-flex flex-wrap gap-2 mt-3",
                 button {
                     class: "btn btn-primary",
                     disabled: deciding(),
                     onclick: move |_| decide(true),
-                    "Allow"
+                    if consent.already_allowed { "Sign in" } else { "Allow" }
                 }
                 button {
                     class: "btn btn-outline-secondary",
                     disabled: deciding(),
                     onclick: move |_| decide(false),
                     "Cancel"
+                }
+                button {
+                    class: "btn btn-link",
+                    disabled: deciding(),
+                    onclick: move |_| switch_account(()),
+                    "Use a different account"
                 }
             }
         },
