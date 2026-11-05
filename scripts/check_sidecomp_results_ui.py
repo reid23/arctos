@@ -163,7 +163,15 @@ class StandingsFixture:
             row["rank"] = rank
             if not track_losses:
                 row.update(losses=None, win_percentage=None)
+        ranked_count = len(rows)
         personal_row = next((deepcopy(row) for row in rows if row["player_id"] == self.viewer_player_id), None)
+        if personal_row is not None:
+            same_weapon = [row for row in rows if row["weapon"] == personal_row["weapon"]]
+            personal_row["ranked_count"] = ranked_count
+            personal_row["weapon_ranked_count"] = len(same_weapon)
+            personal_row["weapon_rank"] = next(
+                index for index, row in enumerate(same_weapon, start=1) if row["player_id"] == personal_row["player_id"]
+            )
         if weapon is not None:
             rows = [row for row in rows if row["weapon"] == weapon] if weapon in available_weapons else []
             for rank, row in enumerate(rows, start=1):
@@ -505,8 +513,14 @@ async def verify_personal_rank(check: SmokeCheck, page: Page, fixture: Standings
     fixture.viewer_player_id = OWN_ID
     await page.goto(f"{check.base_url}/demo-open/sidecomps/{fixture.comp_id}/results")
     personal = page.get_by_role("region", name="Your result", exact=True)
-    await expect(personal.get_by_text("Breaks · Florentine", exact=True)).to_be_visible()
-    await expect(personal.get_by_text("Rank: 6", exact=True)).to_be_visible()
+    await expect(personal.get_by_text("Rank: 6/7 (Florentine: 3/4)", exact=True)).to_be_visible()
+    rank_by = personal.get_by_role("combobox", name="Rank by", exact=True)
+    await expect(rank_by).to_have_value("win_percentage")
+    await rank_by.select_option("wins")
+    await expect(personal.get_by_text("Rank: 7/7 (Florentine: 4/4)", exact=True)).to_be_visible()
+    await expect(personal.get_by_text("Wins: 3", exact=True)).to_be_visible()
+    await rank_by.select_option("win_percentage")
+    await expect(personal.get_by_text("Rank: 6/7 (Florentine: 3/4)", exact=True)).to_be_visible()
     await expect(personal.get_by_text("Wins: 3", exact=True)).to_be_visible()
     await expect(personal.get_by_text("Losses: 0", exact=True)).to_be_visible()
     # The personal result remains available even when the other scoring group is selected.
@@ -518,10 +532,10 @@ async def verify_personal_rank(check: SmokeCheck, page: Page, fixture: Standings
     await assert_players(breaks, [FLORENTINE_BY_WINS[1]])
     await breaks.get_by_role("button", name="Wins", exact=True).click()
     await assert_players(breaks, FLORENTINE_BY_WINS[:1])
-    await expect(personal.get_by_text("Rank: 6", exact=True)).to_be_visible()
+    await expect(personal.get_by_text("Rank: 6/7 (Florentine: 3/4)", exact=True)).to_be_visible()
     await weapon.select_option("STAFF")
     await assert_players(breaks, STAFF_NAMES[:1])
-    await expect(personal.get_by_text("Rank: 6", exact=True)).to_be_visible()
+    await expect(personal.get_by_text("Rank: 6/7 (Florentine: 3/4)", exact=True)).to_be_visible()
     fixture.public_limit = None
     await weapon.select_option("FLORENTINE")
     await assert_players(breaks, FLORENTINE_BY_WINS, own_name=OWN_NAME)
@@ -587,7 +601,7 @@ async def verify_access_revocation(check: SmokeCheck, page: Page, fixture: Stand
     fixture.organizer = False
     for status, filtered in ((403, False), (404, True)):
         await page.goto(f"{check.base_url}/demo-open/sidecomps/{fixture.comp_id}/results")
-        await expect(page.get_by_text("Rank: 6", exact=True)).to_be_visible()
+        await expect(page.get_by_text("Rank: 6/7 (Florentine: 3/4)", exact=True)).to_be_visible()
         breaks = await show_breaks(page)
         if filtered:
             await breaks.get_by_role("combobox", name="Weapon", exact=True).select_option("STAFF")
@@ -600,7 +614,7 @@ async def verify_access_revocation(check: SmokeCheck, page: Page, fixture: Stand
         fixture.denied_status = None
         await expect(page.get_by_role("alert")).to_have_count(0)
         await expect(page.locator(".sidecomp-standings-table")).to_have_count(1)
-        await expect(page.get_by_text("Rank: 6", exact=True)).to_be_visible()
+        await expect(page.get_by_text("Rank: 6/7 (Florentine: 3/4)", exact=True)).to_be_visible()
     check.network_errors = [
         error
         for error in check.network_errors
@@ -625,8 +639,7 @@ async def verify_bear(check: SmokeCheck, page: Page, fixture: StandingsFixture) 
     fixture.viewer_player_id = OWN_ID
     await page.reload()
     personal = page.get_by_role("region", name="Your result", exact=True)
-    await expect(personal.get_by_text("Overall · Florentine", exact=True)).to_be_visible()
-    await expect(personal.get_by_text("Rank: 11", exact=True)).to_be_visible()
+    await expect(personal.get_by_text("Rank: 11/11 (Florentine: 2/2)", exact=True)).to_be_visible()
     await expect(personal.get_by_text("Wins: 3", exact=True)).to_be_visible()
     await expect(personal.get_by_text("Losses: 2", exact=True)).to_be_visible()
     await expect(personal.get_by_text(re.compile(r"^Win percentage: 60(?:\.0)?%$"))).to_be_visible()
@@ -635,7 +648,7 @@ async def verify_bear(check: SmokeCheck, page: Page, fixture: StandingsFixture) 
     await capture_state(check, page, "sidecomp-bear-personal-weapon")
     await weapon.select_option("STAFF")
     await assert_players(section, [BEAR_CLASS_NAMES[2]])
-    await expect(personal.get_by_text("Rank: 11", exact=True)).to_be_visible()
+    await expect(personal.get_by_text("Rank: 11/11 (Florentine: 2/2)", exact=True)).to_be_visible()
     fixture.viewer_player_id = BEAR_CLASS_NAMES[4].lower().replace(" ", "-")
     await page.reload()
     await weapon.select_option("FLORENTINE")
@@ -653,7 +666,7 @@ async def verify_account_change(check: SmokeCheck, page: Page, fixture: Standing
     fixture.organizer = True
     await page.goto(f"{check.base_url}/demo-open/sidecomps/{fixture.comp_id}/results")
     breaks = await show_breaks(page)
-    await expect(page.get_by_text("Rank: 6", exact=True)).to_be_visible()
+    await expect(page.get_by_text("Rank: 6/7 (Florentine: 3/4)", exact=True)).to_be_visible()
     await expect(breaks.locator("tbody tr")).to_have_count(7)
     fixture.delay_next("FLORENTINE")
     await breaks.get_by_role("combobox", name="Weapon", exact=True).select_option("FLORENTINE")

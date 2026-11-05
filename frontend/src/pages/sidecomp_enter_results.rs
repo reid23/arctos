@@ -128,6 +128,394 @@ fn queue_roster_refresh(
     });
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum MatchSide {
+    Left,
+    Right,
+}
+
+impl MatchSide {
+    fn other(self) -> Self {
+        match self {
+            Self::Left => Self::Right,
+            Self::Right => Self::Left,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Left => "Left",
+            Self::Right => "Right",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct MatchupParty {
+    player_id: String,
+    entry_number: i32,
+    display_name: String,
+    profile_photo: Option<String>,
+    team_profile_photo: Option<String>,
+    team_known: bool,
+    weapon: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct MatchupEvent {
+    winner: Option<MatchupParty>,
+    loser: Option<MatchupParty>,
+    result_uuids: Vec<String>,
+    flagged: bool,
+}
+
+fn party_from_player(player: &SideCompEnterRosterPlayer) -> MatchupParty {
+    MatchupParty {
+        player_id: player.player_id.clone(),
+        entry_number: player.entry_number,
+        display_name: player.display_name.clone(),
+        profile_photo: player.profile_photo.clone(),
+        team_profile_photo: player.team_profile_photo.clone(),
+        team_known: player.team_id.is_some() || player.team_shortname.is_some() || player.team_profile_photo.is_some(),
+        weapon: player.weapon.clone().filter(|weapon| !weapon.is_empty()),
+    }
+}
+
+/// Wins since this person's latest loss in the results entered on this page.
+fn consecutive_wins(history: &[MatchupEvent], player_id: &str) -> u32 {
+    let mut wins = 0;
+    for event in history {
+        if event.winner.as_ref().is_some_and(|party| party.player_id == player_id) {
+            wins += 1;
+        } else if event.loser.as_ref().is_some_and(|party| party.player_id == player_id) {
+            break;
+        }
+    }
+    wins
+}
+
+fn party_class(side: MatchSide, selected: bool, known: bool) -> String {
+    let side_name = match side {
+        MatchSide::Left => "left",
+        MatchSide::Right => "right",
+    };
+    let selected_class = if selected { " selected" } else { "" };
+    let known_class = if known { "" } else { " unknown" };
+    format!("sc-party {side_name}{selected_class}{known_class}")
+}
+
+fn place_party(
+    side: MatchSide,
+    player: Option<SideCompEnterRosterPlayer>,
+    mut left_party: Signal<Option<SideCompEnterRosterPlayer>>,
+    mut right_party: Signal<Option<SideCompEnterRosterPlayer>>,
+    mut selected_side: Signal<MatchSide>,
+    mut error: Signal<Option<String>>,
+) -> bool {
+    let other = match side {
+        MatchSide::Left => right_party(),
+        MatchSide::Right => left_party(),
+    };
+    if let (Some(next), Some(existing)) = (&player, other.as_ref()) {
+        if next.player_id == existing.player_id {
+            error.set(Some("Pick two different people".into()));
+            return false;
+        }
+    }
+    error.set(None);
+    match side {
+        MatchSide::Left => left_party.set(player.clone()),
+        MatchSide::Right => right_party.set(player.clone()),
+    }
+    if player.is_some() {
+        let other_empty = match side {
+            MatchSide::Left => right_party().is_none(),
+            MatchSide::Right => left_party().is_none(),
+        };
+        if other_empty {
+            selected_side.set(side.other());
+        }
+    }
+    true
+}
+
+fn log_side_win(
+    comp_id: i32,
+    winner: Option<SideCompEnterRosterPlayer>,
+    loser: Option<SideCompEnterRosterPlayer>,
+    mut matchup_history: Signal<Vec<MatchupEvent>>,
+    mut error: Signal<Option<String>>,
+    mut matchup_busy: Signal<bool>,
+) {
+    if winner.is_none() && loser.is_none() {
+        error.set(Some("Pick at least one person".into()));
+        return;
+    }
+    if matchup_busy() {
+        return;
+    }
+    matchup_busy.set(true);
+    error.set(None);
+    let winner_party = winner.as_ref().map(party_from_player);
+    let loser_party = loser.as_ref().map(party_from_player);
+    let winner_registration_id = winner.as_ref().and_then(|player| player.registration_id);
+    let winner_player_id = winner.as_ref().map(|player| player.player_id.clone());
+    let loser_registration_id = loser.as_ref().and_then(|player| player.registration_id);
+    let loser_player_id = loser.as_ref().map(|player| player.player_id.clone());
+    spawn(async move {
+        match api::sidecomp_log_matchup(
+            comp_id,
+            winner_registration_id,
+            winner_player_id.as_deref(),
+            loser_registration_id,
+            loser_player_id.as_deref(),
+        )
+        .await
+        {
+            Ok(results) if !results.is_empty() => {
+                let flagged = results.iter().any(|result| result.flagged);
+                matchup_history.write().insert(
+                    0,
+                    MatchupEvent {
+                        winner: winner_party,
+                        loser: loser_party,
+                        result_uuids: results.into_iter().map(|result| result.uuid).collect(),
+                        flagged,
+                    },
+                );
+            }
+            Ok(_) => error.set(Some("Could not record that win".into())),
+            Err(message) => error.set(Some(message)),
+        }
+        matchup_busy.set(false);
+    });
+}
+
+fn team_known(player: &SideCompEnterRosterPlayer) -> bool {
+    player.team_id.is_some() || player.team_shortname.is_some() || player.team_profile_photo.is_some()
+}
+
+#[component]
+fn MatchupPlayerLine(
+    name: String,
+    entry_number: i32,
+    photo: Option<String>,
+    team_photo: Option<String>,
+    team_known: bool,
+    weapon: String,
+    #[props(default)] consecutive_wins: u32,
+    #[props(default)] in_search: bool,
+) -> Element {
+    let line_class = if in_search { "sc-player-line search" } else { "sc-player-line selected" };
+    let selected_name = name.clone();
+    rsx! {
+        div { class: "{line_class}",
+            div { class: "sc-player-main",
+                div { class: "sc-avatar-stack",
+                    span { class: "sc-avatar-player",
+                        AvatarCircle { photo, size: "2.15rem".to_string(), is_team: false }
+                    }
+                    if team_known {
+                        span { class: "sc-avatar-subscript",
+                            AvatarCircle { photo: team_photo, size: "0.95rem".to_string(), is_team: true }
+                        }
+                    }
+                }
+                if !weapon.is_empty() {
+                    PompfenIcon { weapon, size: "2.2em".to_string() }
+                }
+                if in_search {
+                    div { class: "sc-player-name",
+                        span { class: "sc-player-number", "#{entry_number}" }
+                        span { class: "sc-player-label", "{name}" }
+                    }
+                }
+            }
+            if !in_search {
+                div { class: "sc-player-name",
+                    span { class: "sc-player-label", "{selected_name}" }
+                    span { class: "sc-player-number", "#{entry_number}" }
+                }
+                div { class: "sc-consecutive-wins", "consecutive wins: {consecutive_wins}" }
+            }
+        }
+    }
+}
+
+#[component]
+fn MatchupBoard(
+    comp_id: i32,
+    left_party: Signal<Option<SideCompEnterRosterPlayer>>,
+    right_party: Signal<Option<SideCompEnterRosterPlayer>>,
+    selected_side: Signal<MatchSide>,
+    matchup_history: Signal<Vec<MatchupEvent>>,
+    error: Signal<Option<String>>,
+    matchup_busy: Signal<bool>,
+) -> Element {
+    let left = left_party();
+    let right = right_party();
+    let selected = selected_side();
+    let busy = matchup_busy();
+
+    rsx! {
+        div { class: "sc-matchup",
+            for (side, player) in [(MatchSide::Left, left.clone()), (MatchSide::Right, right.clone())] {
+                {
+                    let known = player.is_some();
+                    let card_class = party_class(side, selected == side, known);
+                    let side_key = side.label().to_string();
+                    let clear_label = format!("Clear {}", side.label());
+                    let identity = player.as_ref().map(|person| {
+                        (
+                            person.display_name.clone(),
+                            person.entry_number,
+                            person.profile_photo.clone(),
+                            person.team_profile_photo.clone(),
+                            team_known(person),
+                            person.weapon.clone().unwrap_or_default(),
+                            consecutive_wins(&matchup_history(), &person.player_id),
+                        )
+                    });
+                    rsx! {
+                        div {
+                            class: "{card_class}",
+                            key: "{side_key}",
+                            onclick: move |_| selected_side.set(side),
+                            if known {
+                                button {
+                                    class: "sc-party-clear",
+                                    r#type: "button",
+                                    aria_label: "{clear_label}",
+                                    onclick: move |event: Event<MouseData>| {
+                                        event.stop_propagation();
+                                        place_party(side, None, left_party, right_party, selected_side, error);
+                                        selected_side.set(side);
+                                    },
+                                    "×"
+                                }
+                            }
+                            if let Some((name, entry_number, photo, team_photo, known_team, weapon, wins)) = identity {
+                                MatchupPlayerLine {
+                                    name,
+                                    entry_number,
+                                    photo,
+                                    team_photo,
+                                    team_known: known_team,
+                                    weapon,
+                                    consecutive_wins: wins,
+                                }
+                            } else {
+                                div { class: "sc-party-name", "Unknown" }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        div { class: "sc-wins",
+            for (side, player, opponent) in [
+                (MatchSide::Left, left.clone(), right.clone()),
+                (MatchSide::Right, right.clone(), left.clone()),
+            ] {
+                {
+                    let side_class = match side {
+                        MatchSide::Left => "sc-win-btn left",
+                        MatchSide::Right => "sc-win-btn right",
+                    };
+                    let winner_for_click = player.clone();
+                    let side_key = side.label().to_string();
+                    rsx! {
+                        button {
+                            class: "{side_class}",
+                            key: "{side_key}",
+                            r#type: "button",
+                            disabled: busy,
+                            onclick: move |_| {
+                                log_side_win(
+                                    comp_id,
+                                    winner_for_click.clone(),
+                                    opponent.clone(),
+                                    matchup_history,
+                                    error,
+                                    matchup_busy,
+                                );
+                            },
+                            "Log win"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn MatchupPicker(
+    registrants: Vec<SideCompEnterRosterPlayer>,
+    query: Signal<String>,
+    selected_side: Signal<MatchSide>,
+    left_party: Signal<Option<SideCompEnterRosterPlayer>>,
+    right_party: Signal<Option<SideCompEnterRosterPlayer>>,
+    error: Signal<Option<String>>,
+    matchup_busy: Signal<bool>,
+) -> Element {
+    let entered = query();
+    let side = selected_side();
+    let matches: Vec<SideCompEnterRosterPlayer> = if entered.is_empty() {
+        Vec::new()
+    } else {
+        registrants
+            .into_iter()
+            .filter(|player| player.entry_number.to_string().contains(&entered))
+            .collect()
+    };
+    rsx! {
+        if entered.is_empty() {
+            p { class: "sc-matchup-hint", "Type a number" }
+        } else if matches.is_empty() {
+            p { class: "text-muted text-center mt-3", "No matching players" }
+        }
+        for player in matches {
+            {
+                let chosen = player.clone();
+                let weapon = player.weapon.clone().unwrap_or_default();
+                let photo = player.profile_photo.clone();
+                let team_photo = player.team_profile_photo.clone();
+                let known_team = team_known(&player);
+                rsx! {
+                    button {
+                        class: "sc-pick-row",
+                        key: "{player.player_id}",
+                        r#type: "button",
+                        disabled: matchup_busy(),
+                        onclick: move |_| {
+                            if place_party(
+                                side,
+                                Some(chosen.clone()),
+                                left_party,
+                                right_party,
+                                selected_side,
+                                error,
+                            ) {
+                                query.set(String::new());
+                            }
+                        },
+                        MatchupPlayerLine {
+                            name: player.display_name.clone(),
+                            entry_number: player.entry_number,
+                            photo,
+                            team_photo,
+                            team_known: known_team,
+                            weapon,
+                            in_search: true,
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn photo_url(path: &Option<String>) -> Option<String> {
     path.as_ref()
         .map(|p| format!("{}/static/{}", api::base_url(), p))
@@ -196,13 +584,18 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
         });
     }
     let mut history = use_signal(Vec::<HistoryEvent>::new);
+    let mut matchup_history = use_signal(Vec::<MatchupEvent>::new);
+    let mut left_party = use_signal(|| None::<SideCompEnterRosterPlayer>);
+    let mut right_party = use_signal(|| None::<SideCompEnterRosterPlayer>);
+    let mut selected_side = use_signal(|| MatchSide::Left);
     let mut error = use_signal(|| None::<String>);
     let mut busy_player = use_signal(|| None::<String>);
+    let mut matchup_busy = use_signal(|| false);
     let mut undo_busy = use_signal(|| false);
 
     // Keep the newest history entry visible on the right; older entries overflow left.
     use_effect(move || {
-        let _len = history().len();
+        let _len = history().len() + matchup_history().len();
         #[cfg(target_arch = "wasm32")]
         spawn(async move {
             gloo_timers::future::TimeoutFuture::new(0).await;
@@ -224,9 +617,11 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
                 box-sizing: border-box;
                 display: flex;
                 flex-direction: column;
+                width: 100%;
+                min-width: 0;
+                max-width: min(560px, 100%);
                 height: 100vh;
                 height: 100dvh;
-                max-width: 560px;
                 margin: 0 auto;
                 padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
                 background: var(--ui-bg);
@@ -234,11 +629,21 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
                 overflow: hidden;
             }}
             .sc-enter-top {{
-                padding: 0.75rem 1rem 0.25rem;
+                min-width: 0;
+                padding: 0.5rem 0.5rem 0.15rem;
                 flex-shrink: 0;
+                overflow: hidden;
+            }}
+            .sc-enter-top > .btn,
+            .sc-enter-top > a {{
+                flex: 0 0 auto;
             }}
             .sc-search-display {{
-                font-size: 1.6rem;
+                min-width: 0;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                font-size: 1.35rem;
                 font-weight: 600;
                 letter-spacing: 0.04em;
                 min-height: 2.2rem;
@@ -250,8 +655,10 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
             }}
             .sc-results {{
                 flex: 1 1 auto;
+                min-width: 0;
                 overflow-y: auto;
-                padding: 0.5rem 0.75rem;
+                overflow-x: hidden;
+                padding: 0.4rem 0.5rem;
                 min-height: 0;
             }}
             .sc-player-row {{
@@ -330,6 +737,8 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
             }}
             .sc-history {{
                 flex-shrink: 0;
+                min-width: 0;
+                max-width: 100%;
                 border-top: 1px solid var(--ui-border);
                 border-bottom: 1px solid var(--ui-border);
                 background: var(--ui-surface);
@@ -375,13 +784,28 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
             }}
             .sc-hist-line {{
                 width: 100%;
+                min-width: 0;
                 display: flex;
                 align-items: center;
                 justify-content: center;
                 gap: 0.2rem;
                 white-space: nowrap;
                 overflow: hidden;
+            }}
+            .sc-hist-text {{
+                min-width: 0;
+                overflow: hidden;
                 text-overflow: ellipsis;
+            }}
+            .sc-hist-person {{
+                width: 100%;
+                min-width: 0;
+            }}
+            .sc-hist-marks {{
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 0.2rem;
             }}
             .sc-hist-points {{
                 text-align: center;
@@ -392,10 +816,12 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
             .sc-hist-points.loss {{ color: var(--bs-danger-text-emphasis); }}
             .sc-numpad {{
                 flex-shrink: 0;
+                min-width: 0;
+                width: 100%;
                 display: grid;
-                grid-template-columns: repeat(3, 1fr);
+                grid-template-columns: repeat(3, minmax(0, 1fr));
                 gap: 0.35rem;
-                padding: 0.55rem;
+                padding: 0.45rem;
                 background: var(--ui-surface-muted);
             }}
             .sc-num-btn {{
@@ -409,13 +835,191 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
                 box-shadow: 0 1px 1px rgba(0,0,0,0.05);
             }}
             .sc-num-btn:active {{ background: var(--ui-surface-hover); }}
+            .sc-matchup {{
+                flex-shrink: 0;
+                min-width: 0;
+                width: 100%;
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+                gap: 0.4rem;
+                padding: 0.15rem 0.5rem 0;
+            }}
+            .sc-party {{
+                position: relative;
+                min-width: 0;
+                min-height: 0;
+                box-sizing: border-box;
+                display: flex;
+                flex-direction: column;
+                align-items: stretch;
+                justify-content: center;
+                border-radius: 0.9rem;
+                border: 3px solid var(--ui-border);
+                background: var(--ui-surface);
+                padding: 0.3rem 0.45rem 0.32rem;
+                text-align: left;
+                overflow: hidden;
+            }}
+            .sc-party.unknown {{
+                min-height: 2.8rem;
+                align-items: center;
+                padding: 0.35rem;
+                text-align: center;
+            }}
+            .sc-party.left.selected {{ border-color: #1565c0; }}
+            .sc-party.right.selected {{ border-color: #ef6c00; }}
+            .sc-party-name {{
+                width: 100%;
+                min-width: 0;
+                font-size: 1rem;
+                font-weight: 800;
+                line-height: 1.15;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }}
+            .sc-party.unknown .sc-party-name {{
+                color: var(--ui-muted);
+                font-weight: 600;
+            }}
+            .sc-player-line {{
+                min-width: 0;
+                width: 100%;
+                display: flex;
+                flex-direction: column;
+                gap: 0.05rem;
+            }}
+            .sc-player-main {{
+                min-width: 0;
+                display: flex;
+                align-items: center;
+                gap: 0.4rem;
+            }}
+            .sc-player-line.selected .sc-player-main {{
+                padding-right: 2rem;
+            }}
+            .sc-avatar-stack {{
+                position: relative;
+                width: 2.45rem;
+                height: 2.3rem;
+                flex: 0 0 auto;
+            }}
+            .sc-avatar-player {{
+                position: absolute;
+                top: 0;
+                left: 0;
+                line-height: 0;
+            }}
+            .sc-avatar-subscript {{
+                position: absolute;
+                right: 0;
+                bottom: 0;
+                line-height: 0;
+                border-radius: 50%;
+                box-shadow: 0 0 0 2px var(--ui-surface);
+            }}
+            .sc-player-name {{
+                min-width: 0;
+                flex: 1;
+                display: flex;
+                align-items: baseline;
+                gap: 0.35rem;
+                font-size: 0.95rem;
+                font-weight: 800;
+                line-height: 1.15;
+            }}
+            .sc-player-line.selected .sc-player-name {{
+                width: 100%;
+                flex: none;
+            }}
+            .sc-player-label {{
+                min-width: 0;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }}
+            .sc-player-number {{
+                flex: 0 0 auto;
+            }}
+            .sc-consecutive-wins {{
+                color: var(--ui-muted);
+                font-size: 0.78rem;
+                line-height: 1.15;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }}
+            .sc-party-clear {{
+                position: absolute;
+                top: 0.2rem;
+                right: 0.2rem;
+                width: 2.25rem;
+                height: 2.25rem;
+                border: none;
+                border-radius: 0.55rem;
+                background: var(--ui-surface-muted);
+                color: var(--ui-text);
+                font-size: 1.15rem;
+                line-height: 1;
+            }}
+            .sc-wins {{
+                flex-shrink: 0;
+                min-width: 0;
+                width: 100%;
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+                gap: 0.4rem;
+                padding: 0.4rem 0.5rem 0.3rem;
+            }}
+            .sc-win-btn {{
+                min-width: 0;
+                min-height: 3.6rem;
+                box-sizing: border-box;
+                border: none;
+                border-radius: 0.9rem;
+                color: #fff;
+                background: #2e7d32;
+                font-size: 1rem;
+                font-weight: 800;
+                line-height: 1.15;
+                padding: 0.4rem 0.4rem;
+                white-space: normal;
+                overflow-wrap: anywhere;
+            }}
+            .sc-win-btn.left {{ box-shadow: inset 0 7px 0 #1565c0; }}
+            .sc-win-btn.right {{ box-shadow: inset 0 7px 0 #ef6c00; }}
+            .sc-win-btn:disabled {{ opacity: 0.38; }}
+            .sc-matchup-hint {{
+                margin: 0.35rem 0 0;
+                text-align: center;
+                color: var(--ui-muted);
+                font-size: 0.95rem;
+            }}
+            .sc-pick-row {{
+                width: 100%;
+                max-width: 100%;
+                min-width: 0;
+                box-sizing: border-box;
+                display: flex;
+                align-items: center;
+                text-align: left;
+                border: none;
+                border-radius: 0.7rem;
+                background: var(--ui-surface);
+                color: inherit;
+                padding: 0.22rem 0.45rem;
+                margin-bottom: 0.28rem;
+                overflow: hidden;
+            }}
+            .sc-hist-card.matchup {{ width: 7.8rem; }}
             /* A short landscape viewport must not clip the nonshrinking keypad. */
             @media (max-height: 500px) {{
                 .sc-enter {{
                     height: auto;
                     min-height: 100vh;
                     min-height: 100dvh;
-                    overflow: visible;
+                    overflow-x: hidden;
+                    overflow-y: visible;
                 }}
                 .sc-results {{
                     flex: 0 1 auto;
@@ -433,30 +1037,61 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
                     class: "btn btn-sm btn-outline-secondary",
                     "Back"
                 }
-                div {
-                    class: if query().is_empty() { "sc-search-display is-placeholder flex-grow-1 text-center" } else { "sc-search-display flex-grow-1 text-center" },
-                    if query().is_empty() { "type to search" } else { "{query}" }
-                }
-                button {
-                    class: "btn btn-sm btn-outline-secondary",
-                    disabled: history().is_empty() || undo_busy(),
-                    onclick: move |_| {
-                        let Some(last) = history().first().cloned() else {
-                            return;
-                        };
-                        undo_busy.set(true);
-                        error.set(None);
-                        spawn(async move {
-                            match api::sidecomp_delete_result(&last.result.uuid).await {
-                                Ok(_) => {
-                                    history.write().retain(|ev| ev.result.uuid != last.result.uuid);
+                {
+                    let matchup_mode = roster().as_ref().is_some_and(|data| data.track_matchups);
+                    let placeholder = if matchup_mode { "number" } else { "type to search" };
+                    let undo_disabled = undo_busy() || if matchup_mode {
+                        matchup_history().is_empty()
+                    } else {
+                        history().is_empty()
+                    };
+                    rsx! {
+                        div {
+                            class: if query().is_empty() { "sc-search-display is-placeholder flex-grow-1 text-center" } else { "sc-search-display flex-grow-1 text-center" },
+                            if query().is_empty() { "{placeholder}" } else { "{query}" }
+                        }
+                        button {
+                            class: "btn btn-sm btn-outline-secondary",
+                            disabled: undo_disabled,
+                            onclick: move |_| {
+                                if roster().as_ref().is_some_and(|data| data.track_matchups) {
+                                    let Some(last) = matchup_history().first().cloned() else {
+                                        return;
+                                    };
+                                    let Some(uuid) = last.result_uuids.first().cloned() else {
+                                        return;
+                                    };
+                                    undo_busy.set(true);
+                                    error.set(None);
+                                    spawn(async move {
+                                        match api::sidecomp_delete_result(&uuid).await {
+                                            Ok(_) => {
+                                                matchup_history.write().retain(|event| event.result_uuids.first() != Some(&uuid));
+                                            }
+                                            Err(e) => error.set(Some(e)),
+                                        }
+                                        undo_busy.set(false);
+                                    });
+                                    return;
                                 }
-                                Err(e) => error.set(Some(e)),
-                            }
-                            undo_busy.set(false);
-                        });
-                    },
-                    "Undo"
+                                let Some(last) = history().first().cloned() else {
+                                    return;
+                                };
+                                undo_busy.set(true);
+                                error.set(None);
+                                spawn(async move {
+                                    match api::sidecomp_delete_result(&last.result.uuid).await {
+                                        Ok(_) => {
+                                            history.write().retain(|ev| ev.result.uuid != last.result.uuid);
+                                        }
+                                        Err(e) => error.set(Some(e)),
+                                    }
+                                    undo_busy.set(false);
+                                });
+                            },
+                            "Undo"
+                        }
+                    }
                 }
             }
 
@@ -475,8 +1110,33 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
                 _ => rsx! {}
             }
 
+            if roster().as_ref().is_some_and(|data| data.active && data.track_matchups) {
+                MatchupBoard {
+                    comp_id,
+                    left_party,
+                    right_party,
+                    selected_side,
+                    matchup_history,
+                    error,
+                    matchup_busy,
+                }
+            }
+
             div { class: "sc-results",
                 match roster() {
+                    Some(data) if data.active && data.track_matchups => {
+                        rsx! {
+                            MatchupPicker {
+                                registrants: data.registrants.clone(),
+                                query,
+                                selected_side,
+                                left_party,
+                                right_party,
+                                error,
+                                matchup_busy,
+                            }
+                        }
+                    }
                     Some(data) if data.active => {
                         let q = query();
                         let matches: Vec<SideCompEnterRosterPlayer> = if q.is_empty() {
@@ -617,6 +1277,112 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
             }
 
             {
+                if roster().as_ref().is_some_and(|data| data.track_matchups) {
+                    let events: Vec<MatchupEvent> = matchup_history().into_iter().rev().collect();
+                    rsx! {
+                        div { class: "sc-history",
+                            if events.is_empty() {
+                                span { class: "text-muted align-self-center px-2", "History" }
+                            }
+                            for event in events {
+                                {
+                                    let uuids = event.result_uuids.clone();
+                                    let currently_flagged = event.flagged;
+                                    let card_class = if event.flagged {
+                                        "sc-hist-card matchup flagged"
+                                    } else {
+                                        "sc-hist-card matchup"
+                                    };
+                                    let winner_line = match &event.winner {
+                                        Some(party) => format!("#{} {}", party.entry_number, party.display_name),
+                                        None => "Unknown".to_string(),
+                                    };
+                                    let winner_photo = event.winner.as_ref().and_then(|party| party.profile_photo.clone());
+                                    let winner_team_known = event.winner.as_ref().is_some_and(|party| party.team_known);
+                                    let winner_team_photo = event.winner.as_ref().and_then(|party| party.team_profile_photo.clone());
+                                    let winner_weapon = event.winner.as_ref().and_then(|party| party.weapon.clone()).unwrap_or_default();
+                                    let loser_photo = event.loser.as_ref().and_then(|party| party.profile_photo.clone());
+                                    let loser_team_known = event.loser.as_ref().is_some_and(|party| party.team_known);
+                                    let loser_team_photo = event.loser.as_ref().and_then(|party| party.team_profile_photo.clone());
+                                    let loser_weapon = event.loser.as_ref().and_then(|party| party.weapon.clone()).unwrap_or_default();
+                                    let loser_line = match &event.loser {
+                                        Some(party) => format!("#{} {}", party.entry_number, party.display_name),
+                                        None => "Unknown".to_string(),
+                                    };
+                                    let card_key = uuids.first().cloned().unwrap_or_default();
+                                    rsx! {
+                                        div {
+                                            class: "{card_class}",
+                                            key: "{card_key}",
+                                            onclick: move |_| {
+                                                let uuids = uuids.clone();
+                                                let new_flag = !currently_flagged;
+                                                spawn(async move {
+                                                    let mut ok = true;
+                                                    for uuid in uuids.iter() {
+                                                        if let Err(e) = api::sidecomp_flag_result(uuid, new_flag).await {
+                                                            error.set(Some(e));
+                                                            ok = false;
+                                                            break;
+                                                        }
+                                                    }
+                                                    if ok {
+                                                        let mut hist = matchup_history();
+                                                        for recorded in hist.iter_mut() {
+                                                            if recorded.result_uuids.iter().any(|uuid| uuids.iter().any(|flagged| flagged == uuid)) {
+                                                                recorded.flagged = new_flag;
+                                                            }
+                                                        }
+                                                        matchup_history.set(hist);
+                                                    }
+                                                });
+                                            },
+                                            if event.flagged {
+                                                i { class: "fas fa-flag sc-hist-flag" }
+                                            }
+                                            div { class: "sc-hist-person",
+                                                div { class: "sc-hist-line sc-hist-points win",
+                                                    if event.winner.is_some() {
+                                                        AvatarCircle { photo: winner_photo, size: "1rem".to_string(), is_team: false }
+                                                    }
+                                                    span { class: "sc-hist-text", "{winner_line}" }
+                                                }
+                                                if winner_team_known || !winner_weapon.is_empty() {
+                                                    div { class: "sc-hist-marks",
+                                                        if winner_team_known {
+                                                            AvatarCircle { photo: winner_team_photo, size: "0.85rem".to_string(), is_team: true }
+                                                        }
+                                                        if !winner_weapon.is_empty() {
+                                                            PompfenIcon { weapon: winner_weapon, size: "0.85em".to_string() }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            div { class: "sc-hist-person",
+                                                div { class: "sc-hist-line sc-hist-points loss",
+                                                    if event.loser.is_some() {
+                                                        AvatarCircle { photo: loser_photo, size: "1rem".to_string(), is_team: false }
+                                                    }
+                                                    span { class: "sc-hist-text", "{loser_line}" }
+                                                }
+                                                if loser_team_known || !loser_weapon.is_empty() {
+                                                    div { class: "sc-hist-marks",
+                                                        if loser_team_known {
+                                                            AvatarCircle { photo: loser_team_photo, size: "0.85rem".to_string(), is_team: true }
+                                                        }
+                                                        if !loser_weapon.is_empty() {
+                                                            PompfenIcon { weapon: loser_weapon, size: "0.85em".to_string() }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
                 let groups = collapse_history(&history());
                 rsx! {
                     div { class: "sc-history",
@@ -679,6 +1445,7 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
                         }
                     }
                 }
+                }
             }
 
             div { class: "sc-numpad",
@@ -732,8 +1499,29 @@ pub fn SideCompEnterResults(url: String, comp_id: i32) -> Element {
 
 #[cfg(test)]
 mod tests {
-    use super::merge_roster_lookup;
+    use super::{consecutive_wins, merge_roster_lookup, MatchupEvent, MatchupParty};
     use crate::types::{SideCompEnterRoster, SideCompEnterRosterPlayer};
+
+    fn party(player_id: &str) -> MatchupParty {
+        MatchupParty {
+            player_id: player_id.to_string(),
+            entry_number: 1,
+            display_name: player_id.to_string(),
+            profile_photo: None,
+            team_profile_photo: None,
+            team_known: false,
+            weapon: None,
+        }
+    }
+
+    fn recorded(winner: Option<&str>, loser: Option<&str>) -> MatchupEvent {
+        MatchupEvent {
+            winner: winner.map(party),
+            loser: loser.map(party),
+            result_uuids: vec!["result".to_string()],
+            flagged: false,
+        }
+    }
 
     fn player(player_id: &str, entry_number: i32, display_name: &str) -> SideCompEnterRosterPlayer {
         SideCompEnterRosterPlayer {
@@ -759,6 +1547,7 @@ mod tests {
             name: "Duel".to_string(),
             type_: "DUELING".to_string(),
             active: true,
+            track_matchups: false,
             registrants,
         }
     }
@@ -778,5 +1567,21 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["keep", "fresh", "new"]
         );
+    }
+
+    #[test]
+    fn consecutive_wins_use_only_the_latest_unbroken_local_streak() {
+        // Newest result is first. Other people's bouts do not break a streak.
+        let history = vec![
+            recorded(Some("ada"), Some("bo")),
+            recorded(Some("cy"), Some("dee")),
+            recorded(Some("ada"), Some("bo")),
+            recorded(Some("bo"), Some("ada")),
+            recorded(Some("ada"), None),
+        ];
+        assert_eq!(consecutive_wins(&history, "ada"), 2);
+        assert_eq!(consecutive_wins(&history, "bo"), 0);
+        assert_eq!(consecutive_wins(&history, "cy"), 1);
+        assert_eq!(consecutive_wins(&[], "ada"), 0);
     }
 }
