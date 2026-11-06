@@ -191,6 +191,16 @@ fn PublicTournamentCard(card: PublicEventCard, past: bool) -> Element {
                     } else {
                         span { class: if card.registration_open { "badge arctos-badge-success" } else { "badge arctos-badge-neutral" }, "{card.registration_label}" }
                     }
+                    if card.licensed {
+                        Link {
+                            to: Route::Support {},
+                            class: "badge arctos-badge-success text-decoration-none",
+                            title: "This event has purchased a license to use Arctos. Learn more.",
+                            i { class: "fas fa-circle-check me-1", aria_hidden: "true" }
+                            span { class: "visually-hidden", "This event has purchased a license to use Arctos. Learn more." }
+                            "Licensed"
+                        }
+                    }
                 }
                 h2 { class: "arctos-card-title", Link { to: app_target(&card.url), "{card.name}" } }
                 if let (Some(name), Some(url)) = (&card.league_name, &card.league_url) {

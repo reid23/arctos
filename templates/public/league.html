@@ -13,8 +13,9 @@
             <li><i aria-hidden="true">{{ icon('calendar') }}</i><span>{{ page.card.event_count }} {{ 'event' if page.card.event_count == 1 else 'events' }}</span></li>
             <li><i aria-hidden="true">{{ icon('users') }}</i><span>{{ page.card.team_count }}{% if page.card.max_teams is not none %} / {{ page.card.max_teams }}{% endif %} teams</span></li>
           </ul>
-          {% if page.card.registration_open %}<div class="event-hero-badges">
+          {% if page.card.registration_open or page.card.licensed %}<div class="event-hero-badges">
             {% if page.card.registration_open %}<span class="event-registration-badge"><i aria-hidden="true">{{ icon('circle-check') }}</i>Registration open</span>{% endif %}
+            {% if page.card.licensed %}<a class="badge arctos-badge-success text-decoration-none" href="{{ request.script_root }}/support.md" title="This league has purchased a license to use Arctos. Learn more."><i aria-hidden="true">{{ icon('circle-check') }}</i><span class="visually-hidden">This league has purchased a license to use Arctos. Learn more. </span>Licensed</a>{% endif %}
           </div>{% endif %}
           {{ personal_status(page.account_status) }}
         </div>

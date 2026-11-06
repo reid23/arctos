@@ -8,6 +8,10 @@ use dioxus::prelude::*;
 #[derive(Clone, Copy)]
 pub struct EventBannerPhoto(pub Signal<Option<String>>);
 
+/// The event page and its settings editor share whether a license is entered.
+#[derive(Clone, Copy)]
+pub struct EventLicenseStatus(pub Signal<bool>);
+
 /// A real event destination; an unavailable destination has no href.
 #[derive(Clone, PartialEq)]
 pub struct EventTab {
@@ -127,12 +131,20 @@ pub struct EventHeaderProps {
     #[props(default)]
     pub historical: bool,
     #[props(default)]
+    pub licensed: bool,
+    /// Use league wording on the license badge.
+    #[props(default)]
+    pub league_license: bool,
+    #[props(default)]
     pub organizer_tools: Option<Element>,
     pub children: Element,
 }
 
 #[component]
 pub fn EventHeader(props: EventHeaderProps) -> Element {
+    let license_subject = if props.league_license { "league" } else { "event" };
+    let license_title = format!("This {license_subject} has purchased a license to use Arctos. Learn more.");
+    let license_label = license_title.clone();
     rsx! {
         style { {include_str!("event_details.css")} }
         header { id: "page-banner", class: "event-detail-hero",
@@ -167,6 +179,16 @@ pub fn EventHeader(props: EventHeaderProps) -> Element {
                         span { class: "badge arctos-badge-neutral", title: "Results recorded after the tournament took place",
                             i { class: "fas fa-history me-1", aria_hidden: "true" }
                             "Historical"
+                        }
+                    }
+                    if props.licensed {
+                        Link {
+                            to: Route::Support {},
+                            class: "badge arctos-badge-success text-decoration-none",
+                            title: "{license_title}",
+                            i { class: "fas fa-circle-check me-1", aria_hidden: "true" }
+                            span { class: "visually-hidden", "{license_label}" }
+                            "Licensed"
                         }
                     }
                     if let (Some(url), Some(name)) = (props.badge_league_url, props.badge_name) {
