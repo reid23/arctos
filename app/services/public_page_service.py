@@ -65,6 +65,7 @@ class EventCard:
     registration_label: str
     published: bool
     historical: bool
+    licensed: bool
     account_status: RegistrationSummary | None
 
 
@@ -251,7 +252,20 @@ def _registration_summary(reg, cfg, user, *, include_cancelled: bool = False) ->
     )
 
 
-def _card(event, leagues, counts, personal, user, organized_leagues, prefix) -> EventCard:
+def _licensed_by_event(events) -> dict[str, bool]:
+    from app.services.license_service import LicenseService
+
+    redeemed_events, redeemed_leagues = LicenseService.redeemed_url_sets(
+        {event.url for event in events if not event.league_id},
+        {event.league_id for event in events if event.league_id},
+    )
+    return {
+        event.url: event.league_id in redeemed_leagues if event.league_id else event.url in redeemed_events
+        for event in events
+    }
+
+
+def _card(event, leagues, counts, personal, user, organized_leagues, prefix, licensed: bool) -> EventCard:
     cfg = _config(event, leagues)
     league = leagues.get(event.league_id)
     # A published event does not publish the parent league's private title.
@@ -284,6 +298,7 @@ def _card(event, leagues, counts, personal, user, organized_leagues, prefix) -> 
         ),
         published=bool(event.published),
         historical=bool(event.historical),
+        licensed=licensed,
         account_status=None
         if event.historical
         else _registration_summary(personal.get(_event_scope(event)), cfg, user),
@@ -395,7 +410,20 @@ class PublicPageService:
             .all()
         )
         leagues, counts, personal = _load_supplements(events, user)
-        cards = tuple(_card(event, leagues, counts, personal, user, league_scopes, prefix) for event in events)
+        licensed = _licensed_by_event(events)
+        cards = tuple(
+            _card(
+                event,
+                leagues,
+                counts,
+                personal,
+                user,
+                league_scopes,
+                prefix,
+                licensed[event.url],
+            )
+            for event in events
+        )
         return DirectoryPage(
             query,
             view,
@@ -424,7 +452,16 @@ class PublicPageService:
         _, organized_leagues = PermissionService.organized_scopes(user)
         leagues, counts, personal = _load_supplements([event], user)
         cfg = _config(event, leagues)
-        card = _card(event, leagues, counts, personal, user, organized_leagues, prefix)
+        card = _card(
+            event,
+            leagues,
+            counts,
+            personal,
+            user,
+            organized_leagues,
+            prefix,
+            _licensed_by_event([event])[event.url],
+        )
         event_url = card.url
         scope_url = local_url(f"leagues/{quote(event.league_id, safe='')}", prefix) if event.league_id else event_url
         registration_url = f"{scope_url}/register"

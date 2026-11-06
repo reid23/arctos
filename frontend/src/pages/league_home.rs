@@ -1,6 +1,6 @@
 use crate::api;
 use crate::components::{
-    EditRegistrationContext, EditRegistrationModal, EventAbout, EventBannerPhoto, EventHeader,
+    EditRegistrationContext, EditRegistrationModal, EventAbout, EventBannerPhoto, EventHeader, EventLicenseStatus,
     EventTab, EventTabs, EventTeamsList, LeagueRegistrationButtons, Modal, ModalKind,
     OrganizerTools,
 };
@@ -53,7 +53,9 @@ pub fn LeagueHomeContent(
     let show_overview = use_memo(use_reactive(&has_overview, |value| value));
     let mut banner_photo = use_signal(|| None::<String>);
     let mut banner_initialized = use_signal(|| false);
+    let mut licensed = use_signal(|| false);
     use_context_provider(|| EventBannerPhoto(banner_photo));
+    use_context_provider(|| EventLicenseStatus(licensed));
     let url_for_data = league_url.clone();
     let mut refresh = use_signal(|| 0u32);
     let mut show_edit_modal = use_signal(|| false);
@@ -99,6 +101,7 @@ pub fn LeagueHomeContent(
                 banner_photo.set(d.league.banner_photo.clone());
                 banner_initialized.set(true);
             }
+            licensed.set(d.league.licensed);
             about_markdown.set(d.league.about.clone());
         } else {
             about_markdown.set(None);
@@ -174,6 +177,8 @@ pub fn LeagueHomeContent(
                     registration_open: d.league.team_registration_open || d.league.player_registration_open,
                     badge_league_url: None,
                     badge_name: None,
+                    licensed: licensed(),
+                    league_license: true,
                     organizer_tools: viewer_is_to.then(|| rsx! {
                         OrganizerTools {
                             label: "Organize".to_string(),

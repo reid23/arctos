@@ -59,6 +59,15 @@ pub struct Tournament {
     pub head_refs_allow_anyone: bool,
     /// When set, this tournament is part of a league; registration is via the league.
     pub league: Option<LeagueRef>,
+    /// True when this event, or its league, has a voluntary license entered.
+    #[serde(default)]
+    pub licensed: bool,
+    /// Teams covered by that license. Absent when the event is not licensed.
+    #[serde(default)]
+    pub license_team_allowance: Option<u32>,
+    /// Price in cents for one team. Events are 500; leagues are 1000.
+    #[serde(default)]
+    pub license_price_cents: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -227,6 +236,12 @@ pub struct LeagueInfo {
     pub n_max_teams: Option<u32>,
     pub max_team_size_roster: Option<u32>,
     pub max_team_size_field: Option<u32>,
+    #[serde(default)]
+    pub licensed: bool,
+    #[serde(default)]
+    pub license_team_allowance: Option<u32>,
+    #[serde(default)]
+    pub license_price_cents: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

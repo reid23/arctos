@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from flask_login import current_user
 
+from app.services.license_service import LicenseService
 from app.services.permission_service import PermissionService
 from models import League
 
@@ -58,7 +59,7 @@ def league_to_dict(league) -> dict:
     team_reg_open = bool(rc.team_registration_open) if rc else False
     player_reg_open = bool(rc.player_registration_open) if rc else False
     wf = getattr(rc, "waiver_filepath", None) if rc else None
-    return {
+    result = {
         "league_url": league.url,
         "name": league.name,
         "banner_photo": league.banner_photo,
@@ -77,3 +78,8 @@ def league_to_dict(league) -> dict:
         "waiver_filepath": wf,
         "waiver_sha256": getattr(rc, "waiver_sha256", None) if rc else None,
     }
+    license_status = LicenseService.status_for_league(league.url)
+    result["licensed"] = license_status.licensed
+    result["license_team_allowance"] = license_status.team_allowance
+    result["license_price_cents"] = license_status.price_cents
+    return result

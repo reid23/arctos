@@ -1,6 +1,6 @@
 use crate::api;
 use crate::components::{
-    ActionRecovery, EditRegistrationContext, EditRegistrationModal, EventAbout, EventBannerPhoto, EventHeader, EventTab, EventTabs,
+    ActionRecovery, EditRegistrationContext, EditRegistrationModal, EventAbout, EventBannerPhoto, EventHeader, EventLicenseStatus, EventTab, EventTabs,
     EventTeamsList, LeagueRegistrationButtons, Modal, ModalKind, OrganizerTools, PendingInvitations, PompfenIcon,
 };
 use crate::types::{MyInvitationsResponse, TeamWithCount, ToEntry, User};
@@ -51,7 +51,9 @@ pub fn TournamentHomeContent(
     let show_overview = use_memo(use_reactive(&has_overview, |value| value));
     let mut banner_photo = use_signal(|| None::<String>);
     let mut banner_initialized = use_signal(|| false);
+    let mut licensed = use_signal(|| false);
     use_context_provider(|| EventBannerPhoto(banner_photo));
+    use_context_provider(|| EventLicenseStatus(licensed));
     let mut refresh = use_signal(|| 0u32);
     let data = use_resource(move || {
         let _ = refresh();
@@ -84,6 +86,7 @@ pub fn TournamentHomeContent(
                 banner_photo.set(d.tournament.banner_photo.clone());
                 banner_initialized.set(true);
             }
+            licensed.set(d.tournament.licensed);
             about_markdown.set(d.tournament.about.clone());
             delete_redirect_league.set(d.tournament.league.as_ref().map(|l| l.league_url.clone()));
         } else {
@@ -181,6 +184,7 @@ pub fn TournamentHomeContent(
                     badge_league_url: league.map(|l| l.league_url.clone()),
                     badge_name: league.map(|l| l.name.clone()),
                     historical: d.tournament.historical,
+                    licensed: licensed(),
                     organizer_tools: viewer_is_to.then(|| rsx! {
                         OrganizerTools {
                             label: "Organize".to_string(),

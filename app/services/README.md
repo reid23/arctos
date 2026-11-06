@@ -158,6 +158,13 @@ them.
 5. Write a unit test in `tests/unit/`, plus an integration test that
    hits the route that wraps it.
 
+## Licenses
+
+[`license_service.py`](license_service.py) issues a key after a manual payment
+and attaches it to one standalone event or one league. The secret half of the
+key is hashed like a password. Routes in `tournaments/licenses.py` and
+`leagues.py` are the only writers an organizer can reach.
+
 ## Example: starting a match
 
 Tracing `MatchService.start_match` shows how the layers cooperate:

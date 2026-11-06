@@ -1,5 +1,5 @@
 use crate::api;
-use crate::components::{BannerAccountKind, BannerUpload, EventBannerPhoto, LeaguePenaltyTypesTable, SettingsSaveActions, SettingsSaveJump, ToolPageHeader};
+use crate::components::{BannerAccountKind, BannerUpload, EventBannerPhoto, LeaguePenaltyTypesTable, LicenseKeySection, SettingsSaveActions, SettingsSaveJump, ToolPageHeader};
 use crate::types::ToEntry;
 use crate::Route;
 use dioxus::prelude::*;
@@ -164,6 +164,13 @@ pub fn LeagueSettings(league_url: String) -> Element {
         style { {include_str!("../components/organizer_tools.css")} }
         if let Some(Ok(d)) = data.value().read().as_ref() {
             ToolPageHeader { title: "Settings", actions: rsx! { SettingsSaveJump {} } }
+            LicenseKeySection {
+                kind: "league".to_string(),
+                target_url: league_url.clone(),
+                price_cents: d.league.license_price_cents,
+                licensed: d.league.licensed,
+                team_allowance: d.league.license_team_allowance,
+            }
             if save_success() {
                 div { class: "alert alert-success ordinary-form-rail", role: "status", "Settings saved." }
             }

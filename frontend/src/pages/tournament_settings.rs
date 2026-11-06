@@ -1,5 +1,5 @@
 use crate::api;
-use crate::components::{BannerAccountKind, BannerUpload, EventBannerPhoto, SettingsSaveActions, SettingsSaveJump, ToolPageHeader};
+use crate::components::{BannerAccountKind, BannerUpload, EventBannerPhoto, LicenseKeySection, SettingsSaveActions, SettingsSaveJump, ToolPageHeader};
 use crate::types::Tournament;
 use crate::Route;
 use dioxus::prelude::*;
@@ -579,6 +579,14 @@ fn HistoricalSettings(
     rsx! {
         div { class: "penalty-settings-wrap organizer-settings",
             ToolPageHeader { title: "Settings", actions: rsx! { SettingsSaveJump {} } }
+            LicenseKeySection {
+                kind: "event".to_string(),
+                target_url: url.clone(),
+                price_cents: tournament.license_price_cents,
+                licensed: tournament.licensed,
+                team_allowance: tournament.license_team_allowance,
+                inherited_league_url: tournament.league.as_ref().map(|league| league.league_url.clone()),
+            }
             div { class: "row",
                 div { class: "col-12",
                     div { class: "edit-section ordinary-form-rail",
@@ -816,6 +824,14 @@ pub fn TournamentSettings(url: String) -> Element {
             } else {
             div { class: "penalty-settings-wrap organizer-settings",
                 ToolPageHeader { title: "Settings", actions: rsx! { SettingsSaveJump {} } }
+                LicenseKeySection {
+                    kind: "event".to_string(),
+                    target_url: url.clone(),
+                    price_cents: d.tournament.license_price_cents,
+                    licensed: d.tournament.licensed,
+                    team_allowance: d.tournament.license_team_allowance,
+                    inherited_league_url: d.tournament.league.as_ref().map(|league| league.league_url.clone()),
+                }
 
             div { class: "row",
                 div { class: "col-12",

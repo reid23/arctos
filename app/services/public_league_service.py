@@ -46,6 +46,7 @@ class LeagueCard:
     registration_open: bool
     registration_label: str
     published: bool
+    licensed: bool
     account_status: RegistrationSummary | None
 
 
@@ -139,7 +140,14 @@ def _supplements(leagues, user):
     return counts, personal
 
 
-def _card(row, counts, personal, user, prefix):
+def _licensed_leagues(leagues) -> set[str]:
+    from app.services.license_service import LicenseService
+
+    _events, redeemed = LicenseService.redeemed_url_sets(set(), {league.url for league in leagues})
+    return redeemed
+
+
+def _card(row, counts, personal, user, prefix, licensed: bool):
     league, start, end, event_count = row
     cfg = league.registrable_config
     team_open = bool(cfg and cfg.team_registration_open)
@@ -166,6 +174,7 @@ def _card(row, counts, personal, user, prefix):
             else "Registration closed"
         ),
         published=bool(league.published),
+        licensed=licensed,
         account_status=_registration_summary(personal.get(league.url), cfg, user, include_cancelled=True),
     )
 
@@ -245,7 +254,9 @@ class PublicLeagueService:
             .offset((page - 1) * page_size)
             .all()
         )
-        counts, personal = _supplements([row[0] for row in rows], user)
+        leagues = [row[0] for row in rows]
+        counts, personal = _supplements(leagues, user)
+        licensed = _licensed_leagues(leagues)
         return LeagueDirectoryPage(
             query,
             view,
@@ -254,7 +265,7 @@ class PublicLeagueService:
             total,
             active_count,
             past_count,
-            tuple(_card(row, counts, personal, user, prefix) for row in rows),
+            tuple(_card(row, counts, personal, user, prefix, row[0].url in licensed) for row in rows),
             league_directory_url(query, view, page - 1, prefix) if page > 1 else None,
             league_directory_url(query, view, page + 1, prefix) if page * page_size < total else None,
             league_directory_url(query, "active", prefix=prefix),
@@ -273,7 +284,7 @@ class PublicLeagueService:
         league = row[0]
         cfg = league.registrable_config
         counts, personal = _supplements([league], user)
-        card = _card(row, counts, personal, user, prefix)
+        card = _card(row, counts, personal, user, prefix, league.url in _licensed_leagues([league]))
         url = card.url
         registration_url = url + "/register"
         status = card.account_status

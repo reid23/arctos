@@ -92,6 +92,10 @@ and conditions page URLs."""
 # Cryptographic / fixed-width encodings
 # ---------------------------------------------------------------------------
 
+LICENSE_KEY_ID_LEN: Final[int] = 16
+"""Public lookup id embedded in a license key. The secret half of the key
+is stored only as a password hash."""
+
 SHA256_HEX_LEN: Final[int] = 64
 """SHA-256 digest encoded as lowercase hex: 32 bytes × 2 hex chars = 64.
 Used for ``RegistrableConfig.waiver_sha256`` and

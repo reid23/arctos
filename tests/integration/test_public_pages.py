@@ -617,7 +617,7 @@ def test_event_section_indexing_distinguishes_publication_from_preview_permissio
 
 
 def test_readonly_document_application_entries_preserve_prior_indexing(public_client):
-    for path in ("/about", "/thanks", "/docs.md", "/privacy-policy.md", "/terms.md", "/developers.md"):
+    for path in ("/about", "/thanks", "/docs.md", "/support.md", "/privacy-policy.md", "/terms.md", "/developers.md"):
         response = public_client.get(path)
         assert response.status_code == 200
         assert_robots(response, noindex=False)
