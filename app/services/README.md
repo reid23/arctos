@@ -162,8 +162,11 @@ them.
 
 [`license_service.py`](license_service.py) issues a key after a manual payment
 and attaches it to one standalone event or one league. The secret half of the
-key is hashed like a password. Routes in `tournaments/licenses.py` and
-`leagues.py` are the only writers an organizer can reach.
+key is hashed like a password. `generate_license.py` lists licenses by id and
+can change how many teams one covers or how much was paid. Those amounts are
+entered, not calculated from each other. Routes in `tournaments/licenses.py` and
+`leagues.py` are the only writers an organizer can reach. A license counts as
+valid when its allowance covers the confirmed team registrations.
 
 ## Example: starting a match
 

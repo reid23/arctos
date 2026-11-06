@@ -109,7 +109,9 @@ def tournament_to_dict(t) -> dict:
         out["league"] = None
     license_status = LicenseService.status_for_tournament(t)
     out["licensed"] = license_status.licensed
+    out["license_valid"] = license_status.valid
     out["license_team_allowance"] = license_status.team_allowance
+    out["license_registered_teams"] = license_status.registered_teams
     out["license_price_cents"] = license_status.price_cents
     return out
 

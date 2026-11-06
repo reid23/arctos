@@ -170,6 +170,7 @@ pub fn LeagueSettings(league_url: String) -> Element {
                 price_cents: d.league.license_price_cents,
                 licensed: d.league.licensed,
                 team_allowance: d.league.license_team_allowance,
+                registered_teams: d.league.license_registered_teams,
             }
             if save_success() {
                 div { class: "alert alert-success ordinary-form-rail", role: "status", "Settings saved." }

@@ -86,7 +86,7 @@ pub fn TournamentHomeContent(
                 banner_photo.set(d.tournament.banner_photo.clone());
                 banner_initialized.set(true);
             }
-            licensed.set(d.tournament.licensed);
+            licensed.set(d.tournament.license_valid);
             about_markdown.set(d.tournament.about.clone());
             delete_redirect_league.set(d.tournament.league.as_ref().map(|l| l.league_url.clone()));
         } else {

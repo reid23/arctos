@@ -252,17 +252,24 @@ def _registration_summary(reg, cfg, user, *, include_cancelled: bool = False) ->
     )
 
 
-def _licensed_by_event(events) -> dict[str, bool]:
+def _licensed_by_event(events, counts) -> dict[str, bool]:
+    """True only when the event's license covers its confirmed teams."""
     from app.services.license_service import LicenseService
 
-    redeemed_events, redeemed_leagues = LicenseService.redeemed_url_sets(
+    event_allowances, league_allowances = LicenseService.allowances_by_holder(
         {event.url for event in events if not event.league_id},
         {event.league_id for event in events if event.league_id},
     )
-    return {
-        event.url: event.league_id in redeemed_leagues if event.league_id else event.url in redeemed_events
-        for event in events
-    }
+    licensed: dict[str, bool] = {}
+    for event in events:
+        if event.league_id:
+            allowance = league_allowances.get(event.league_id)
+            registered = counts.get(("league", event.league_id), 0)
+        else:
+            allowance = event_allowances.get(event.url)
+            registered = counts.get(("event", event.url), 0)
+        licensed[event.url] = allowance is not None and allowance >= int(registered)
+    return licensed
 
 
 def _card(event, leagues, counts, personal, user, organized_leagues, prefix, licensed: bool) -> EventCard:
@@ -410,7 +417,7 @@ class PublicPageService:
             .all()
         )
         leagues, counts, personal = _load_supplements(events, user)
-        licensed = _licensed_by_event(events)
+        licensed = _licensed_by_event(events, counts)
         cards = tuple(
             _card(
                 event,
@@ -460,7 +467,7 @@ class PublicPageService:
             user,
             organized_leagues,
             prefix,
-            _licensed_by_event([event])[event.url],
+            _licensed_by_event([event], counts)[event.url],
         )
         event_url = card.url
         scope_url = local_url(f"leagues/{quote(event.league_id, safe='')}", prefix) if event.league_id else event_url

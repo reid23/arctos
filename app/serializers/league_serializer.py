@@ -80,6 +80,8 @@ def league_to_dict(league) -> dict:
     }
     license_status = LicenseService.status_for_league(league.url)
     result["licensed"] = license_status.licensed
+    result["license_valid"] = license_status.valid
     result["license_team_allowance"] = license_status.team_allowance
+    result["license_registered_teams"] = license_status.registered_teams
     result["license_price_cents"] = license_status.price_cents
     return result

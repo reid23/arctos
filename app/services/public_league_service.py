@@ -140,11 +140,12 @@ def _supplements(leagues, user):
     return counts, personal
 
 
-def _licensed_leagues(leagues) -> set[str]:
+def _licensed_leagues(leagues, counts) -> set[str]:
+    """League urls whose license covers their confirmed teams."""
     from app.services.license_service import LicenseService
 
-    _events, redeemed = LicenseService.redeemed_url_sets(set(), {league.url for league in leagues})
-    return redeemed
+    _events, allowances = LicenseService.allowances_by_holder(set(), {league.url for league in leagues})
+    return {url for url, allowance in allowances.items() if allowance >= int(counts.get(url, 0))}
 
 
 def _card(row, counts, personal, user, prefix, licensed: bool):
@@ -256,7 +257,7 @@ class PublicLeagueService:
         )
         leagues = [row[0] for row in rows]
         counts, personal = _supplements(leagues, user)
-        licensed = _licensed_leagues(leagues)
+        licensed = _licensed_leagues(leagues, counts)
         return LeagueDirectoryPage(
             query,
             view,
@@ -284,7 +285,7 @@ class PublicLeagueService:
         league = row[0]
         cfg = league.registrable_config
         counts, personal = _supplements([league], user)
-        card = _card(row, counts, personal, user, prefix, league.url in _licensed_leagues([league]))
+        card = _card(row, counts, personal, user, prefix, league.url in _licensed_leagues([league], counts))
         url = card.url
         registration_url = url + "/register"
         status = card.account_status

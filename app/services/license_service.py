@@ -18,11 +18,12 @@ from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from app.domain.enums import TeamRegistrationStatus
 from app.error_values import Err, Ok, Result
 from app.exceptions import ArctosError, NotFoundError, ValidationError
 from app.models.license import LICENSE_KIND_EVENT, LICENSE_KIND_LEAGUE, License
 from app.utils.datetime_helpers import now_utc_naive
-from models import League, Tournament, db
+from models import League, TeamRegistration, Tournament, db
 
 EVENT_PRICE_CENTS = 500
 LEAGUE_PRICE_CENTS = 1000
@@ -31,12 +32,25 @@ _KEY_ID_RE = re.compile(r"^[0-9a-f]{16}$")
 _MAX_KEY_LENGTH = 200
 
 
+class IssuedLicense(NamedTuple):
+    """A newly stored license and the only copy of its key."""
+
+    license_id: int
+    key: str
+
+
 class LicenseStatus(NamedTuple):
-    """Whether a page has a license, how many teams it covers, and its price."""
+    """A page's license, and whether that license covers its confirmed teams."""
 
     licensed: bool
     team_allowance: int | None
     price_cents: int
+    registered_teams: int
+
+    @property
+    def valid(self) -> bool:
+        """True when an attached license covers every confirmed team."""
+        return self.licensed and self.team_allowance is not None and self.team_allowance >= self.registered_teams
 
 
 def format_dollars(cents: int) -> str:
@@ -68,6 +82,35 @@ def _article(word: str) -> str:
     return "an" if word[:1] in "aeiou" else "a"
 
 
+def _team_count_error(team_count: object) -> ValidationError | None:
+    if (
+        isinstance(team_count, bool)
+        or not isinstance(team_count, int)
+        or team_count < 1
+        or team_count > MAX_TEAM_ALLOWANCE
+    ):
+        return ValidationError(f"Team count must be between 1 and {MAX_TEAM_ALLOWANCE}.")
+    return None
+
+
+def _payment_error(amount_paid_cents: object) -> ValidationError | None:
+    if isinstance(amount_paid_cents, bool) or not isinstance(amount_paid_cents, int) or amount_paid_cents < 0:
+        return ValidationError("Payment must be zero or more cents.")
+    return None
+
+
+def parse_paid_cents(amount: str) -> Result[int, ArctosError]:
+    """Parse a dollar amount such as ``40`` or ``40.50`` into cents."""
+    text = amount.strip()
+    if text.startswith("$"):
+        text = text[1:].strip()
+    match = re.fullmatch(r"(\d+)(?:\.(\d{1,2}))?", text)
+    if match is None:
+        return Err(ValidationError("Payment must be a dollar amount, such as 40 or 40.50."))
+    fraction = match.group(2) or ""
+    return Ok(int(match.group(1)) * 100 + int(fraction.ljust(2, "0")))
+
+
 class LicenseService:
     """Create license keys and attach each one to a single event or league."""
 
@@ -91,26 +134,31 @@ class LicenseService:
         raise ValidationError("License kind must be event or league.")
 
     @staticmethod
-    def issue(kind: str, team_count: int) -> Result[str, ArctosError]:
-        """Create an unused license and return its one-time key.
+    def issue(kind: str, team_count: int, amount_paid_cents: int) -> Result[IssuedLicense, ArctosError]:
+        """Create an unused license and return its id and one-time key.
 
         The returned key is not stored. Callers must show it to the buyer
-        immediately; it cannot be recovered later.
+        immediately; it cannot be recovered later. ``license_id`` is the
+        handle used to list or update the row afterwards. The payment is
+        stored as given; it is not derived from the team count.
 
         Args:
             kind: ``event`` or ``league``.
-            team_count: How many teams the payment covers.
+            team_count: How many teams the license covers.
+            amount_paid_cents: Money received for this license, in cents.
 
         Returns:
-            The plaintext key, ``{key_id}.{secret}``, or a validation error.
+            The new license id and plaintext key, ``{key_id}.{secret}``,
+            or a validation error.
         """
         if kind not in (LICENSE_KIND_EVENT, LICENSE_KIND_LEAGUE):
             return Err(ValidationError("License kind must be event or league."))
-        if isinstance(team_count, bool) or not isinstance(team_count, int):
-            return Err(ValidationError(f"Team count must be between 1 and {MAX_TEAM_ALLOWANCE}."))
-        if team_count < 1 or team_count > MAX_TEAM_ALLOWANCE:
-            return Err(ValidationError(f"Team count must be between 1 and {MAX_TEAM_ALLOWANCE}."))
-        price = LicenseService.price_cents(kind)
+        error = _team_count_error(team_count)
+        if error is not None:
+            return Err(error)
+        error = _payment_error(amount_paid_cents)
+        if error is not None:
+            return Err(error)
         for _attempt in range(5):
             key_id = secrets.token_hex(8)
             secret = secrets.token_urlsafe(32)
@@ -118,7 +166,7 @@ class LicenseService:
                 key_id=key_id,
                 key_hash=generate_password_hash(secret),
                 kind=kind,
-                amount_paid_cents=price * team_count,
+                amount_paid_cents=amount_paid_cents,
                 team_allowance=team_count,
                 created_at=now_utc_naive(),
             )
@@ -128,8 +176,48 @@ class LicenseService:
             except IntegrityError:
                 db.session.rollback()
                 continue
-            return Ok(f"{key_id}.{secret}")
+            return Ok(IssuedLicense(row.id, f"{key_id}.{secret}"))
         return Err(ValidationError("Could not generate a license key."))
+
+    @staticmethod
+    def list_licenses() -> list[License]:
+        """Every license, oldest id first.
+
+        The key cannot be recovered from these rows.
+        """
+        return License.query.order_by(License.id.asc()).all()
+
+    @staticmethod
+    def update_license(
+        license_id: int,
+        *,
+        team_count: int | None = None,
+        amount_paid_cents: int | None = None,
+    ) -> Result[License, ArctosError]:
+        """Change the team allowance, the recorded payment, or both.
+
+        Omitted fields stay as they are. This does not move the license
+        between events.
+        """
+        if team_count is None and amount_paid_cents is None:
+            return Err(ValidationError("Specify a team allowance, a payment, or both."))
+        if team_count is not None:
+            error = _team_count_error(team_count)
+            if error is not None:
+                return Err(error)
+        if amount_paid_cents is not None:
+            error = _payment_error(amount_paid_cents)
+            if error is not None:
+                return Err(error)
+        row = db.session.get(License, license_id)
+        if row is None:
+            return Err(NotFoundError(f"No license with id {license_id}."))
+        if team_count is not None:
+            row.team_allowance = team_count
+        if amount_paid_cents is not None:
+            row.amount_paid_cents = amount_paid_cents
+        db.session.commit()
+        return Ok(row)
 
     @staticmethod
     def redeem_event(tournament_url: str, key: str) -> Result[License, ArctosError]:
@@ -192,45 +280,62 @@ class LicenseService:
         """
         if tournament.league_id:
             licensed, allowance = LicenseService._status(league_url=tournament.league_id)
-            return LicenseStatus(licensed, allowance, LEAGUE_PRICE_CENTS)
+            registered = LicenseService.confirmed_team_count(league_url=tournament.league_id)
+            return LicenseStatus(licensed, allowance, LEAGUE_PRICE_CENTS, registered)
         licensed, allowance = LicenseService._status(tournament_url=tournament.url)
-        return LicenseStatus(licensed, allowance, EVENT_PRICE_CENTS)
+        registered = LicenseService.confirmed_team_count(event_url=tournament.url)
+        return LicenseStatus(licensed, allowance, EVENT_PRICE_CENTS, registered)
 
     @staticmethod
     def status_for_league(league_url: str) -> LicenseStatus:
         """License state for a league page."""
         licensed, allowance = LicenseService._status(league_url=league_url)
-        return LicenseStatus(licensed, allowance, LEAGUE_PRICE_CENTS)
+        registered = LicenseService.confirmed_team_count(league_url=league_url)
+        return LicenseStatus(licensed, allowance, LEAGUE_PRICE_CENTS, registered)
 
     @staticmethod
-    def redeemed_url_sets(
+    def confirmed_team_count(*, event_url: str | None = None, league_url: str | None = None) -> int:
+        """Confirmed team registrations for one standalone event or one league.
+
+        Cancelled registrations are not counted. A league event uses the
+        league's registrations, not rows stored against the event itself.
+        """
+        query = TeamRegistration.query.filter(TeamRegistration.status == TeamRegistrationStatus.CONFIRMED)
+        if league_url is not None:
+            query = query.filter(TeamRegistration.league_id == league_url)
+        else:
+            query = query.filter(TeamRegistration.event == event_url)
+        return int(query.count())
+
+    @staticmethod
+    def allowances_by_holder(
         tournament_urls: set[str],
         league_urls: set[str],
-    ) -> tuple[set[str], set[str]]:
-        """Return the given urls that currently have a license attached.
+    ) -> tuple[dict[str, int], dict[str, int]]:
+        """Team allowances for the given events and leagues that have a license.
 
-        One query covers a whole page of events or leagues. Empty inputs
-        do not touch the database.
+        One query covers a whole page. Empty inputs do not touch the
+        database. A url is absent when no license is attached.
         """
         tournament_urls = {url for url in tournament_urls if url}
         league_urls = {url for url in league_urls if url}
         if not tournament_urls and not league_urls:
-            return set(), set()
-        query = db.session.query(License.tournament_url, License.league_url)
+            return {}, {}
+        query = db.session.query(License.tournament_url, License.league_url, License.team_allowance)
         if tournament_urls and league_urls:
             query = query.filter(or_(License.tournament_url.in_(tournament_urls), License.league_url.in_(league_urls)))
         elif tournament_urls:
             query = query.filter(License.tournament_url.in_(tournament_urls))
         else:
             query = query.filter(License.league_url.in_(league_urls))
-        redeemed_events: set[str] = set()
-        redeemed_leagues: set[str] = set()
-        for tournament_url, league_url in query.all():
+        event_allowances: dict[str, int] = {}
+        league_allowances: dict[str, int] = {}
+        for tournament_url, league_url, allowance in query.all():
             if tournament_url:
-                redeemed_events.add(tournament_url)
+                event_allowances[tournament_url] = allowance
             if league_url:
-                redeemed_leagues.add(league_url)
-        return redeemed_events, redeemed_leagues
+                league_allowances[league_url] = allowance
+        return event_allowances, league_allowances
 
     @staticmethod
     def _status(*, tournament_url: str | None = None, league_url: str | None = None) -> tuple[bool, int | None]:

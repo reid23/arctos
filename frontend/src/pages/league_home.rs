@@ -101,7 +101,7 @@ pub fn LeagueHomeContent(
                 banner_photo.set(d.league.banner_photo.clone());
                 banner_initialized.set(true);
             }
-            licensed.set(d.league.licensed);
+            licensed.set(d.league.license_valid);
             about_markdown.set(d.league.about.clone());
         } else {
             about_markdown.set(None);

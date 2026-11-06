@@ -22,14 +22,19 @@ class License(db.Model):
     """One purchased license and, once entered, the event or league using it.
 
     Attributes:
+        id: Stable license number. ``generate_license.py`` lists and updates
+            licenses by this id.
         key_id: Public id from the left side of the key. Not sufficient to
             redeem the license.
         key_hash: Werkzeug password hash of the secret half of the key.
         kind: ``event`` ($5 per team) or ``league`` ($10 per team). The key
             can be entered on any one holder of that kind.
-        amount_paid_cents: Money recorded when the key was issued.
-        team_allowance: How many teams that payment covers. This is a record
-            of the purchase, not a feature gate.
+        amount_paid_cents: Money recorded for this license. The license script
+            sets it; it is not calculated from the team allowance.
+        team_allowance: How many confirmed team registrations that payment
+            covers. Registration is not blocked past this number. The
+            licensed badge is shown only while the allowance covers every
+            confirmed team.
         created_at: When the key was issued.
         redeemed_at: When an organizer entered the key, or ``None`` if it is
             still unused.

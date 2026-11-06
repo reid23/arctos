@@ -62,9 +62,15 @@ pub struct Tournament {
     /// True when this event, or its league, has a voluntary license entered.
     #[serde(default)]
     pub licensed: bool,
+    /// True when that license covers every confirmed team registration.
+    #[serde(default)]
+    pub license_valid: bool,
     /// Teams covered by that license. Absent when the event is not licensed.
     #[serde(default)]
     pub license_team_allowance: Option<u32>,
+    /// Confirmed team registrations compared with the allowance.
+    #[serde(default)]
+    pub license_registered_teams: u32,
     /// Price in cents for one team. Events are 500; leagues are 1000.
     #[serde(default)]
     pub license_price_cents: u32,
@@ -121,6 +127,9 @@ pub struct PublicEventCard {
     pub published: bool,
     #[serde(default)]
     pub historical: bool,
+    /// True when a license covers every confirmed team. A short license stays false.
+    #[serde(default)]
+    pub licensed: bool,
     pub account_status: Option<PublicRegistrationSummary>,
 }
 
@@ -164,6 +173,7 @@ mod public_events_response_tests {
         assert_eq!(page.cards[0].account_status.as_ref().unwrap().waiver_status.as_deref(), Some("Needs updating"));
         assert!(page.cards[0].max_teams.is_none());
         assert!(!page.cards[0].historical);
+        assert!(!page.cards[0].licensed);
     }
 }
 
@@ -239,7 +249,11 @@ pub struct LeagueInfo {
     #[serde(default)]
     pub licensed: bool,
     #[serde(default)]
+    pub license_valid: bool,
+    #[serde(default)]
     pub license_team_allowance: Option<u32>,
+    #[serde(default)]
+    pub license_registered_teams: u32,
     #[serde(default)]
     pub license_price_cents: u32,
 }

@@ -12,7 +12,7 @@ pytestmark = pytest.mark.integration
 
 
 def event_key(teams=4):
-    return LicenseService.issue("event", teams).unwrap()
+    return LicenseService.issue("event", teams, 2000).unwrap().key
 
 
 def row_for(key):
@@ -59,7 +59,9 @@ def test_organizer_can_enter_a_key_and_responses_do_not_contain_it(client, playe
     payload = detail.get_json()["tournament"]
     detail_text = detail.get_data(as_text=True)
     assert payload["licensed"] is True
+    assert payload["license_valid"] is True
     assert payload["license_team_allowance"] == 4
+    assert payload["license_registered_teams"] == 0
     assert payload["license_price_cents"] == 500
     assert "amount_paid_cents" not in detail_text
     assert secret not in detail_text
@@ -131,7 +133,7 @@ def test_league_organizer_enters_a_league_key(client, player):
     db.session.add(TO(user_id=player.id, user_type="player", league_id=row.url))
     db.session.commit()
     login_as(client, player)
-    key = LicenseService.issue("league", 3).unwrap()
+    key = LicenseService.issue("league", 3, 3000).unwrap().key
     secret = key.split(".", 1)[1]
 
     response = client.post(f"/_api/leagues/{row.url}/license", json={"key": key})
@@ -143,6 +145,8 @@ def test_league_organizer_enters_a_league_key(client, player):
 
     detail = client.get(f"/_api/leagues/{row.url}").get_json()["league"]
     assert detail["licensed"] is True
+    assert detail["license_valid"] is True
     assert detail["license_team_allowance"] == 3
+    assert detail["license_registered_teams"] == 0
     assert detail["license_price_cents"] == 1000
     assert "amount_paid_cents" not in client.get(f"/_api/leagues/{row.url}").get_data(as_text=True)

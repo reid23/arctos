@@ -1,9 +1,9 @@
 //! Voluntary license entry for event and league settings.
 
-use super::event_header::EventLicenseStatus;
 use super::Modal;
-use crate::api;
+use super::event_header::EventLicenseStatus;
 use crate::Route;
+use crate::api;
 use dioxus::prelude::*;
 
 fn dollars(cents: u32) -> String {
@@ -32,6 +32,41 @@ fn coverage(teams: u32) -> String {
     }
 }
 
+fn license_covers(allowance: Option<u32>, registered: u32) -> bool {
+    allowance.is_some_and(|teams| teams >= registered)
+}
+
+fn license_notice(valid: bool, allowance: Option<u32>, registered: u32, spaced: bool) -> Element {
+    let class = match (valid, spaced) {
+        (true, true) => "alert alert-success mb-3",
+        (true, false) => "alert alert-success",
+        (false, true) => "alert alert-warning mb-3",
+        (false, false) => "alert alert-warning",
+    };
+    let teams = allowance.unwrap_or(0);
+    let invalid = format!(
+        "License invalid: your license covers {teams} teams, but there are {registered} teams registered."
+    );
+    rsx! {
+        div {
+            class: "{class}",
+            role: if valid { "status" } else { "alert" },
+            i {
+                class: if valid { "fas fa-circle-check me-2" } else { "fas fa-exclamation-triangle me-2" },
+                aria_hidden: "true",
+            }
+            if valid {
+                "Thank you for supporting Arctos!"
+                if let Some(covered) = allowance {
+                    "{coverage(covered)}"
+                }
+            } else {
+                "{invalid}"
+            }
+        }
+    }
+}
+
 #[component]
 pub fn LicenseKeySection(
     kind: String,
@@ -39,6 +74,7 @@ pub fn LicenseKeySection(
     price_cents: u32,
     licensed: bool,
     team_allowance: Option<u32>,
+    registered_teams: u32,
     #[props(default)] inherited_league_url: Option<String>,
 ) -> Element {
     let price = dollars(listed_price(&kind, price_cents));
@@ -61,9 +97,13 @@ pub fn LicenseKeySection(
     let purchase = if kind == "league" {
         format!("You can buy a license to use Arctos for a league for {price} per registered team.")
     } else {
-        format!("You can buy a license to use Arctos on a per-event basis for {price} per registered team.")
+        format!(
+            "You can buy a license to use Arctos on a per-event basis for {price} per registered team."
+        )
     };
     let price_label = price.clone();
+    let registered_teams = registered_teams;
+    let covered = license_covers(allowance_now(), registered_teams);
 
     rsx! {
         div { class: "edit-section ordinary-form-rail mb-3",
@@ -80,21 +120,13 @@ pub fn LicenseKeySection(
             div { class: "edit-section-body",
                 if let Some(league_url) = inherited_league_url.clone() {
                     if licensed_now() {
-                        div { class: "alert alert-success mb-3", role: "status",
-                            i { class: "fas fa-circle-check me-2", aria_hidden: "true" }
-                            "Thank you for supporting Arctos!"
-                            if let Some(teams) = allowance_now() { "{coverage(teams)}" }
-                        }
+                        {license_notice(covered, allowance_now(), registered_teams, true)}
                     } else {
                         p { "A league license is {price_label.clone()} per registered team. Enter it in the league settings." }
                     }
                     Link { to: Route::LeagueSettings { league_url }, "Open league settings" }
                 } else if licensed_now() {
-                    div { class: "alert alert-success", role: "status",
-                        i { class: "fas fa-circle-check me-2", aria_hidden: "true" }
-                        "Thank you for supporting Arctos!"
-                        if let Some(teams) = allowance_now() { "{coverage(teams)}" }
-                    }
+                    {license_notice(covered, allowance_now(), registered_teams, false)}
                     button {
                         r#type: "button",
                         class: "btn btn-sm btn-outline-secondary mt-2",
@@ -149,7 +181,7 @@ pub fn LicenseKeySection(
                                         allowance_now.set(Some(teams));
                                         licensed_now.set(true);
                                         if let Some(EventLicenseStatus(mut status)) = license_status {
-                                            status.set(true);
+                                            status.set(teams >= registered_teams);
                                         }
                                     }
                                     Err(message) => error.set(Some(message)),
@@ -170,9 +202,6 @@ pub fn LicenseKeySection(
                                 aria_invalid: error().is_some(),
                                 aria_describedby: "license-key-help",
                                 oninput: move |event| key_text.set(event.value()),
-                            }
-                            div { id: "license-key-help", class: "form-text",
-                                "{price_label.clone()} per registered team. Entering a key does not unlock extra features."
                             }
                         }
                         if let Some(message) = error() {
@@ -206,9 +235,7 @@ pub fn LicenseKeySection(
                         " grant you any additional features in Arctos. We rely on users like you to support Arctos's ongoing development and hosting costs."
                     }
                     p { class: "mb-0",
-                        "Payment is arranged manually. A maintainer generates a key after payment. The key is not tied to a specific event until you enter it, and each key can only be used once. "
-                        Link { to: Route::Support {}, "Learn more" }
-                        "."
+                        Link { to: Route::Support {}, "Learn more." }
                     }
                 }
                 div { class: "modal-footer",

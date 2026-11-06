@@ -101,7 +101,8 @@ Top-level files:
 - `init_db.py`, `reset_password.py` - small CLI utilities (legacy;
   prefer the factory-based flow for new code).
 - `generate_license.py` - issue a voluntary license key after a manual
-  payment. Prints the key once; the database stores only its hash.
+  payment, list licenses by id, or change the team allowance and the
+  amount paid. Prints a new key once; the database stores only its hash.
 
 ## Running the app locally
 

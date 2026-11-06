@@ -1,12 +1,23 @@
 # Support Arctos
 
-Arctos is free to use. A license does not unlock extra features, and nothing in Arctos is paywalled.
+Arctos is free to use. However, it is not free to host or develop, so
+we rely on the generous support of our users to keep it
+operational. To this end, organizers may purchase a license to use
+Arctos for their tournament ($5/team) or league ($10/team).
 
-Organizers can buy a license to help pay for development and hosting:
+As we're committed to not adding paywalls, this purchase **will not
+grant you any additional features in Arctos**. All it does is give you
+a little badge on your tournament saying that it is licensed. The badge
+is shown while the license covers every team registered there.
 
-- Events: $5 per registered team
-- Leagues: $10 per registered team
+## Where does this money go?
 
-Payment is arranged manually with an Arctos maintainer. They generate a license key after payment. Enter that key in the event's settings, or in the league's settings for a league. A key is not tied to a specific event until you enter it, and each key can only be used for one event or one league.
+Currently, revenue is still very small, so all of these costs will go
+into server costs (which are currently being paid for by the
+maintainers out of pocket).  If revenue increases beyond server costs,
+this page will be updated with more information on how we spend the
+money. 
 
-The key is stored the same way a password is. Arctos keeps a hash, not the key itself, and does not show the key again after you enter it.
+## How can I purhcase a license?
+
+Please reach out to @readdie on Discord or email reid[at]xz[dot]ax.

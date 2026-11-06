@@ -585,6 +585,7 @@ fn HistoricalSettings(
                 price_cents: tournament.license_price_cents,
                 licensed: tournament.licensed,
                 team_allowance: tournament.license_team_allowance,
+                registered_teams: tournament.license_registered_teams,
                 inherited_league_url: tournament.league.as_ref().map(|league| league.league_url.clone()),
             }
             div { class: "row",
@@ -824,16 +825,9 @@ pub fn TournamentSettings(url: String) -> Element {
             } else {
             div { class: "penalty-settings-wrap organizer-settings",
                 ToolPageHeader { title: "Settings", actions: rsx! { SettingsSaveJump {} } }
-                LicenseKeySection {
-                    kind: "event".to_string(),
-                    target_url: url.clone(),
-                    price_cents: d.tournament.license_price_cents,
-                    licensed: d.tournament.licensed,
-                    team_allowance: d.tournament.license_team_allowance,
-                    inherited_league_url: d.tournament.league.as_ref().map(|league| league.league_url.clone()),
-                }
 
-            div { class: "row",
+            div { class: "tournament-settings-layout",
+            div { class: "tournament-settings-columns",
                 div { class: "col-12",
                     div { class: "edit-section ordinary-form-rail",
                         div { class: "edit-section-heading",
@@ -1165,7 +1159,16 @@ pub fn TournamentSettings(url: String) -> Element {
                 }
                 }
 
-                div { class: "col-12 mt-4",
+                div { class: "col-12 tournament-settings-side",
+                    LicenseKeySection {
+                        kind: "event".to_string(),
+                        target_url: url.clone(),
+                        price_cents: d.tournament.license_price_cents,
+                        licensed: d.tournament.licensed,
+                        team_allowance: d.tournament.license_team_allowance,
+                        registered_teams: d.tournament.license_registered_teams,
+                        inherited_league_url: d.tournament.league.as_ref().map(|league| league.league_url.clone()),
+                    }
                     if d.tournament.league.is_none() {
                     section { class: "edit-section penalty-types-section",
                         div { class: "edit-section-heading penalty-types-heading",
@@ -1314,6 +1317,7 @@ pub fn TournamentSettings(url: String) -> Element {
                     }
                     }
                 }
+            }
             }
             }
             }
