@@ -18,6 +18,7 @@ from flask_login import current_user
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.error_values import Err, Ok
+from app.services.link_preview import absolute_preview_url, account_preview, holder_preview, logo_preview_url
 from app.services.public_league_service import PublicLeagueService, league_directory_url
 from app.services.public_page_service import Link, PublicPageService, directory_url, local_url
 from app.utils.user_helpers import is_team
@@ -93,6 +94,8 @@ def _common_context(*, anonymous: bool = False) -> dict:
                 ("Stones", "stones"),
             )
         ),
+        "preview_image": logo_preview_url(),
+        "preview_image_alt": "Arctos",
         "login_url": local_url("login", prefix) + "?" + urlencode({"next": prefix + request.full_path.rstrip("?")}),
         "account_url": local_url(
             ("teams/" if is_team(current_user) else "players/") + str(current_user.id),
@@ -107,13 +110,15 @@ def _document(template: str, *, status: int = 200, **context):
     from app.services.frontend_shell import _entry, render_anonymous_template
 
     render = render_anonymous_template if status == 503 else render_template
+    # Merge before the call. A repeated keyword in two unpackings is an error,
+    # and a page image has to replace the logo from the shared context.
+    values = {**_common_context(anonymous=status == 503), **context}
     response = make_response(
         render(
             template,
             status=status,
             background_entry=_entry() if status == 200 else None,
-            **_common_context(anonymous=status == 503),
-            **context,
+            **values,
         ),
         status,
     )
@@ -249,6 +254,41 @@ def _public_app_indexable(page=None, *, league: bool = False) -> bool:
     return False
 
 
+def _page_description(page, *, league: bool) -> str:
+    if league:
+        return f"{page.card.name}. Shared registration, league information and events on Arctos."
+    return f"{page.card.name}. {page.card.date_label}. {page.card.location}."
+
+
+def _use_preview(context: dict, image: str | None, alt: str | None) -> None:
+    if image:
+        context["preview_image"] = image
+        context["preview_image_alt"] = alt or "Arctos"
+
+
+def _use_site_preview(context: dict, site_path: str | None, alt: str) -> None:
+    if site_path:
+        _use_preview(context, absolute_preview_url(site_path), alt)
+
+
+def _path_preview(path: str) -> tuple[str | None, str | None]:
+    """Image and name when the application shell itself is the document.
+
+    With public HTML enabled, a hidden event or league is already a 404
+    before this runs, so its banner is not added to the not-found page.
+    """
+    parts = path.strip("/").split("/")
+    if not parts or not parts[0]:
+        return None, None
+    if parts[0] in {"players", "teams"} and len(parts) > 1 and parts[1]:
+        return account_preview(parts[0], parts[1])
+    if parts[0] == "leagues" and len(parts) > 1 and parts[1] != "new":
+        return holder_preview("league", parts[1])
+    if parts[0] not in _APP_TOP_LEVEL | _RESERVED_PREFIXES:
+        return holder_preview("event", parts[0])
+    return None, None
+
+
 def _application(page=None, workflow: str = "application", *, league: bool = False):
     from app.services.frontend_shell import render_application_shell
 
@@ -256,6 +296,7 @@ def _application(page=None, workflow: str = "application", *, league: bool = Fal
     context = {
         "noindex": noindex,
         "title": "Arctos",
+        "description": "",
         "workflow_label": workflow,
         "return_url": local_url("", request.script_root),
         "return_label": "Back to events",
@@ -263,11 +304,19 @@ def _application(page=None, workflow: str = "application", *, league: bool = Fal
     if page is not None:
         context.update(
             title=page.card.name,
+            description=_page_description(page, league=league),
             event_name=page.card.name,
             date_label=page.card.date_label,
             return_url=page.card.url,
             return_label="Back to league" if league else "Back to event",
         )
+        _use_site_preview(context, page.banner_url, page.card.name)
+    else:
+        image, label = _path_preview(request.path)
+        if label:
+            context["title"] = label
+            context["description"] = f"{label} on Arctos."
+        _use_preview(context, image, label)
     return _private_response(render_application_shell(context), noindex=noindex)
 
 
@@ -276,13 +325,16 @@ def _event(slug: str, *, application: bool = False, workflow: str = "event tools
         case Ok(page):
             if application or not page.card.published:
                 return _application(page, workflow)
+            preview: dict = {}
+            _use_site_preview(preview, page.banner_url, page.card.name)
             return _document(
                 "public/event.html",
                 page=page,
                 title=page.card.name,
-                description=f"{page.card.name}. {page.card.date_label}. {page.card.location}.",
+                description=_page_description(page, league=False),
                 canonical=_canonical("/" + quote(slug, safe="")),
                 noindex=not page.card.published,
+                **preview,
             )
         case Err(_):
             return _error()
@@ -293,13 +345,16 @@ def _league(slug: str, *, application: bool = False, workflow: str = "league too
         case Ok(page):
             if application or not page.card.published:
                 return _application(page, workflow, league=True)
+            preview: dict = {}
+            _use_site_preview(preview, page.banner_url, page.card.name)
             return _document(
                 "public/league.html",
                 page=page,
                 title=page.card.name,
-                description=f"{page.card.name}. Shared registration, league information and events on Arctos.",
+                description=_page_description(page, league=True),
                 canonical=_canonical("/leagues/" + quote(slug, safe="")),
                 noindex=False,
+                **preview,
             )
         case Err(_):
             return _error()

@@ -12,8 +12,10 @@
   <meta data-public-meta property="og:title" content="{{ title }}">
   <meta data-public-meta property="og:description" content="{{ description }}">
   <meta data-public-meta property="og:type" content="website">
+  <meta data-public-meta property="og:site_name" content="Arctos">
   <link rel="icon" type="image/png" href="{{ public_asset('arctos-light.png') }}">
   {% if canonical %}<meta data-public-meta property="og:url" content="{{ canonical }}">{% endif %}
+  {% include "public/preview.html" %}
   <script src="{{ public_asset('appearance.js') }}"></script>
   <link rel="stylesheet" href="{{ public_asset('bootstrap.css') }}">
   <link rel="stylesheet" href="{{ public_asset('design.css') }}">
