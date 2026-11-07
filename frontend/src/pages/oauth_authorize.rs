@@ -196,7 +196,7 @@ pub fn OAuthAuthorize() -> Element {
                 ul {
                     li { "See your name and username" }
                     li { "Read public Arctos data" }
-                    for scope in consent.scopes.iter().filter(|scope| scope.name != "openid") {
+                    for scope in consent.scopes.iter().filter(|scope| scope.name != "openid" && scope.name != "email") {
                         li { key: "{scope.name}", "{scope.description}" }
                     }
                 }
