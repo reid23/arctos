@@ -2,8 +2,8 @@
 //! Shared between league home, tournament home (league events), etc.
 
 use crate::api;
-use crate::components::{Modal, ModalKind};
-use crate::types::{UpdatePlayerRegistrationRequest, UpdateTeamRegistrationRequest};
+use crate::components::{use_scope_paid_entries, Modal, ModalKind, PaidEntryScope, WithdrawEntryChoice};
+use crate::types::{PaidEntryAccount, UpdatePlayerRegistrationRequest, UpdateTeamRegistrationRequest};
 use dioxus::prelude::*;
 
 const REGISTRATION_ACTIONS_CSS: &str = include_str!("registration_actions.css");
@@ -147,6 +147,16 @@ fn DeregisterConfirmOverlay(
     on_cancel: EventHandler<()>,
 ) -> Element {
     let mut deregister_error = use_signal(|| None::<String>);
+    let entry_scope = match &context {
+        EditRegistrationContext::League { league_url } => PaidEntryScope::league(league_url),
+        EditRegistrationContext::Tournament { tournament_url } => PaidEntryScope::event(tournament_url),
+    };
+    let entries = use_scope_paid_entries(entry_scope, team_id.clone());
+    let applied_entry = (!historical)
+        .then(|| entries.read().as_ref().and_then(|result| result.as_ref().ok()).and_then(|current| current.applied_entry().cloned()))
+        .flatten();
+    let transferring = use_signal(|| false);
+    let transfer_to = use_signal(|| None::<PaidEntryAccount>);
     let scope_description = if historical && is_team {
         "The results stay, listed again as an unclaimed team, and your account is no longer linked to them."
     } else if historical {
@@ -186,8 +196,14 @@ fn DeregisterConfirmOverlay(
             }
             div { class: "modal-body",
                 p { id: "deregister-description", "{scope_description}" }
+                if is_team && !historical {
+                    p { "Your players stay registered without a team." }
+                }
+                if let Some(entry) = applied_entry.clone() {
+                    WithdrawEntryChoice { kind: entry.kind.clone(), exclude: entry.holder.id.clone(), transferring, transfer_to, disabled: pending }
+                }
                 if !historical {
-                    p { class: "small text-muted", "Registration must be open to register again. Contact an organizer about any payment or refund." }
+                    p { class: "small text-muted", "Registration must be open to register again. Contact an organizer about any refund." }
                 }
                 if let Some(ref err) = deregister_error() {
                     div { class: "alert alert-danger small py-2 mb-0", role: "alert", "{err}" }
@@ -198,25 +214,34 @@ fn DeregisterConfirmOverlay(
                 button {
                     r#type: "button",
                     class: "btn btn-danger",
-                    disabled: pending,
+                    disabled: pending || (transferring() && transfer_to().is_none()),
                     onclick: move |_| {
                         if mutation() != RegistrationMutation::Idle { return; }
+                        let recipient = if transferring() {
+                            match transfer_to() {
+                                Some(account) => Some(account.id),
+                                None => return,
+                            }
+                        } else {
+                            None
+                        };
                         mutation.set(RegistrationMutation::Withdrawing);
                         deregister_error.set(None);
                         let ctx = context.clone();
                         let selected_team = team_id.clone();
                         spawn(async move {
+                            let recipient = recipient.as_deref();
                             let result = match (&ctx, is_team) {
-                                (EditRegistrationContext::League { league_url }, true) => api::league_deregister_team(league_url).await,
-                                (EditRegistrationContext::League { league_url }, false) => api::league_deregister_player(league_url).await,
+                                (EditRegistrationContext::League { league_url }, true) => api::league_deregister_team(league_url, recipient).await,
+                                (EditRegistrationContext::League { league_url }, false) => api::league_deregister_player(league_url, recipient).await,
                                 (EditRegistrationContext::Tournament { tournament_url }, true) => {
                                     if let Some(team_id) = selected_team.as_deref() {
-                                        api::deregister_managed_team(tournament_url, team_id).await
+                                        api::deregister_managed_team(tournament_url, team_id, recipient).await
                                     } else {
-                                        api::deregister_team(tournament_url).await
+                                        api::deregister_team(tournament_url, recipient).await
                                     }
                                 }
-                                (EditRegistrationContext::Tournament { tournament_url }, false) => api::deregister_player(tournament_url).await,
+                                (EditRegistrationContext::Tournament { tournament_url }, false) => api::deregister_player(tournament_url, recipient).await,
                             };
                             mutation.set(RegistrationMutation::Idle);
                             match result {
@@ -230,6 +255,8 @@ fn DeregisterConfirmOverlay(
                         "Withdrawing…"
                     } else if historical {
                         "Un-claim"
+                    } else if transferring() {
+                        "Withdraw and transfer"
                     } else {
                         "Withdraw registration"
                     }

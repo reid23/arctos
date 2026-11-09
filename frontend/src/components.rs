@@ -16,6 +16,11 @@ mod change_password_card;
 mod connected_apps_card;
 mod edit_registration_modal;
 mod registration_entry;
+mod paid_entries;
+pub use paid_entries::{
+    use_scope_paid_entries, OrganizerWithdrawDialog, OrganizerWithdrawal, PaidEntryScope, PrepaidEntryNotice,
+    WithdrawEntryChoice,
+};
 mod event_about;
 mod team_registration_help_modal;
 mod event_header;

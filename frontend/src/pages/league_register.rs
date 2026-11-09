@@ -1,5 +1,8 @@
 use crate::api;
-use crate::components::{has_existing_registration, EditRegistrationContext, ExistingRegistration, TeamRegistrationHelpModal};
+use crate::components::{
+    has_existing_registration, use_scope_paid_entries, EditRegistrationContext, ExistingRegistration, PaidEntryScope,
+    PrepaidEntryNotice, TeamRegistrationHelpModal,
+};
 use dioxus::prelude::*;
 use wasm_bindgen::JsCast;
 
@@ -33,6 +36,8 @@ pub fn LeagueRegister(league_url: String) -> Element {
     });
     let me = crate::auth::use_account();
     let mut show_help_modal = use_signal(|| false);
+    let entries = use_scope_paid_entries(PaidEntryScope::league(&league_url), None);
+    let prepaid = entries.read().as_ref().and_then(|result| result.as_ref().ok()).is_some_and(|current| current.prepaid());
 
     if let Some(Ok(detail)) = data.value().read().as_ref() {
         if let Some(Ok(user)) = me.read().as_ref() {
@@ -81,7 +86,8 @@ pub fn LeagueRegister(league_url: String) -> Element {
                             if let Some(Ok(me)) = me.value().read().as_ref() {
                                 p { class: "form-text mb-3", "Registering as {me.name} (@{me.id})" }
                                 if me.user_type == "team" {
-                                    if let Some(fee) = d.league.team_reg_fee.filter(|fee| *fee > 0.0) {
+                                    PrepaidEntryNotice { scope: PaidEntryScope::league(&league_url), entries, registration_open: d.league.team_registration_open }
+                                    if let Some(fee) = d.league.team_reg_fee.filter(|fee| *fee > 0.0 && !prepaid) {
                                         div { class: "alert alert-info",
                                             strong { {format!("Registration fee: ${:.2}", fee)} }
                                             p { class: "small mb-0 mt-1",
@@ -183,7 +189,8 @@ pub fn LeagueRegister(league_url: String) -> Element {
                                         }
                                     }
                                 } else if me.user_type == "player" {
-                                    if let Some(fee) = d.league.player_reg_fee.filter(|fee| *fee > 0.0) {
+                                    PrepaidEntryNotice { scope: PaidEntryScope::league(&league_url), entries, registration_open: d.league.player_registration_open }
+                                    if let Some(fee) = d.league.player_reg_fee.filter(|fee| *fee > 0.0 && !prepaid) {
                                         div { class: "alert alert-info",
                                             strong { {format!("Registration fee: ${:.2}", fee)} }
                                             p { class: "small mb-0 mt-1",

@@ -1,8 +1,9 @@
 use crate::api;
 use crate::components::{
-    EventTab, EventTabs, Modal, ModalKind, PaymentStatusBadge, RegistrationStatusBadge,
+    use_scope_paid_entries, EventTab, EventTabs, Modal, ModalKind, PaidEntryScope, PaymentStatusBadge, PrepaidEntryNotice,
+    RegistrationStatusBadge, WithdrawEntryChoice,
 };
-use crate::types::{TeamCandidate, TeamCandidates, TeamEventData, TeamManagementData};
+use crate::types::{PaidEntryAccount, TeamCandidate, TeamCandidates, TeamEventData, TeamManagementData};
 use crate::Route;
 use dioxus::prelude::*;
 
@@ -335,6 +336,10 @@ pub fn TeamEventPanel(team_id: String, kind: String, slug: String) -> Element {
     let mut picker = use_signal(|| false);
     let mut editing = use_signal(|| false);
     let mut confirmation = use_signal(|| None::<(TeamAction, String, String)>);
+    let entry_scope = if kind == "leagues" { PaidEntryScope::league(&slug) } else { PaidEntryScope::event(&slug) };
+    let mut entries = use_scope_paid_entries(entry_scope.clone(), Some(team_id.clone()));
+    let mut transferring = use_signal(|| false);
+    let mut transfer_to = use_signal(|| None::<PaidEntryAccount>);
     let refresh_path = format!("{base_path}/registration");
     let write_path = refresh_path.clone();
     let write = EventHandler::new(move |action: TeamAction| {
@@ -357,6 +362,7 @@ pub fn TeamEventPanel(team_id: String, kind: String, slug: String) -> Element {
                         confirmation.set(None);
                         editing.set(false);
                         notice.set(Some(action.message));
+                        entries.restart();
                     } else {
                         error.set(Some(result.err().unwrap_or_else(|| {
                             "The change was not saved. Review the current roster and try again."
@@ -422,8 +428,10 @@ pub fn TeamEventPanel(team_id: String, kind: String, slug: String) -> Element {
                             button { r#type: "button", class: "btn btn-outline-secondary", disabled: !info.registration_open || busy() || needs_check(), onclick: move |_| editing.set(true), "Edit registration" }
                         }
                     }
+                    PrepaidEntryNotice { scope: entry_scope.clone(), entries, registration_open: info.registration_open }
                     if !info.registered || editing() {
                         TeamRegistrationForm { key: "{info.registered}", info: info.clone(), busy: busy() || needs_check(),
+                            prepaid: entries.read().as_ref().and_then(|result| result.as_ref().ok()).is_some_and(|current| current.prepaid()),
                             on_cancel: move |_| editing.set(false), on_save: {
                                 let path = format!("{base_path}/registration"); let registered = info.registered;
                                 move |body| write.call(TeamAction { path: path.clone(), method: if registered { "PUT" } else { "POST" }.into(), body, message: if registered { "Team registration saved." } else { "Team registered." }.into() })
@@ -501,8 +509,9 @@ pub fn TeamEventPanel(team_id: String, kind: String, slug: String) -> Element {
                     if info.registration_open {
                         div { class: "team-management-footer",
                             button { r#type: "button", class: "btn btn-outline-danger", disabled: busy() || needs_check(), aria_haspopup: "dialog",
-                                onclick: { let path = format!("{base_path}/registration"); let name = info.team.name.clone(); let event = info.event.name.clone(); let is_league = info.event.kind == "leagues"; move |_| {
-                                    error.set(None); confirmation.set(Some((TeamAction { path: path.clone(), method: "DELETE".into(), body: serde_json::json!({}), message: "Team registration cancelled.".into() }, format!("Cancel {name}'s registration?"), format!("The team and its players will be withdrawn from {event}.{}", if is_league { "" } else { " Their side-event entries will also be removed." }))));
+                                onclick: { let path = format!("{base_path}/registration"); let name = info.team.name.clone(); let event = info.event.name.clone(); move |_| {
+                                    error.set(None); transferring.set(false); transfer_to.set(None);
+                                    confirmation.set(Some((TeamAction { path: path.clone(), method: "DELETE".into(), body: serde_json::json!({}), message: "Team registration cancelled.".into() }, format!("Cancel {name}'s registration?"), format!("The team will be withdrawn from {event}. Its players stay registered without a team."))));
                                 } }, "Cancel team registration"
                             }
                         }
@@ -520,10 +529,27 @@ pub fn TeamEventPanel(team_id: String, kind: String, slug: String) -> Element {
         if let Some((action, title, description)) = confirmation() {
             Modal { id: "team-action-confirmation", labelled_by: "team-action-title", kind: ModalKind::AlertDialog, dismissible: !busy(), on_close: move |_| confirmation.set(None),
                 div { class: "modal-header", h2 { id: "team-action-title", class: "modal-title h5", tabindex: "-1", "{title}" } }
-                div { class: "modal-body", p { "{description}" } if let Some(message) = error() { p { role: "alert", class: "text-danger", "{message}" } } }
+                div { class: "modal-body", p { "{description}" }
+                    if action.method == "DELETE" {
+                        if let Some(entry) = entries.read().as_ref().and_then(|result| result.as_ref().ok()).and_then(|current| current.applied_entry().cloned()) {
+                            WithdrawEntryChoice { kind: entry.kind.clone(), exclude: entry.holder.id.clone(), transferring, transfer_to, disabled: busy() }
+                        }
+                    }
+                    if let Some(message) = error() { p { role: "alert", class: "text-danger", "{message}" } }
+                }
                 div { class: "modal-footer",
                     button { r#type: "button", class: "btn btn-secondary", disabled: busy(), onclick: move |_| confirmation.set(None), "Go back" }
-                    button { r#type: "button", class: "btn btn-danger", disabled: busy() || needs_check(), onclick: move |_| write.call(action.clone()), if busy() { "Saving…" } else if action.method == "DELETE" { "Cancel registration" } else if action.path.ends_with("decline") { "Decline request" } else { "Remove from team" } }
+                    button { r#type: "button", class: "btn btn-danger", disabled: busy() || needs_check() || (action.method == "DELETE" && transferring() && transfer_to().is_none()),
+                        onclick: move |_| {
+                            let mut action = action.clone();
+                            if action.method == "DELETE" && transferring() {
+                                let Some(account) = transfer_to() else { return; };
+                                action.body = serde_json::json!({ "transfer_to": account.id });
+                                action.message = format!("Team registration cancelled. The prepaid entry was transferred to {}.", account.name);
+                            }
+                            write.call(action);
+                        },
+                        if busy() { "Saving…" } else if action.method == "DELETE" { "Cancel registration" } else if action.path.ends_with("decline") { "Decline request" } else { "Remove from team" } }
                 }
             }
         }
@@ -534,6 +560,7 @@ pub fn TeamEventPanel(team_id: String, kind: String, slug: String) -> Element {
 fn TeamRegistrationForm(
     info: TeamEventData,
     busy: bool,
+    prepaid: bool,
     on_save: EventHandler<serde_json::Value>,
     on_cancel: EventHandler<()>,
 ) -> Element {
@@ -548,7 +575,7 @@ fn TeamRegistrationForm(
                     input { id: "managed-team-shortname", class: "form-control", maxlength: "8", disabled: busy, value: shortname, oninput: move |event| shortname.set(event.value()), aria_describedby: "managed-shortname-help" }
                     p { id: "managed-shortname-help", class: "form-text", "Up to 8 characters for schedules and brackets." } }
                 if !info.registered {
-                    if let Some(fee) = info.team_fee.filter(|fee| *fee > 0.0) {
+                    if let Some(fee) = info.team_fee.filter(|fee| *fee > 0.0 && !prepaid) {
                         p { class: "mb-0", strong { "Team fee: ${fee:.2}" } }
                         p { class: "text-muted mb-0", "Pay the organizer separately. They will confirm payment in Arctos." }
                     }

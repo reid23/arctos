@@ -2391,6 +2391,36 @@ pub struct TeamEventData {
     pub roster: Vec<TeamRosterMember>,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct PaidEntryAccount {
+    pub id: String,
+    pub name: String,
+}
+
+/// A prepaid right to one registration in an event or league.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct PaidEntry {
+    pub id: u32,
+    pub kind: String,
+    pub event: TeamEventRef,
+    pub status: String,
+    pub holder: PaidEntryAccount,
+    pub transferred_from: Option<PaidEntryAccount>,
+}
+
+impl PaidEntry {
+    /// Held, but not covering a registration yet.
+    pub fn is_available(&self) -> bool {
+        self.status == "AVAILABLE"
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct PaidEntriesResponse {
+    pub held: Vec<PaidEntry>,
+    pub sent: Vec<PaidEntry>,
+}
+
 impl User {
     pub fn can_manage_team(&self, team_id: &str) -> bool {
         (self.user_type == "team" && self.id == team_id)

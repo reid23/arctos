@@ -8,9 +8,8 @@ from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from werkzeug.exceptions import HTTPException
 
-from app.domain.enums import RegistrationStatus, TeamRegistrationStatus, UserType
+from app.domain.enums import RegistrationStatus, TeamRegistrationStatus
 from app.error_values import Some
-from app.serializers.paid_entry_serializer import held_entry_payload
 from app.services._common import Scope
 from app.services.permission_service import PermissionService
 from app.services.registration_service import RegistrationService
@@ -264,7 +263,6 @@ def event_registration(team_id, kind, slug):
             "terms_link": cfg.terms_link if cfg else None,
             "payment_info": cfg.payment_info if cfg else None,
             "paid": bool(reg.paid) if confirmed else False,
-            "paid_entry": held_entry_payload(scope, UserType.TEAM, team_id),
             "roster": roster,
         }
     )

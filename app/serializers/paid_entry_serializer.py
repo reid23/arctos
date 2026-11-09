@@ -4,9 +4,6 @@ Only the holder, the sender of a transfer, and organizers see these.
 """
 
 from app.domain.enums import UserType
-from app.error_values import Some
-from app.services import paid_entry_service
-from app.services._common import Scope
 from app.utils.datetime_helpers import dt_iso
 from models import League, PaidEntry, Player, Team, Tournament, db
 
@@ -17,14 +14,15 @@ def _account_name(kind: str, account_id: str) -> str:
 
 
 def entry_payload(entry: PaidEntry) -> dict:
+    slug = entry.league_id or entry.event
     parent = db.session.get(League, entry.league_id) if entry.league_id else db.session.get(Tournament, entry.event)
     return {
         "id": entry.id,
         "kind": entry.kind,
         "event": {
             "kind": "leagues" if entry.league_id else "events",
-            "slug": entry.league_id or entry.event,
-            "name": parent.name if parent is not None else None,
+            "slug": slug,
+            "name": parent.name if parent is not None else slug,
         },
         "status": entry.status.value,
         "source": entry.source.value,
@@ -38,11 +36,3 @@ def entry_payload(entry: PaidEntry) -> dict:
         "created_at": dt_iso(entry.created_at),
         "applied_at": dt_iso(entry.applied_at),
     }
-
-
-def held_entry_payload(scope: Scope, kind: UserType, holder_id: str) -> dict | None:
-    """The holder's entry for *scope*, for registration pages."""
-    match paid_entry_service.held_entry(scope, kind, holder_id):
-        case Some(entry):
-            return entry_payload(entry)
-    return None
