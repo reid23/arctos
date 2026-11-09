@@ -6,7 +6,7 @@ import json
 from PIL import Image
 import pytest
 
-from app.domain.enums import Pompfen
+from app.domain.enums import PROFILE_POMPFEN
 from app.serializers.api_v1_serializer import player_profile_json
 from models import Player, Team, db
 from tests.utils import login_as
@@ -49,20 +49,20 @@ def test_stored_phone_is_kept_and_omitted_from_the_profile(client, player, save)
 
 def test_owner_can_save_clear_and_keep_public_details(client, player, save):
     login_as(client, player)
-    assert save({"pronouns": "  they / she  ", "pompfen": ["SKULL", "CHAIN", "STAFF"]}).status_code == 200
+    assert save({"pronouns": "  they / she  ", "pompfen": ["QWIK", "CHAIN", "STAFF"]}).status_code == 200
     db.session.refresh(player)
-    assert player.pronouns == "they / she" and player.pompfen == ["CHAIN", "STAFF", "SKULL"]
+    assert player.pronouns == "they / she" and player.pompfen == ["CHAIN", "STAFF", "QWIK"]
     public = client.get(f"/_api/players/{player.id}").get_json()["player"]
     versioned = player_profile_json(player)
     for profile in (public, versioned):
-        assert profile["pronouns"] == "they / she" and profile["pompfen"] == ["CHAIN", "STAFF", "SKULL"]
+        assert profile["pronouns"] == "they / she" and profile["pompfen"] == ["CHAIN", "STAFF", "QWIK"]
     assert save({"bio": "An updated bio"}).status_code == 200
-    assert player.pronouns == "they / she" and player.pompfen == ["CHAIN", "STAFF", "SKULL"]
+    assert player.pronouns == "they / she" and player.pompfen == ["CHAIN", "STAFF", "QWIK"]
     assert save({"pronouns": "   ", "pompfen": []}).status_code == 200
     assert player.pronouns is None and player.pompfen == []
-    assert save({"pronouns": "x" * 64, "pompfen": [choice.name for choice in Pompfen]}).status_code == 200
+    assert save({"pronouns": "x" * 64, "pompfen": list(PROFILE_POMPFEN)}).status_code == 200
     assert save({"pronouns": None}).status_code == 200
-    assert player.pronouns is None and len(player.pompfen) == 8
+    assert player.pronouns is None and player.pompfen == list(PROFILE_POMPFEN)
 
 
 @pytest.mark.parametrize(
@@ -75,6 +75,8 @@ def test_owner_can_save_clear_and_keep_public_details(client, player, save):
         {"pompfen": "CHAIN"},
         {"pompfen": ["chain"]},
         {"pompfen": ["UNKNOWN"]},
+        {"pompfen": ["SKULL"]},
+        {"pompfen": ["UNARMED"]},
         {"pompfen": ["CHAIN", "CHAIN"]},
         {"pompfen": [1]},
         {"pompfen": [["CHAIN"]]},
