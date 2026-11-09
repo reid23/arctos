@@ -39,6 +39,8 @@ never both. Examples:
 - `Tournament(league_id, registrable_config_id)` - exactly one is non-null.
 - `TeamRegistration(event, league_id)` - exactly one is non-null.
 - `PlayerRegistration(event, league_id)` - same.
+- `PaidEntry(event, league_id)` - same. Its `status` is `APPLIED` exactly when it
+  points at a registration.
 - `PenaltyType(event, league_id)` - same.
 - `TO(event, league_id)` - same.
 

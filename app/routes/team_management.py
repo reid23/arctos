@@ -8,8 +8,9 @@ from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from werkzeug.exceptions import HTTPException
 
-from app.domain.enums import RegistrationStatus, TeamRegistrationStatus
+from app.domain.enums import RegistrationStatus, TeamRegistrationStatus, UserType
 from app.error_values import Some
+from app.serializers.paid_entry_serializer import held_entry_payload
 from app.services._common import Scope
 from app.services.permission_service import PermissionService
 from app.services.registration_service import RegistrationService
@@ -196,7 +197,13 @@ def event_registration(team_id, kind, slug):
             )
         )
     if request.method == "DELETE":
-        return json_from_result(RegistrationService.deregister_team(scope, team_id))
+        data = request.get_json(silent=True) or {}
+        transfer_to = data.get("transfer_to")
+        if transfer_to is not None and not isinstance(transfer_to, str):
+            abort(400, description="Choose a team to transfer the paid entry to.")
+        return json_from_result(
+            RegistrationService.deregister_team(scope, team_id, transfer_to=transfer_to or None, actor=current_user)
+        )
     if request.method == "PUT":
         if not cfg or not cfg.team_registration_open:
             abort(403, description="Registration changes are closed.")
@@ -257,6 +264,7 @@ def event_registration(team_id, kind, slug):
             "terms_link": cfg.terms_link if cfg else None,
             "payment_info": cfg.payment_info if cfg else None,
             "paid": bool(reg.paid) if confirmed else False,
+            "paid_entry": held_entry_payload(scope, UserType.TEAM, team_id),
             "roster": roster,
         }
     )

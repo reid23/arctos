@@ -21,7 +21,7 @@ from models import (
     TeamRegistration,
     Field,
 )
-from tests.utils import make_registrable_config
+from tests.utils import make_registrable_config, mark_paid
 from scripts.prepare_public_assets import prepare_presentation
 
 
@@ -160,10 +160,9 @@ def team_registration(test_db, tournament, team):
         team=team.id,
         pseudonym="Test Team Pseudonym",
         status="CONFIRMED",
-        paid=True,
     )
     db.session.add(reg)
-    db.session.commit()
+    mark_paid(reg)
     db.session.refresh(reg)
     return reg
 

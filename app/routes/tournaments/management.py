@@ -295,6 +295,10 @@ def delete_tournament(tournament_url):
     if not tournament.league_id:
         PenaltyType.query.filter_by(event=tournament_url).delete(synchronize_session=False)
     HeadRef.query.filter_by(event=tournament_url).delete(synchronize_session=False)
+    from app.services import paid_entry_service
+    from app.services._common import Scope
+
+    paid_entry_service.delete_for_scope(Scope.event(tournament_url))
     PlayerRegistration.query.filter_by(event=tournament_url).delete(synchronize_session=False)
     TeamRegistration.query.filter_by(event=tournament_url).delete(synchronize_session=False)
     Field.query.filter_by(event=tournament_url).delete(synchronize_session=False)

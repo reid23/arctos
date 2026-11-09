@@ -863,38 +863,6 @@ class SideCompService:
         ).delete(synchronize_session=False)
 
     @staticmethod
-    def cancel_players_in_event(event: str, player_ids: list[str]) -> int:
-        """Bulk-cancel side-comp registrations for *player_ids* in *event*.
-
-        Issues at most two SQL statements: one to enumerate side-comp IDs for
-        the event, and one ``DELETE WHERE comp IN (...) AND player IN (...)``.
-        Use this in place of looping over :meth:`cancel_player_registrations_in_event`
-        when cancelling many players at once.
-
-        No transaction commit - the caller is responsible for committing or
-        rolling back as part of its own transaction.
-
-        Args:
-            event: URL slug of the parent tournament.
-            player_ids: List of player IDs to cancel.
-
-        Returns:
-            Number of deleted rows.
-        """
-        from models import SideComp, SideCompRegistration
-
-        if not player_ids:
-            return 0
-        comp_ids = [c.id for c in SideComp.query.filter_by(event=event).all()]
-        if not comp_ids:
-            return 0
-        return (
-            SideCompRegistration.query.filter(SideCompRegistration.comp.in_(comp_ids))
-            .filter(SideCompRegistration.player.in_(player_ids))
-            .delete(synchronize_session=False)
-        )
-
-    @staticmethod
     @allow_Q
     def deregister_player(
         comp_id: int,

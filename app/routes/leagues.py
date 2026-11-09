@@ -619,7 +619,11 @@ def delete_league(league_url):
             400,
         )
 
-    # Delete in order: registrations, penalty types, TOs, league, registrable_config
+    # Delete in order: paid entries, registrations, penalty types, TOs, league, registrable_config
+    from app.services import paid_entry_service
+    from app.services._common import Scope
+
+    paid_entry_service.delete_for_scope(Scope.league(league_url))
     TeamRegistration.query.filter_by(league_id=league_url).delete(synchronize_session=False)
     PlayerRegistration.query.filter_by(league_id=league_url).delete(synchronize_session=False)
     PenaltyType.query.filter_by(league_id=league_url).delete(synchronize_session=False)

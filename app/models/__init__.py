@@ -16,6 +16,7 @@ from app.models.registrable_config import RegistrableConfig
 from app.models.league import League
 from app.models.tournament import Tournament, TO, Field, Tag, ScriptVariable
 from app.models.registration import TeamRegistration, PlayerRegistration
+from app.models.payments import PaidEntry, PaidEntryEvent, Payment
 from app.models.match import Match, Point, MatchNote
 from app.models.schedule_item import ScheduleItem
 from app.models.bracket import BracketImage, BracketLabeledTeam, BracketPlacement, BracketText
@@ -47,6 +48,9 @@ __all__ = [
     "ScriptVariable",
     "TeamRegistration",
     "PlayerRegistration",
+    "PaidEntry",
+    "PaidEntryEvent",
+    "Payment",
     "Match",
     "ScheduleItem",
     "Point",

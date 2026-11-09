@@ -93,6 +93,38 @@ class TeamRegistrationStatus(StrEnum):
     PENDING = "PENDING"
 
 
+class PaidEntryStatus(StrEnum):
+    """Lifecycle status of a :class:`~app.models.payments.PaidEntry`."""
+
+    # Covering the holder's registration.
+    APPLIED = "APPLIED"
+    # Held but not covering a registration: the holder deregistered, or the
+    # entry was transferred to them and they have not registered yet.
+    AVAILABLE = "AVAILABLE"
+    # No longer grants a registration (refunded, or revoked by an organizer).
+    VOIDED = "VOIDED"
+
+
+class PaidEntrySource(StrEnum):
+    """How a :class:`~app.models.payments.PaidEntry` came to exist."""
+
+    MANUAL = "MANUAL"
+    ORGANIZER = "ORGANIZER"
+    FREE = "FREE"
+
+
+class PaidEntryAction(StrEnum):
+    """Kinds of :class:`~app.models.payments.PaidEntryEvent` history rows."""
+
+    CREATED = "CREATED"
+    APPLIED = "APPLIED"
+    RELEASED = "RELEASED"
+    TRANSFERRED = "TRANSFERRED"
+    TRANSFER_REVOKED = "TRANSFER_REVOKED"
+    TRANSFER_DECLINED = "TRANSFER_DECLINED"
+    VOIDED = "VOIDED"
+
+
 class MatchStatus(StrEnum):
     """Match statuses.
     NOT_STARTED: initial state

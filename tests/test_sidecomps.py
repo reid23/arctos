@@ -33,7 +33,6 @@ def _confirm_event_registration(tournament_url, player_id, team_id=None):
         jersey_number="0",
         jersey_name="N/A",
         status=RegistrationStatus.CONFIRMED,
-        paid=True,
     )
     db.session.add(reg)
     db.session.commit()
@@ -88,7 +87,6 @@ def _make_league_sidecomp_context(registration_open=False):
             jersey_number="7",
             jersey_name="P1",
             status=RegistrationStatus.CONFIRMED,
-            paid=True,
         )
     )
 
@@ -706,7 +704,6 @@ def test_entry_numbers_shared_across_tournaments_in_league(test_db):
             jersey_number="8",
             jersey_name="P2",
             status=RegistrationStatus.CONFIRMED,
-            paid=True,
         )
     )
     second_sc = SideComp(event=second_tournament.url, name="LG SC 2", type="DUELING", registration_open=True)
@@ -2219,7 +2216,6 @@ def _make_pending_player(tournament_url):
             pseudonym="Requested Team",
             shortname="REQ",
             status="CONFIRMED",
-            paid=True,
         )
     )
     p = _make_player("pending_p", "Pending")
@@ -2231,7 +2227,6 @@ def _make_pending_player(tournament_url):
             jersey_number="3",
             jersey_name="Pendo",
             status=RegistrationStatus.PENDING_TEAM_APPROVAL,
-            paid=True,
         )
     )
     db.session.commit()

@@ -44,7 +44,7 @@ SHORT_NAME_LEN: Final[int] = 100
 
 SHORT_LABEL_LEN: Final[int] = 50
 """Short labels and enumerated strings: ``PenaltyType.name``,
-``TeamRegistration.payment_method``, ``Camera.source_type``,
+``Payment.method``, ``Camera.source_type``,
 ``Camera.status``, ``SideComp.type``."""
 
 TAG_NAME_LEN: Final[int] = 50

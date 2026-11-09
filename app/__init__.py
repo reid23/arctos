@@ -295,6 +295,7 @@ def create_app(config: dict | None = None) -> Flask:
     from app.routes.players import bp as players_bp
     from app.routes.teams import bp as teams_bp
     from app.routes.team_management import bp as team_management_bp
+    from app.routes.paid_entries import bp as paid_entries_bp
     from app.routes.oauth import bp as oauth_bp
     from app.routes.api_v1 import bp as api_v1_bp
 
@@ -311,6 +312,7 @@ def create_app(config: dict | None = None) -> Flask:
     app.register_blueprint(players_bp)
     app.register_blueprint(teams_bp)
     app.register_blueprint(team_management_bp)
+    app.register_blueprint(paid_entries_bp)
     app.register_blueprint(oauth_bp)
     app.register_blueprint(api_v1_bp)
 
