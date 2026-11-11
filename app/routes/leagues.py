@@ -10,6 +10,7 @@ Read:
 
 Management:
 - ``/leagues/<league_url>/settings`` (POST)
+- ``/leagues/<league_url>/license`` (POST, DELETE)
 - ``/leagues/<league_url>/banner-photo`` (POST, DELETE)
 - ``/leagues/<league_url>/add-to`` (POST), ``/leagues/<league_url>/remove-to`` (POST)
 - ``/leagues/<league_url>/delete`` (POST)
@@ -42,9 +43,13 @@ from app.serializers.tournament_serializer import (
     tournament_to_dict,
 )
 from app.utils.datetime_helpers import dt_iso
+from app.utils.decorators import require_league_organizer
+from app.utils.responses import json_error
+from app.utils.result_helpers import json_from_result
 from app.utils.settings_save import SettingsSaveError, save_league_settings
 from app.serializers.league_serializer import league_to_dict, require_league
 from app.services._common import Scope, current_user_type
+from app.services.license_service import LicenseService
 from app.services.permission_service import PermissionService
 from app.services.registration_resolver import (
     is_player_registered,
@@ -482,6 +487,38 @@ def league_update_settings(league_url):
     return jsonify({"success": True})
 
 
+def _entered_license_key():
+    body = request.get_json(silent=True) or {}
+    key = body.get("key") if isinstance(body, dict) else None
+    if not isinstance(key, str) or not key.strip():
+        return None
+    return key
+
+
+def _license_grant(license_row) -> dict:
+    return {
+        "team_allowance": license_row.team_allowance,
+        "amount_paid_cents": license_row.amount_paid_cents,
+    }
+
+
+@bp.route("/leagues/<league_url>/license", methods=["POST"])
+@require_league_organizer()
+def redeem_league_license(league_url):
+    """Attach a license key to this league."""
+    key = _entered_license_key()
+    if key is None:
+        return json_error("Enter a license key.")
+    return json_from_result(LicenseService.redeem_league(league_url, key), ok_to_payload=_license_grant)
+
+
+@bp.route("/leagues/<league_url>/license", methods=["DELETE"])
+@require_league_organizer()
+def clear_league_license(league_url):
+    """Remove the license entered on this league so the key can be used elsewhere."""
+    return json_from_result(LicenseService.clear_league(league_url), ok_to_payload=lambda _cleared: {})
+
+
 @bp.route("/leagues/<league_url>/add-to", methods=["POST"])
 @login_required
 def league_add_to(league_url):
@@ -626,6 +663,7 @@ def delete_league(league_url):
     TO.query.filter_by(league_id=league_url).delete(synchronize_session=False)
     rc_id = league.registrable_config_id
     league_name = league.name
+    LicenseService.release_league(league_url)
     db.session.delete(league)
     if rc_id:
         from models import RegistrableConfig

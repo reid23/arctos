@@ -40,6 +40,7 @@
           <div class="arctos-card-statuses">
             {% if not card.published %}<span class="badge bg-warning text-dark" title="Draft · Only visible to organizers">Unpublished</span>{% endif %}
             {% if card.historical %}<span class="badge arctos-badge-neutral" title="Results recorded after the tournament took place"><i aria-hidden="true">{{ icon('clock') }}</i>Historical</span>{% elif page.view == 'past' %}<span class="badge arctos-badge-neutral">Past event</span>{% else %}<span class="badge {{ 'arctos-badge-success' if card.registration_open else 'arctos-badge-neutral' }}">{{ card.registration_label }}</span>{% endif %}
+            {% if card.licensed %}<a class="badge arctos-badge-success text-decoration-none" href="{{ request.script_root }}/support.md" title="This event has purchased a license to use Arctos. Learn more."><i aria-hidden="true">{{ icon('circle-check') }}</i><span class="visually-hidden">This event has purchased a license to use Arctos. Learn more. </span>Licensed</a>{% endif %}
           </div>
           <h2 class="arctos-card-title"><a data-public-reading href="{{ card.url }}">{{ card.name }}</a></h2>
           {% if card.league_name %}<a class="arctos-league-link" data-public-reading href="{{ card.league_url }}"><i aria-hidden="true">{{ icon('trophy') }}</i>{{ card.league_name }}</a>{% endif %}

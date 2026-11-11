@@ -249,6 +249,16 @@ fn LeagueCard(
                     } else {
                         span { class: if league.team_registration_open || league.player_registration_open { "badge arctos-badge-success" } else { "badge arctos-badge-neutral" }, "{registration_label}" }
                     }
+                    if league.license_valid {
+                        Link {
+                            to: Route::Support {},
+                            class: "badge arctos-badge-success text-decoration-none",
+                            title: "This league has purchased a license to use Arctos. Learn more.",
+                            i { class: "fas fa-circle-check me-1", aria_hidden: "true" }
+                            span { class: "visually-hidden", "This league has purchased a license to use Arctos. Learn more." }
+                            "Licensed"
+                        }
+                    }
                 }
                 div { class: "arctos-league-identity",
                     div { class: "arctos-brand-mark", aria_hidden: "true", i { class: "fas fa-trophy" } }
