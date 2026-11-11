@@ -15,7 +15,7 @@ from app.error_values import Err, Ok, Result, allow_Q
 from app.exceptions import ArctosError
 from app.models.base import db
 from app.models.oauth import OAuthClient, OAuthToken, is_loopback_redirect_uri, secret_hash
-from app.utils.oauth_server import SCOPES, revoke_grant
+from app.utils.oauth_server import SCOPES, SILENT_SCOPES, revoke_grant
 
 MAX_REDIRECT_URIS = 10
 
@@ -163,7 +163,8 @@ class OAuthService:
         if not usable:
             return False
         granted = {scope for token in usable for scope in token.scope.split() if scope}
-        return set(requested).issubset(granted)
+        visible = [scope for scope in requested if scope not in SILENT_SCOPES]
+        return set(visible).issubset(granted)
 
     @staticmethod
     def connected_apps(user_id: str, user_type: str) -> list[ConnectedApp]:

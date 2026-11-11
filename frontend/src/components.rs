@@ -65,8 +65,8 @@ pub use organizer_tools::OrganizerTools;
 pub use results_games_table::{ResultsGamesTable, rows_for_team};
 pub use results_sort_header::ResultsSortHeader;
 pub use sidecomp_weapon_modal::{
-    default_allowed_weapons, pompfen_by_id, AllowedWeaponsCheckboxes, PompfenIcon, SideCompRegistrationMode,
-    SideCompWeaponModal, ALL_POMPFEN,
+    default_allowed_weapons, pompfen_by_id, profile_pompfen, AllowedWeaponsCheckboxes, PompfenIcon,
+    SideCompRegistrationMode, SideCompWeaponModal,
 };
 pub use team_label::{TeamLabel, TeamLabelStyle, TeamSlot};
 pub use team_token_input::{all_tokens_known, resolve_value_to_team_ids, TeamSelectionField};

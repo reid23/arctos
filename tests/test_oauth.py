@@ -253,8 +253,9 @@ def test_openid_connect_code_flow(client, player):
     assert metadata["jwks_uri"].endswith("/api/oauth/jwks")
     assert "RS256" in metadata["id_token_signing_alg_values_supported"]
     assert metadata["issuer"] == metadata["jwks_uri"].removesuffix("/api/oauth/jwks")
-    assert "email" not in metadata["scopes_supported"]
-    assert "email" not in metadata["claims_supported"]
+    assert "email" in metadata["scopes_supported"]
+    assert "email" in metadata["claims_supported"]
+    assert "email_verified" not in metadata["claims_supported"]
 
     rejected = client.get(f"/_api/oauth/authorize?{_authorization_query(client_id, scope='openid address')}")
     assert parse_qs(urlsplit(rejected.get_json()["redirect"]).query)["error"] == ["invalid_scope"]
@@ -262,24 +263,30 @@ def test_openid_connect_code_flow(client, player):
     first = client.get(f"/_api/oauth/authorize?{_authorization_query(client_id, scope='openid profile email')}")
     assert first.get_json()["already_allowed"] is False
     assert "email" not in {scope["name"] for scope in first.get_json()["scopes"]}
+    assert "email" not in first.get_data(as_text=True)
     code = _authorize(client, client_id, scope="openid profile email", nonce="nonce-1")["code"][0]
     token = _exchange(client, client_id, code).get_json()
-    assert set(token["scope"].split()) == {"openid", "profile"}
+    assert set(token["scope"].split()) == {"openid", "profile", "email"}
     keys = JsonWebKey.import_key_set(client.get("/api/oauth/jwks").get_json())
     claims = jwt.decode(token["id_token"], keys)
     claims.validate()
     assert claims["iss"] == metadata["issuer"]
     assert claims["sub"] == player.id
+    assert claims["email"] == player.id
+    assert claims["email"] != player.email
     assert claims["nonce"] == "nonce-1"
     assert client_id in claims["aud"] or claims["aud"] == client_id
-    assert "email" not in claims
     assert "email_verified" not in claims
     assert claims["name"] == player.name
 
     userinfo = client.get("/api/oauth/userinfo", headers=_bearer(token["access_token"])).get_json()
     assert userinfo["sub"] == player.id
-    assert "email" not in userinfo
+    assert userinfo["email"] == player.id
+    assert userinfo["email"] != player.email
+    assert "email_verified" not in userinfo
     assert userinfo["id"] == player.id
+    apps = client.get("/_api/oauth/connected-apps").get_json()["apps"]
+    assert "email" not in {scope["name"] for app in apps for scope in app["scopes"]}
 
     refreshed = client.post(
         "/api/oauth/token",
@@ -289,10 +296,25 @@ def test_openid_connect_code_flow(client, player):
     refreshed_claims = jwt.decode(refreshed.get_json()["id_token"], keys)
     refreshed_claims.validate()
     assert refreshed_claims["sub"] == player.id
+    assert refreshed_claims["email"] == player.id
     assert "nonce" not in refreshed_claims
 
     again = client.get(f"/_api/oauth/authorize?{_authorization_query(client_id, scope='openid profile email')}")
     assert again.get_json()["already_allowed"] is True
+    assert "email" not in again.get_data(as_text=True)
+    prior = _register(client)["client"]["client_id"]
+    prior_code = _authorize(client, prior, scope="openid")["code"][0]
+    assert _exchange(client, prior, prior_code).status_code == 200
+    silent_email = client.get(
+        f"/_api/oauth/authorize?{_authorization_query(prior, scope='openid email', prompt='none')}"
+    )
+    silent_email_params = parse_qs(urlsplit(silent_email.get_json()["redirect"]).query)
+    assert "code" in silent_email_params
+    silent_token = _exchange(client, prior, silent_email_params["code"][0]).get_json()
+    assert set(silent_token["scope"].split()) == {"openid", "email"}
+    silent_claims = jwt.decode(silent_token["id_token"], keys)
+    silent_claims.validate()
+    assert silent_claims["email"] == player.id
     wider = client.get(f"/_api/oauth/authorize?{_authorization_query(client_id, scope='openid injuries')}")
     assert wider.get_json()["already_allowed"] is False
 
