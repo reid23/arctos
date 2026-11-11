@@ -91,6 +91,18 @@ let matches and registrations use the normal `teams.id` foreign keys.
 - An unpublished historical tournament is visible only to its organisers.
   It is omitted from profiles and from invitation lists.
 
+## Licenses
+
+A license key is created before it belongs to any event. `generate_license.py`
+prints the key once and the license id. The `licenses` table stores that id,
+a public key id, and a password hash of the secret, plus the amount paid and
+how many teams that payment covers. The same script lists licenses and can
+change the allowance or the amount paid later. Entering the
+key sets either `tournament_url` or `league_url`, never both. Clearing it, or
+deleting that event or league, makes the same key usable again. Team allowance
+does not block registration. The licensed badge is shown only while the
+allowance covers every confirmed team.
+
 ## Creating a `Tournament`
 
 `Tournament` requires either `league_id` or `registrable_config_id`.
