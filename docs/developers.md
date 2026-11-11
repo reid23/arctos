@@ -822,7 +822,8 @@ and leagues; exactly one of `tournament` and `league` is set.
 
 `pronouns` is optional public text (up to 64 characters), or `null`.
 `pompfen` lists the player's chosen roles in canonical order: `CHAIN`,
-`LONG`, `QTIP`, `STAFF`, `BOARD`, `FLORENTINE`, `SKULL`, `UNARMED`.
+`LONG`, `QTIP`, `STAFF`, `BOARD`, `FLORENTINE`, `QWIK`. `QWIK` uses the
+unarmed symbol.
 It is an empty list when no choices are set. These profile preferences
 do not change a player's weapon selection for any side competition.
 

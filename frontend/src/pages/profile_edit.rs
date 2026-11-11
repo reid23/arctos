@@ -1,6 +1,9 @@
 use crate::api;
 use crate::form_validation::{described_by, field_message, FieldError};
-use crate::components::{ChangePasswordCard, ConnectedAppsCard, ImageDraft, Modal, ModalKind, PlayerPompfen, ProfileBio, ProfileImageControls, ProfileImageEditor};
+use crate::components::{
+    profile_pompfen, ChangePasswordCard, ConnectedAppsCard, ImageDraft, Modal, ModalKind, PlayerPompfen, ProfileBio,
+    ProfileImageControls, ProfileImageEditor,
+};
 use crate::Route;
 use dioxus::prelude::*;
 
@@ -73,7 +76,10 @@ pub fn ProfileEditPage(account_id: String, team: bool) -> Element {
             Ok(Some(ProfileEditData {
                 fields: ProfileFields { name: value.name, location: value.location.unwrap_or_default(),
                     about: value.bio.unwrap_or_default(), pronouns: value.pronouns.unwrap_or_default(),
-                    pompfen: value.pompfen, ..Default::default() },
+                    pompfen: value.pompfen.into_iter()
+                        .filter(|id| profile_pompfen().iter().any(|option| option.id == id))
+                        .collect(),
+                    ..Default::default() },
                 photo: value.profile_photo, banner: value.banner_photo,
                 past_count: response.past_event_count, has_password: user.has_password,
                 owns_account: user.id == id && user.user_type == if team { "team" } else { "player" },
