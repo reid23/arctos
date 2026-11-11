@@ -20,7 +20,8 @@ from models import (
     db,
 )
 from app.domain.enums import RegistrationStatus
-from app.error_values import Some
+from app.error_values import Err, Ok, Some
+from app.services import paid_entry_service
 from app.services._common import current_user_type, Scope
 from app.services.permission_service import PermissionService
 from app.services.registration_service import RegistrationService
@@ -160,7 +161,12 @@ def deregister_team_from_tournament(tournament_url: str):
             err_status_code=400,
         )
 
-    res = RegistrationService.deregister_team(Scope.event(tournament_url), team_id)
+    res = RegistrationService.deregister_team(
+        Scope.event(tournament_url),
+        team_id,
+        transfer_to=request.form.get("transfer_to") or None,
+        actor=current_user,
+    )
     return json_from_result(
         res,
         ok_to_payload=lambda _: {"message": "Team successfully deregistered from tournament"},
@@ -205,7 +211,12 @@ def deregister_player_from_tournament(tournament_url: str):
             err_status_code=400,
         )
 
-    res = RegistrationService.deregister_player(Scope.event(tournament_url), current_user.id)
+    res = RegistrationService.deregister_player(
+        Scope.event(tournament_url),
+        current_user.id,
+        transfer_to=request.form.get("transfer_to") or None,
+        actor=current_user,
+    )
     return json_from_result(
         res,
         ok_to_payload=lambda _: {"message": "Player successfully deregistered from tournament"},
@@ -237,24 +248,28 @@ def mark_team_paid(tournament_url: str):
     Returns:
         JSON ``{"success": true, "message": "..."}`` on success, or 403/404.
     """
-    tournament = Tournament.query.filter_by(url=tournament_url).first_or_404()
+    Tournament.query.filter_by(url=tournament_url).first_or_404()
+    reg = TeamRegistration.query.filter_by(id=request.form.get("registration_id"), event=tournament_url).first_or_404()
+    return _save_manual_payment(reg, "Team payment updated")
 
-    reg_id = request.form.get("registration_id")
-    paid = request.form.get("paid") == "on"
-    amount_paid = float(request.form.get("amount_paid") or 0)
-    payment_method = request.form.get("payment_method", "")
-    payment_reference = request.form.get("payment_reference", "")
-    payment_notes = request.form.get("payment_notes", "")
 
-    reg = TeamRegistration.query.filter_by(id=reg_id, event=tournament_url).first_or_404()
-    reg.paid = paid
-    reg.amount_paid = amount_paid
-    reg.payment_method = payment_method
-    reg.payment_reference = payment_reference
-    reg.payment_notes = payment_notes
-    reg.paid_at = now_utc_naive() if paid else None
-    db.session.commit()
-    return jsonify({"success": True, "message": "Team payment updated"}), 200
+def _save_manual_payment(registration, message: str):
+    """Apply the organizer's mark-paid form to *registration* and commit."""
+    match paid_entry_service.parse_amount_cents(request.form.get("amount_paid")):
+        case Ok(amount_cents):
+            paid_entry_service.record_manual_payment(
+                registration,
+                paid=request.form.get("paid") == "on",
+                amount_cents=amount_cents,
+                method=request.form.get("payment_method", ""),
+                reference=request.form.get("payment_reference", ""),
+                notes=request.form.get("payment_notes", ""),
+                actor=current_user,
+            )
+            db.session.commit()
+            return jsonify({"success": True, "message": message}), 200
+        case Err(error):
+            return jsonify({"success": False, "error": error.message}), 400
 
 
 @bp.route("/<tournament_url>/mark-player-paid", methods=["POST"])
@@ -281,24 +296,11 @@ def mark_player_paid(tournament_url: str):
     Returns:
         JSON ``{"success": true, "message": "..."}`` on success, or 403/404.
     """
-    tournament = Tournament.query.filter_by(url=tournament_url).first_or_404()
-
-    reg_id = request.form.get("registration_id")
-    paid = request.form.get("paid") == "on"
-    amount_paid = float(request.form.get("amount_paid") or 0)
-    payment_method = request.form.get("payment_method", "")
-    payment_reference = request.form.get("payment_reference", "")
-    payment_notes = request.form.get("payment_notes", "")
-
-    reg = PlayerRegistration.query.filter_by(id=reg_id, event=tournament_url).first_or_404()
-    reg.paid = paid
-    reg.amount_paid = amount_paid
-    reg.payment_method = payment_method
-    reg.payment_reference = payment_reference
-    reg.payment_notes = payment_notes
-    reg.paid_at = now_utc_naive() if paid else None
-    db.session.commit()
-    return jsonify({"success": True, "message": "Player payment updated"}), 200
+    Tournament.query.filter_by(url=tournament_url).first_or_404()
+    reg = PlayerRegistration.query.filter_by(
+        id=request.form.get("registration_id"), event=tournament_url
+    ).first_or_404()
+    return _save_manual_payment(reg, "Player payment updated")
 
 
 @bp.route("/<tournament_url>/deregister-any-team", methods=["POST"])
@@ -308,7 +310,7 @@ def deregister_any_team(tournament_url: str):
 
     ``POST /_api/<tournament_url>/deregister-any-team``
 
-    Cancels the team registration and all associated player registrations.
+    Cancels the team registration. Its players stay registered, unattached.
     Requires the caller to be a Tournament Organiser for the event.
 
     Args:
@@ -316,54 +318,27 @@ def deregister_any_team(tournament_url: str):
 
     Form Data:
         team_id (str): ID of the team to deregister.
+        void_entry (str): ``"on"`` to void the team's paid entry instead of
+            leaving it with the team for re-registration.
 
     Returns:
         JSON success or error body.
     """
-    tournament = Tournament.query.filter_by(url=tournament_url).first_or_404()
+    Tournament.query.filter_by(url=tournament_url).first_or_404()
 
     team_id = request.form.get("team_id")
     if not team_id:
         return jsonify({"success": False, "error": "Team ID is required"}), 400
 
-    team_registration = TeamRegistration.query.filter_by(
-        event=tournament_url, team=team_id, status=RegistrationStatus.CONFIRMED
-    ).first()
-
-    if team_registration:
-        team_registration.status = RegistrationStatus.CANCELLED
-        pseudonym = getattr(team_registration, "pseudonym", None)
-
-        affected_player_ids = [
-            r.player for r in PlayerRegistration.query.filter_by(event=tournament_url, team=team_id).all()
-        ]
-
-        PlayerRegistration.query.filter_by(event=tournament_url, team=team_id).update(
-            {"status": RegistrationStatus.CANCELLED}
-        )
-
-        from app.services.sidecomp_service import SideCompService
-
-        SideCompService.cancel_players_in_event(tournament_url, affected_player_ids)
-
-        from app.services.bracket_cleanup_service import scrub_deleted_teams
-
-        scrub_deleted_teams(
-            tournament_url,
-            [team_id],
-            pseudonyms=[pseudonym] if pseudonym else None,
-        )
-
-        db.session.commit()
-        return (
-            jsonify({"success": True, "message": "Team successfully deregistered"}),
-            200,
-        )
-    else:
-        return (
-            jsonify({"success": False, "error": "Team not found or already deregistered"}),
-            404,
-        )
+    return json_from_result(
+        RegistrationService.deregister_team_as_organizer(
+            Scope.event(tournament_url),
+            team_id,
+            void_entry=request.form.get("void_entry") == "on",
+            actor=current_user,
+        ),
+        ok_to_payload=lambda _: {"message": "Team successfully deregistered"},
+    )
 
 
 @bp.route("/<tournament_url>/deregister-any-player", methods=["POST"])
@@ -381,39 +356,27 @@ def deregister_any_player(tournament_url: str):
 
     Form Data:
         player_id (str): ID of the player to deregister.
+        void_entry (str): ``"on"`` to void the player's paid entry instead of
+            leaving it with them for re-registration.
 
     Returns:
         JSON success or error body.
     """
-    tournament = Tournament.query.filter_by(url=tournament_url).first_or_404()
+    Tournament.query.filter_by(url=tournament_url).first_or_404()
 
     player_id = request.form.get("player_id")
     if not player_id:
         return jsonify({"success": False, "error": "Player ID is required"}), 400
 
-    player_registration = (
-        PlayerRegistration.query.filter_by(event=tournament_url, player=player_id)
-        .filter(PlayerRegistration.status.in_([RegistrationStatus.PENDING_TEAM_APPROVAL, RegistrationStatus.CONFIRMED]))
-        .first()
+    return json_from_result(
+        RegistrationService.deregister_player_as_organizer(
+            Scope.event(tournament_url),
+            player_id,
+            void_entry=request.form.get("void_entry") == "on",
+            actor=current_user,
+        ),
+        ok_to_payload=lambda _: {"message": "Player successfully deregistered"},
     )
-
-    if player_registration:
-        player_registration.status = RegistrationStatus.CANCELLED
-
-        from app.services.sidecomp_service import SideCompService
-
-        SideCompService.cancel_player_registrations_in_event(tournament_url, player_id)
-
-        db.session.commit()
-        return (
-            jsonify({"success": True, "message": "Player successfully deregistered"}),
-            200,
-        )
-    else:
-        return (
-            jsonify({"success": False, "error": "Player not found or already deregistered"}),
-            404,
-        )
 
 
 @bp.route("/<tournament_url>/invitation/<int:invitation_id>/accept", methods=["POST"])
@@ -659,7 +622,12 @@ def league_deregister_team(league_url):
     league, err = require_league(league_url)
     if err:
         return jsonify({"error": "Not found" if err == 404 else "Forbidden"}), err
-    res = RegistrationService.deregister_team(Scope.league(league.url), team_id)
+    res = RegistrationService.deregister_team(
+        Scope.league(league.url),
+        team_id,
+        transfer_to=request.form.get("transfer_to") or None,
+        actor=current_user,
+    )
     return json_from_result(
         res,
         ok_to_payload=lambda _: {"message": "Team deregistered"},
@@ -679,7 +647,12 @@ def league_deregister_player(league_url):
     league, err = require_league(league_url)
     if err:
         return jsonify({"error": "Not found" if err == 404 else "Forbidden"}), err
-    res = RegistrationService.deregister_player(Scope.league(league.url), current_user.id)
+    res = RegistrationService.deregister_player(
+        Scope.league(league.url),
+        current_user.id,
+        transfer_to=request.form.get("transfer_to") or None,
+        actor=current_user,
+    )
     return json_from_result(
         res,
         ok_to_payload=lambda _: {"message": "Player deregistered"},
@@ -908,22 +881,8 @@ def league_mark_team_paid(league_url):
             403,
         )
 
-    reg_id = request.form.get("registration_id")
-    paid = request.form.get("paid") == "on"
-    amount_paid = float(request.form.get("amount_paid") or 0)
-    payment_method = request.form.get("payment_method", "")
-    payment_reference = request.form.get("payment_reference", "")
-    payment_notes = request.form.get("payment_notes", "")
-
-    reg = TeamRegistration.query.filter_by(id=reg_id, league_id=league_url).first_or_404()
-    reg.paid = paid
-    reg.amount_paid = amount_paid
-    reg.payment_method = payment_method
-    reg.payment_reference = payment_reference
-    reg.payment_notes = payment_notes
-    reg.paid_at = now_utc_naive() if paid else None
-    db.session.commit()
-    return jsonify({"success": True, "message": "Team payment updated"}), 200
+    reg = TeamRegistration.query.filter_by(id=request.form.get("registration_id"), league_id=league_url).first_or_404()
+    return _save_manual_payment(reg, "Team payment updated")
 
 
 @bp.route("/leagues/<league_url>/mark-player-paid", methods=["POST"])
@@ -944,22 +903,10 @@ def league_mark_player_paid(league_url):
             403,
         )
 
-    reg_id = request.form.get("registration_id")
-    paid = request.form.get("paid") == "on"
-    amount_paid = float(request.form.get("amount_paid") or 0)
-    payment_method = request.form.get("payment_method", "")
-    payment_reference = request.form.get("payment_reference", "")
-    payment_notes = request.form.get("payment_notes", "")
-
-    reg = PlayerRegistration.query.filter_by(id=reg_id, league_id=league_url).first_or_404()
-    reg.paid = paid
-    reg.amount_paid = amount_paid
-    reg.payment_method = payment_method
-    reg.payment_reference = payment_reference
-    reg.payment_notes = payment_notes
-    reg.paid_at = now_utc_naive() if paid else None
-    db.session.commit()
-    return jsonify({"success": True, "message": "Player payment updated"}), 200
+    reg = PlayerRegistration.query.filter_by(
+        id=request.form.get("registration_id"), league_id=league_url
+    ).first_or_404()
+    return _save_manual_payment(reg, "Player payment updated")
 
 
 @bp.route("/leagues/<league_url>/deregister-any-team", methods=["POST"])
@@ -984,31 +931,14 @@ def league_deregister_any_team(league_url):
     if not team_id:
         return jsonify({"success": False, "error": "Team ID is required"}), 400
 
-    team_registration = TeamRegistration.query.filter_by(
-        league_id=league_url, team=team_id, status=RegistrationStatus.CONFIRMED
-    ).first()
-
-    if team_registration:
-        team_registration.status = RegistrationStatus.CANCELLED
-        pseudonym = getattr(team_registration, "pseudonym", None)
-        PlayerRegistration.query.filter_by(league_id=league_url, team=team_id).update(
-            {"status": RegistrationStatus.CANCELLED}
-        )
-        from app.services.bracket_cleanup_service import scrub_deleted_teams_for_league
-
-        scrub_deleted_teams_for_league(
-            league_url,
-            [team_id],
-            pseudonyms=[pseudonym] if pseudonym else None,
-        )
-        db.session.commit()
-        return (
-            jsonify({"success": True, "message": "Team successfully deregistered"}),
-            200,
-        )
-    return (
-        jsonify({"success": False, "error": "Team not found or already deregistered"}),
-        404,
+    return json_from_result(
+        RegistrationService.deregister_team_as_organizer(
+            Scope.league(league_url),
+            team_id,
+            void_entry=request.form.get("void_entry") == "on",
+            actor=current_user,
+        ),
+        ok_to_payload=lambda _: {"message": "Team successfully deregistered"},
     )
 
 
@@ -1034,22 +964,14 @@ def league_deregister_any_player(league_url):
     if not player_id:
         return jsonify({"success": False, "error": "Player ID is required"}), 400
 
-    player_registration = (
-        PlayerRegistration.query.filter_by(league_id=league_url, player=player_id)
-        .filter(PlayerRegistration.status.in_([RegistrationStatus.PENDING_TEAM_APPROVAL, RegistrationStatus.CONFIRMED]))
-        .first()
-    )
-
-    if player_registration:
-        player_registration.status = RegistrationStatus.CANCELLED
-        db.session.commit()
-        return (
-            jsonify({"success": True, "message": "Player successfully deregistered"}),
-            200,
-        )
-    return (
-        jsonify({"success": False, "error": "Player not found or already deregistered"}),
-        404,
+    return json_from_result(
+        RegistrationService.deregister_player_as_organizer(
+            Scope.league(league_url),
+            player_id,
+            void_entry=request.form.get("void_entry") == "on",
+            actor=current_user,
+        ),
+        ok_to_payload=lambda _: {"message": "Player successfully deregistered"},
     )
 
 

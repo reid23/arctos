@@ -534,22 +534,36 @@ pub async fn mark_player_paid(
     post_form_status(&url, &params).await
 }
 
+fn organizer_deregister_params(id_field: &str, id: &str, void_entry: bool) -> Vec<(String, String)> {
+    let mut params = vec![(id_field.into(), id.to_string())];
+    if void_entry {
+        params.push(("void_entry".into(), "on".into()));
+    }
+    params
+}
+
+fn transfer_params(transfer_to: Option<&str>) -> Vec<(String, String)> {
+    transfer_to
+        .map(|recipient| vec![("transfer_to".into(), recipient.to_string())])
+        .unwrap_or_default()
+}
+
 pub async fn deregister_any_team(
     tournament_url: &str,
     team_id: &str,
+    void_entry: bool,
 ) -> Result<StatusResponse, String> {
-    let params = vec![("team_id".into(), team_id.to_string())];
     let url = format!("{}/_api/{}/deregister-any-team", base(), tournament_url);
-    post_form_status(&url, &params).await
+    post_form_status(&url, &organizer_deregister_params("team_id", team_id, void_entry)).await
 }
 
 pub async fn deregister_any_player(
     tournament_url: &str,
     player_id: &str,
+    void_entry: bool,
 ) -> Result<StatusResponse, String> {
-    let params = vec![("player_id".into(), player_id.to_string())];
     let url = format!("{}/_api/{}/deregister-any-player", base(), tournament_url);
-    post_form_status(&url, &params).await
+    post_form_status(&url, &organizer_deregister_params("player_id", player_id, void_entry)).await
 }
 
 pub async fn register_player(
@@ -588,19 +602,25 @@ pub async fn register_team(
     post_form_status(&url, &params).await
 }
 
-pub async fn deregister_player(tournament_url: &str) -> Result<StatusResponse, String> {
+pub async fn deregister_player(tournament_url: &str, transfer_to: Option<&str>) -> Result<StatusResponse, String> {
     let url = format!("{}/_api/{}/deregister-player", base(), tournament_url);
-    post_form_status(&url, &[]).await
+    post_form_status(&url, &transfer_params(transfer_to)).await
 }
 
-pub async fn deregister_team(tournament_url: &str) -> Result<StatusResponse, String> {
+pub async fn deregister_team(tournament_url: &str, transfer_to: Option<&str>) -> Result<StatusResponse, String> {
     let url = format!("{}/_api/{}/deregister-team", base(), tournament_url);
-    post_form_status(&url, &[]).await
+    post_form_status(&url, &transfer_params(transfer_to)).await
 }
 
-pub async fn deregister_managed_team(tournament_url: &str, team_id: &str) -> Result<StatusResponse, String> {
+pub async fn deregister_managed_team(
+    tournament_url: &str,
+    team_id: &str,
+    transfer_to: Option<&str>,
+) -> Result<StatusResponse, String> {
     let url = format!("{}/_api/{}/deregister-team", base(), tournament_url);
-    post_form_status(&url, &[("team_id".into(), team_id.into())]).await
+    let mut params = transfer_params(transfer_to);
+    params.push(("team_id".into(), team_id.into()));
+    post_form_status(&url, &params).await
 }
 
 pub async fn register_player_as_to(
@@ -863,14 +883,14 @@ pub async fn league_upload_waiver(
     Ok(())
 }
 
-pub async fn league_deregister_team(league_url: &str) -> Result<StatusResponse, String> {
+pub async fn league_deregister_team(league_url: &str, transfer_to: Option<&str>) -> Result<StatusResponse, String> {
     let url = format!("{}/_api/leagues/{}/deregister-team", base(), league_url);
-    post_form_status(&url, &[]).await
+    post_form_status(&url, &transfer_params(transfer_to)).await
 }
 
-pub async fn league_deregister_player(league_url: &str) -> Result<StatusResponse, String> {
+pub async fn league_deregister_player(league_url: &str, transfer_to: Option<&str>) -> Result<StatusResponse, String> {
     let url = format!("{}/_api/leagues/{}/deregister-player", base(), league_url);
-    post_form_status(&url, &[]).await
+    post_form_status(&url, &transfer_params(transfer_to)).await
 }
 
 pub async fn get_my_player_registration_league(
@@ -1051,23 +1071,19 @@ pub async fn league_mark_player_paid(
 pub async fn league_deregister_any_team(
     league_url: &str,
     team_id: &str,
+    void_entry: bool,
 ) -> Result<StatusResponse, String> {
-    let params = vec![("team_id".into(), team_id.to_string())];
     let url = format!("{}/_api/leagues/{}/deregister-any-team", base(), league_url);
-    post_form_status(&url, &params).await
+    post_form_status(&url, &organizer_deregister_params("team_id", team_id, void_entry)).await
 }
 
 pub async fn league_deregister_any_player(
     league_url: &str,
     player_id: &str,
+    void_entry: bool,
 ) -> Result<StatusResponse, String> {
-    let params = vec![("player_id".into(), player_id.to_string())];
-    let url = format!(
-        "{}/_api/leagues/{}/deregister-any-player",
-        base(),
-        league_url
-    );
-    post_form_status(&url, &params).await
+    let url = format!("{}/_api/leagues/{}/deregister-any-player", base(), league_url);
+    post_form_status(&url, &organizer_deregister_params("player_id", player_id, void_entry)).await
 }
 
 pub async fn league_update_settings(
@@ -4172,6 +4188,119 @@ pub async fn create_scheduled_sidecomp(
 pub async fn team_management_get<T: serde::de::DeserializeOwned>(path: &str) -> Result<T, String> {
     let response = with_credentials(client().get(format!("{}/_api/teams/{}", base(), path)))
         .send().await.map_err(|error| error.to_string())?;
+    response_json(response).await
+}
+
+pub async fn paid_entries(team_id: Option<&str>) -> Result<crate::types::PaidEntriesResponse, String> {
+    let mut request = client().get(format!("{}/_api/paid-entries", base()));
+    if let Some(team_id) = team_id {
+        request = request.query(&[("team_id", team_id)]);
+    }
+    let response = with_credentials(request).send().await.map_err(|error| error.to_string())?;
+    response_json(response).await
+}
+
+/// `action` is `transfer`, `revoke`, or `decline`.
+pub async fn paid_entry_action(entry_id: u32, action: &str, body: &serde_json::Value) -> Result<StatusResponse, String> {
+    let url = format!("{}/_api/paid-entries/{}/{}", base(), entry_id, action);
+    let response = with_credentials(client().post(url).json(body)).send().await.map_err(|error| error.to_string())?;
+    response_json(response).await
+}
+
+pub async fn payout_account() -> Result<crate::types::PayoutAccountResponse, String> {
+    let response = with_credentials(client().get(format!("{}/_api/payments/payout-account", base())))
+        .send().await.map_err(|error| error.to_string())?;
+    response_json(response).await
+}
+
+#[derive(serde::Deserialize)]
+struct UrlResponse {
+    url: String,
+}
+
+#[derive(serde::Deserialize)]
+struct PayoutAccountRefresh {
+    account: crate::types::PayoutAccount,
+}
+
+/// A link to Stripe's hosted onboarding for the signed-in player.
+pub async fn payout_onboarding_url() -> Result<String, String> {
+    let url = format!("{}/_api/payments/payout-account/onboarding", base());
+    let response = with_credentials(client().post(url)).send().await.map_err(|error| error.to_string())?;
+    response_json::<UrlResponse>(response).await.map(|link| link.url)
+}
+
+pub async fn refresh_payout_account() -> Result<crate::types::PayoutAccount, String> {
+    let url = format!("{}/_api/payments/payout-account/refresh", base());
+    let response = with_credentials(client().post(url)).send().await.map_err(|error| error.to_string())?;
+    response_json::<PayoutAccountRefresh>(response).await.map(|refreshed| refreshed.account)
+}
+
+/// `scope_kind` is `events` or `leagues`.
+pub async fn online_payment_settings(scope_kind: &str, slug: &str) -> Result<crate::types::OnlinePaymentSettings, String> {
+    let url = format!("{}/_api/payments/settings/{}/{}", base(), scope_kind, urlencoding::encode(slug));
+    let response = with_credentials(client().get(url)).send().await.map_err(|error| error.to_string())?;
+    response_json(response).await
+}
+
+pub async fn update_online_payment_settings(
+    scope_kind: &str,
+    slug: &str,
+    enabled: bool,
+    payout_account_id: Option<u32>,
+) -> Result<crate::types::OnlinePaymentSettings, String> {
+    let url = format!("{}/_api/payments/settings/{}/{}", base(), scope_kind, urlencoding::encode(slug));
+    let body = serde_json::json!({"enabled": enabled, "payout_account_id": payout_account_id});
+    let response = with_credentials(client().put(url).json(&body)).send().await.map_err(|error| error.to_string())?;
+    response_json(response).await
+}
+
+/// `registrant` is `team` or `player`; `team_id` picks a managed team.
+pub async fn checkout_options(
+    scope_kind: &str,
+    slug: &str,
+    registrant: &str,
+    team_id: Option<&str>,
+) -> Result<crate::types::CheckoutOptions, String> {
+    let mut url = format!(
+        "{}/_api/payments/checkout/{}/{}?registrant={}",
+        base(),
+        scope_kind,
+        urlencoding::encode(slug),
+        registrant
+    );
+    if let Some(team_id) = team_id {
+        url.push_str(&format!("&team_id={}", urlencoding::encode(team_id)));
+    }
+    let response = with_credentials(client().get(url)).send().await.map_err(|error| error.to_string())?;
+    response_json(response).await
+}
+
+/// Starts a Stripe checkout and returns its URL. `form` holds the
+/// registration fields, which are ignored when paying for an existing
+/// registration.
+pub async fn start_checkout(
+    scope_kind: &str,
+    slug: &str,
+    registrant: &str,
+    team_id: Option<&str>,
+    form: serde_json::Value,
+    return_path: &str,
+) -> Result<String, String> {
+    let url = format!("{}/_api/payments/checkout/{}/{}", base(), scope_kind, urlencoding::encode(slug));
+    let body = serde_json::json!({
+        "registrant": registrant,
+        "team_id": team_id,
+        "form": form,
+        "return_path": return_path,
+    });
+    let response = with_credentials(client().post(url).json(&body)).send().await.map_err(|error| error.to_string())?;
+    response_json::<UrlResponse>(response).await.map(|checkout| checkout.url)
+}
+
+pub async fn sync_checkout(session_id: &str) -> Result<crate::types::CheckoutStatus, String> {
+    let url = format!("{}/_api/payments/checkouts/{}/sync", base(), urlencoding::encode(session_id));
+    let response = with_credentials(client().post(url)).send().await.map_err(|error| error.to_string())?;
     response_json(response).await
 }
 

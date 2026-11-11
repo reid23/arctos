@@ -39,6 +39,8 @@ never both. Examples:
 - `Tournament(league_id, registrable_config_id)` - exactly one is non-null.
 - `TeamRegistration(event, league_id)` - exactly one is non-null.
 - `PlayerRegistration(event, league_id)` - same.
+- `PaidEntry(event, league_id)` - same. Its `status` is `APPLIED` exactly when it
+  points at a registration.
 - `PenaltyType(event, league_id)` - same.
 - `TO(event, league_id)` - same.
 
@@ -116,6 +118,14 @@ db.session.commit()
 `Numeric(10, 2)`. IEEE-754 floats can't represent `$10.00` exactly;
 reconciling many partial payments accumulates rounding error. Stay in
 `Decimal`.
+
+Online payments go to the `PayoutAccount` (a player's Stripe connected
+account) attached as `RegistrableConfig.payout_account_id`. Its status
+flags mirror Stripe and are written only by `payout_account_service`.
+A `CheckoutHold` tracks one Stripe Checkout Session, keeping the
+registration form until payment completes; `checkout_service` writes it.
+A Stripe `Payment` belongs to the entry it bought, not to a registration,
+so a registration's `payments` are only an organizer's manual records.
 
 ## Times
 

@@ -38,6 +38,8 @@ and fill only the values you need.
 : Trusted canonical origin, such as `https://arctos.example.org`. Accepts an
   HTTP(S) origin with a host; credentials, paths, queries, and fragments are
   rejected. Canonical and Open Graph URLs are generated when configured.
+  Stripe onboarding also returns players to this origin; without it, Arctos
+  uses the request's host, which is Flask's address behind `dx serve`.
 
 `ARCTOS_PUBLIC_CALENDAR_TIMEZONE`
 : (default `UTC`) IANA timezone for Upcoming/Past filtering when the request
@@ -137,6 +139,57 @@ incoming request host. If the same server
 is reachable on multiple public domains, add each domain's
 `/_api/auth/google/callback` URL to the authorized redirect URIs in Google
 Cloud Console. Forwarded host headers are not trusted to choose this URL.
+
+
+## Stripe online payments
+
+Online payments are hidden unless `STRIPE_SECRET_KEY` is set. Organizers'
+payout accounts are Stripe Accounts v2 accounts with Managed Risk: Stripe
+charges its fees to the organizer's account and absorbs losses it can't
+recover from them. Organizers manage their accounts in the full Stripe
+Dashboard.
+
+`STRIPE_SECRET_KEY`
+: Platform secret key, `sk_test_...` or `sk_live_...`.
+
+`STRIPE_ACCOUNT_WEBHOOK_SECRET`
+: Signing secret (`whsec_...`) of an event destination for your account's
+  thin events, at `/_api/payments/webhooks/accounts`. Send it
+  `v2.core.account[configuration.merchant].capability_status_updated` and
+  `v2.core.account[requirements].updated`. Locally, this prints one:
+
+  ```sh
+  stripe listen \
+    --events 'v2.core.account[configuration.merchant].capability_status_updated,v2.core.account[requirements].updated' \
+    --forward-to localhost:5006/_api/payments/webhooks/accounts
+  ```
+
+`STRIPE_CHECKOUT_WEBHOOK_SECRET`
+: Signing secret of a Connect webhook endpoint (events from connected
+  accounts, as snapshots) at `/_api/payments/webhooks/checkout`. Send it
+  `checkout.session.completed`, `checkout.session.expired`,
+  `checkout.session.async_payment_succeeded`, and
+  `checkout.session.async_payment_failed`. Registration payments are
+  direct charges on the organizer's account, so these events come from
+  that account, not yours. The CLI can't forward thin and snapshot events
+  from one listener; run a second one. It prints the same secret as the
+  first:
+
+  ```sh
+  stripe listen \
+    --events 'checkout.session.completed,checkout.session.expired,checkout.session.async_payment_succeeded,checkout.session.async_payment_failed' \
+    --events-from @accounts \
+    --forward-to localhost:5006/_api/payments/webhooks/checkout
+  ```
+
+  The payer's return page also confirms payment with Stripe, so
+  registration completes without the webhook; the webhook covers payers
+  who close the tab and payments that settle later.
+
+`STRIPE_PLATFORM_FEE_BPS`
+: Arctos's application fee on each registration payment, in basis points
+  (`250` is 2.5%). Defaults to `0`. Stripe's own fees are charged to the
+  organizer either way.
 
 
 ## Sign in with Arctos

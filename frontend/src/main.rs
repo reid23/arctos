@@ -229,6 +229,9 @@ enum Route {
     #[route("/thanks")]
     Thanks {},
 
+    #[route("/checkout/:session_id")]
+    CheckoutReturn { session_id: String },
+
     #[route("/docs.md")]
     Docs {},
 

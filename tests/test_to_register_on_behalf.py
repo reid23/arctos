@@ -179,8 +179,6 @@ def test_checkin_reuses_cancelled_row(checkin_tournament, to_player, target_play
         jersey_number="",
         jersey_name="",
         status=RegistrationStatus.CANCELLED,
-        paid=False,
-        amount_paid=0,
     )
     db.session.add(cancelled)
     db.session.commit()
@@ -469,8 +467,6 @@ def test_register_team_reuses_cancelled_row(checkin_tournament, to_player, test_
         team=target_team.id,
         pseudonym="Old Name",
         status=TeamRegistrationStatus.CANCELLED,
-        paid=False,
-        amount_paid=0,
     )
     db.session.add(cancelled)
     db.session.commit()

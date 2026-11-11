@@ -57,8 +57,53 @@ The registration service provides the following key methods:
 - **`register_player(tournament_url, player_id, team_id=None, ...)`** — Register a
   player to a tournament (optionally under a team). Returns `PENDING_TEAM_APPROVAL`
   or `CONFIRMED` depending on config.
-- **`register_player_as_to(tournament_url, *, actor_user_id, actor_user_type, player_id, team_id=None, ...)`** — Register a player on behalf of a TO. The actor must be a TO for the tournament. Always returns a `CONFIRMED`, fully-paid `PlayerRegistration` with `paid=True, amount_paid=0`. Existing `CANCELLED`/`REJECTED` registrations for the same (tournament, player) are reused; existing `CONFIRMED` rows return a duplicate-error. Rejects historical tournaments, whose rosters are managed by `HistoricalClaimsService`.
-- **`register_team_as_to(tournament_url, *, actor_user_id, actor_user_type, team_id, pseudonym="")`** - Register a team on behalf of a TO. The actor must be a TO for the tournament. Returns a CONFIRMED, fully-paid `TeamRegistration` with `paid=True, amount_paid=0`. Honors `n_max_teams` (error message includes the count and limit). Existing `CANCELLED` rows for the same (tournament, team) are reused; existing `CONFIRMED` rows return a duplicate-error. Rejects historical tournaments, whose teams are added by `HistoricalRecordsService`.
+- **`register_player_as_to(tournament_url, *, actor_user_id, actor_user_type, player_id, team_id=None, ...)`** — Register a player on behalf of a TO. The actor must be a TO for the tournament. Always returns a `CONFIRMED`, paid `PlayerRegistration`, covered by the player's own paid entry or a new `ORGANIZER` one. Existing `CANCELLED`/`REJECTED` registrations for the same (tournament, player) are reused; existing `CONFIRMED` rows return a duplicate-error. Rejects historical tournaments, whose rosters are managed by `HistoricalClaimsService`.
+- **`register_team_as_to(tournament_url, *, actor_user_id, actor_user_type, team_id, pseudonym="")`** - Register a team on behalf of a TO. The actor must be a TO for the tournament. Returns a CONFIRMED, paid `TeamRegistration`, covered like `register_player_as_to`. Honors `n_max_teams` (error message includes the count and limit). Existing `CANCELLED` rows for the same (tournament, team) are reused; existing `CONFIRMED` rows return a duplicate-error. Rejects historical tournaments, whose teams are added by `HistoricalRecordsService`.
+- **`deregister_team(scope, team_id, *, transfer_to=None, actor=None)`** / **`deregister_player(scope, player_id, *, transfer_to=None, actor=None)`** — Cancel the caller's own registration. The paid entry stays with the holder for re-registration, or moves to `transfer_to`. A team's roster stays registered as unattached players.
+- **`deregister_team_as_organizer(scope, team_id, *, void_entry, actor)`** / **`deregister_player_as_organizer(...)`** — Cancel any registration; the route checks organizer rights. The entry stays with the registrant unless `void_entry` is set.
+
+## Paid entries
+
+`paid_entry_service` is the only writer of `PaidEntry` and `PaidEntryEvent`. A
+registration is paid exactly when an `APPLIED` entry covers it; `paid`,
+`amount_paid`, and `paid_at` on registrations are read-only properties.
+
+`payout_account_service` mirrors players' Stripe connected accounts
+(`PayoutAccount`) and attaches them to registration configs. Stripe calls go
+through `app.utils.stripe_gateway`, which is `None` without
+`STRIPE_SECRET_KEY`; tests install a fake gateway in `app.extensions`.
+
+- `cover_registration(registration, *, source_if_new, actor=None)` applies the
+  holder's entry for the scope, or creates one from `source_if_new`. Every
+  registration path calls it.
+- `release_registration` returns the entry to its holder as `AVAILABLE` when
+  they deregister.
+- `transfer_entry`, `revoke_transfer`, and `decline_transfer` move an entry that
+  isn't covering a registration. A recipient who is already registered and unpaid
+  is covered at once. A team entry transferred at deregistration keeps its place
+  under `n_max_teams` until claimed or returned.
+- `record_manual_payment` applies an organizer's mark-paid edit.
+- `delete_for_scope` runs before an event's or league's registrations are deleted.
+
+A holder has at most one non-voided entry per scope. Functions flush but never
+commit.
+
+`checkout_service` sells entries through Stripe Checkout. When a config
+takes online payments and charges a fee, `register_team` and
+`register_player` refuse a registrant without an entry
+(`require_payment_settled`); TO registration on someone's behalf is
+unaffected.
+
+- `start_checkout` validates the registration form, expires the
+  registrant's previous checkout, and creates a session as a direct charge
+  on the organizer's payout account plus a `CheckoutHold`. An open hold for
+  a new team registration takes a place under `n_max_teams` until it
+  expires. A registrant with an unpaid registration pays for it instead
+  ("pay now").
+- `fulfill` runs from the checkout webhook and from the return page
+  (`sync`), once per hold. It commits the `Payment` and a `STRIPE` entry,
+  then registers with the kept form, even if registration has closed. If
+  registration fails, the entry stays `AVAILABLE` and the hold records why.
 
 ## Team roster changes
 
@@ -79,7 +124,7 @@ players require open player registration; pending requests remain reviewable aft
 registration closes. Adding and approving players respect the roster limit, with
 writes serialized per team to keep concurrent approvals within capacity.
 
-The service preserves payment, waiver, and jersey details. It commits a successful
+The service preserves paid entries, waiver, and jersey details. It commits a successful
 change and returns `Ok(None)`, or returns `Err(ArctosError)` for a rejected action.
 
 ## Conventions

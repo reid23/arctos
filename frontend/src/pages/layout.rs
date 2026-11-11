@@ -154,6 +154,7 @@ fn page_title_for_route(route: &Route) -> String {
         Route::Privacy { .. } => "Privacy Policy".into(),
         Route::Terms { .. } => "Terms".into(),
         Route::Thanks { .. } => "Thanks".into(),
+        Route::CheckoutReturn { .. } => "Registration payment".into(),
         Route::License { .. } => "License".into(),
         Route::ArctosScheduleScript { .. } => "Arctos Schedule Script".into(),
         Route::DataAccessibilityGuide { .. } => "Data Accessibility Guide".into(),

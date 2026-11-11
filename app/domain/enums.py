@@ -93,6 +93,50 @@ class TeamRegistrationStatus(StrEnum):
     PENDING = "PENDING"
 
 
+class PaidEntryStatus(StrEnum):
+    """Lifecycle status of a :class:`~app.models.payments.PaidEntry`."""
+
+    # Covering the holder's registration.
+    APPLIED = "APPLIED"
+    # Held but not covering a registration: the holder deregistered, or the
+    # entry was transferred to them and they have not registered yet.
+    AVAILABLE = "AVAILABLE"
+    # No longer grants a registration (refunded, or revoked by an organizer).
+    VOIDED = "VOIDED"
+
+
+class PaidEntrySource(StrEnum):
+    """How a :class:`~app.models.payments.PaidEntry` came to exist."""
+
+    MANUAL = "MANUAL"
+    ORGANIZER = "ORGANIZER"
+    FREE = "FREE"
+    STRIPE = "STRIPE"
+
+
+class CheckoutHoldStatus(StrEnum):
+    """Lifecycle status of a :class:`~app.models.payments.CheckoutHold`."""
+
+    # The Stripe Checkout Session may still be paid.
+    OPEN = "OPEN"
+    # Paid; the payment and entry are recorded.
+    COMPLETED = "COMPLETED"
+    # Stripe expired the session, or its payment failed. Nothing was charged.
+    EXPIRED = "EXPIRED"
+
+
+class PaidEntryAction(StrEnum):
+    """Kinds of :class:`~app.models.payments.PaidEntryEvent` history rows."""
+
+    CREATED = "CREATED"
+    APPLIED = "APPLIED"
+    RELEASED = "RELEASED"
+    TRANSFERRED = "TRANSFERRED"
+    TRANSFER_REVOKED = "TRANSFER_REVOKED"
+    TRANSFER_DECLINED = "TRANSFER_DECLINED"
+    VOIDED = "VOIDED"
+
+
 class MatchStatus(StrEnum):
     """Match statuses.
     NOT_STARTED: initial state

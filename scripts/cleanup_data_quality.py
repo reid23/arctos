@@ -182,7 +182,7 @@ class DedupeRule:
             to this table when one of the rows being deleted has children.
 
             * ``"leaf"`` — no FK children expected. Direct DELETE works.
-              If the script discovers child rows at runtime, it bails and
+              If any duplicate row has child rows at runtime, it bails and
               warns rather than silently orphaning them.
             * ``"reassign"`` — reassign every child row's FK to the keeper
               row before deleting the duplicate. Safe for join-table-like
@@ -462,13 +462,26 @@ def delete_duplicate_rows(engine: Engine, apply: bool) -> dict[str, int]:
                         )
 
             elif rule.child_handling == "leaf":
-                children = _incoming_fk_columns(engine, rule.table)
-                if children:
+                referencing_columns = []
+                for child_table, child_column in _incoming_fk_columns(engine, rule.table):
+                    for chunk_start in range(0, len(ids_to_delete), 500):
+                        chunk = ids_to_delete[chunk_start : chunk_start + 500]
+                        placeholders = ", ".join(f":id{i}" for i in range(len(chunk)))
+                        referenced = conn.execute(
+                            sa.text(
+                                f"SELECT 1 FROM {child_table} "  # noqa: S608
+                                f"WHERE {child_column} IN ({placeholders}) LIMIT 1"
+                            ),
+                            {f"id{i}": v for i, v in enumerate(chunk)},
+                        ).first()
+                        if referenced:
+                            referencing_columns.append(f"{child_table}.{child_column}")
+                            break
+                if referencing_columns:
                     print(
-                        f"  WARN {key}: declared as 'leaf' but discovered {len(children)} "
-                        f"incoming FK reference(s) ({', '.join(f'{t}.{c}' for t, c in children)}). "
-                        "Skipping to avoid orphaning child rows. Update the rule's "
-                        "child_handling to 'reassign' if appropriate."
+                        f"  WARN {key}: declared as 'leaf' but duplicate rows are referenced by "
+                        f"{', '.join(referencing_columns)}. Skipping to avoid orphaning child rows. "
+                        "Update the rule's child_handling to 'reassign' if appropriate."
                     )
                     deleted[key] = 0
                     continue

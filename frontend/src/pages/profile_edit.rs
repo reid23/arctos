@@ -1,6 +1,6 @@
 use crate::api;
 use crate::form_validation::{described_by, field_message, FieldError};
-use crate::components::{ChangePasswordCard, ConnectedAppsCard, ImageDraft, Modal, ModalKind, PlayerPompfen, ProfileBio, ProfileImageControls, ProfileImageEditor};
+use crate::components::{ChangePasswordCard, ConnectedAppsCard, ImageDraft, Modal, ModalKind, PayoutAccountCard, PlayerPompfen, ProfileBio, ProfileImageControls, ProfileImageEditor};
 use crate::Route;
 use dioxus::prelude::*;
 
@@ -136,6 +136,9 @@ fn ProfileEditForm(account_id: String, team: bool, data: ProfileEditData) -> Ele
         else { Route::PlayerProfilePage { id: account_id.clone() } };
     let discard_route = profile_route.clone();
     let save_route = profile_route.clone();
+    let returning_from_stripe = use_hook(|| {
+        !team && crate::initial_fragment(&format!("/players/{account_id}/edit")).as_deref() == Some("#payouts")
+    });
     let save_id = account_id.clone();
     let onsubmit = move |event: Event<FormData>| {
         event.prevent_default();
@@ -295,9 +298,10 @@ fn ProfileEditForm(account_id: String, team: bool, data: ProfileEditData) -> Ele
                     }
                 }
             }
-            if data.owns_account { details { class: "profile-account-settings",
+            if data.owns_account { details { class: "profile-account-settings", open: returning_from_stripe,
                 summary { "Account settings" }
                 if data.has_password { ChangePasswordCard {} }
+                if !team { PayoutAccountCard {} }
                 ConnectedAppsCard {}
             } }
         }

@@ -264,7 +264,21 @@ Here's, briefly, how it works.
      - As teams and/or players submit their registration payments, TOs
        mark them paid (optionally notating the amount paid) on the
        registration management page.
-     - TOs may deregister players and/or teams as they see fit
+     - TOs may deregister players and/or teams as they see fit. A
+       deregistered team or player keeps their paid entry unless the TO
+       voids it.
+  7. Teams and players who can no longer attend may deregister
+     - their paid entry stays with them, so they can register again
+       later without paying
+     - or they can transfer the entry to another team or player, who
+       registers as usual and shows as paid. A player who receives an
+       entry still needs the team's approval to join it.
+     - an entry transferred by a team that deregisters keeps its place
+       under the team limit for the recipient
+     - an unclaimed transfer can be taken back by the sender or
+       declined by the recipient
+     - when a team deregisters, its players stay registered as
+       unattached free mercs
 
 
 #### ON THE DAY OF

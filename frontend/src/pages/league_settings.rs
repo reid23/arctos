@@ -1,5 +1,5 @@
 use crate::api;
-use crate::components::{BannerAccountKind, BannerUpload, EventBannerPhoto, LeaguePenaltyTypesTable, SettingsSaveActions, SettingsSaveJump, ToolPageHeader};
+use crate::components::{BannerAccountKind, BannerUpload, EventBannerPhoto, LeaguePenaltyTypesTable, OnlinePaymentsCard, SettingsSaveActions, SettingsSaveJump, ToolPageHeader};
 use crate::types::ToEntry;
 use crate::Route;
 use dioxus::prelude::*;
@@ -435,6 +435,7 @@ pub fn LeagueSettings(league_url: String) -> Element {
 
                 }
                 div { class: "col-12",
+            OnlinePaymentsCard { scope_kind: "leagues".to_string(), slug: league_url.clone() }
             LeaguePenaltyTypesTable {
                 penalty_types: d.penalty_types.clone(),
                 league_url: league_url.clone(),

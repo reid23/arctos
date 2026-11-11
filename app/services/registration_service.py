@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import select
 
-from app.domain.enums import MatchStatus, RegistrationStatus, TeamRegistrationStatus
+from app.domain.enums import MatchStatus, PaidEntrySource, RegistrationStatus, TeamRegistrationStatus, UserType
 from app.error_values import Err, Ok, Result, Some, allow_Q
 from app.exceptions import (
     ArctosError,
@@ -20,6 +20,7 @@ from app.exceptions import (
     UnauthorizedError,
     ValidationError,
 )
+from app.services import paid_entry_service
 from app.utils.name_validation import team_pseudonym_char_error
 from app.utils.datetime_helpers import now_utc_naive
 from app.services._common import Scope
@@ -75,6 +76,23 @@ class RegistrationService:
                 return Ok(ScopeContext(scope=scope, parent=tournament, cfg=cfg))
             case Err(_) as err:
                 return err
+
+    @staticmethod
+    def _taken_team_places(scope: Scope, parent, team_id: str) -> int:
+        """Confirmed teams plus places held for other teams' unclaimed transfers and open checkouts."""
+        from app.services import checkout_service
+        from models import TeamRegistration
+
+        if scope.is_event and getattr(parent, "league_id", None):
+            # League tournaments count against the league's registrations.
+            scope = Scope.league(parent.league_id)
+        filters = {"league_id": scope.league_url} if scope.is_league else {"event": scope.event_url}
+        confirmed_count = TeamRegistration.query.filter_by(**filters, status=TeamRegistrationStatus.CONFIRMED).count()
+        return (
+            confirmed_count
+            + paid_entry_service.reserved_team_slots(scope, excluding_team=team_id)
+            + checkout_service.held_team_places(scope, excluding_team=team_id)
+        )
 
     @staticmethod
     def _get_tournament(tournament_url: str) -> Result["Tournament", ArctosError]:
@@ -147,7 +165,11 @@ class RegistrationService:
         team_id: str,
         pseudonym: str,
         shortname: str | None = None,
+        *,
+        allow_closed_registration: bool = False,
     ) -> Result["TeamRegistration", ArctosError]:
+        """Register *team_id*. ``allow_closed_registration`` is for checkouts paid before registration closed."""
+        from app.services import checkout_service
         from models import TeamRegistration, db
 
         match RegistrationService._load_scope_context(scope):
@@ -159,7 +181,9 @@ class RegistrationService:
         cfg = ctx.cfg
         scope_label = "league" if scope.is_league else "tournament"
 
-        if scope.is_league:
+        if allow_closed_registration:
+            pass
+        elif scope.is_league:
             rc = cfg
             if not (rc and rc.team_registration_open):
                 return Err(RegistrationClosedError(f"Registration is not open for this {scope_label}"))
@@ -178,9 +202,10 @@ class RegistrationService:
             existing_reg = TeamRegistration.query.filter_by(league_id=scope.league_url, team=team_id).first()
         else:
             existing_reg = TeamRegistration.query.filter_by(event=scope.event_url, team=team_id).first()
+        if existing_reg and existing_reg.status != TeamRegistrationStatus.CANCELLED:
+            return Err(ValidationError(f"Your team is already registered for this {scope_label}"))
+        checkout_service.require_payment_settled(scope, cfg, UserType.TEAM, team_id).Q()
         if existing_reg:
-            if existing_reg.status != TeamRegistrationStatus.CANCELLED:
-                return Err(ValidationError(f"Your team is already registered for this {scope_label}"))
             team_registration = existing_reg
             team_registration.pseudonym = pseudonym
             team_registration.shortname = normalised_shortname
@@ -213,32 +238,15 @@ class RegistrationService:
                 db.session.flush()  # row visible to the recount
 
                 if n_max is not None:
-                    if scope.is_league:
-                        confirmed_count = TeamRegistration.query.filter_by(
-                            league_id=scope.league_url,
-                            status=TeamRegistrationStatus.CONFIRMED,
-                        ).count()
-                    elif getattr(ctx.parent, "league_id", None):
-                        # For league tournaments, team registrations are stored on league_id.
-                        confirmed_count = TeamRegistration.query.filter_by(
-                            league_id=ctx.parent.league_id,
-                            status=TeamRegistrationStatus.CONFIRMED,
-                        ).count()
-                    else:
-                        confirmed_count = TeamRegistration.query.filter_by(
-                            event=scope.event_url,
-                            status=TeamRegistrationStatus.CONFIRMED,
-                        ).count()
-                    if confirmed_count >= n_max:
-                        raise _CapExceeded(n_max=n_max, confirmed_count=confirmed_count)
+                    taken = RegistrationService._taken_team_places(scope, ctx.parent, team_id)
+                    if taken >= n_max:
+                        raise _CapExceeded(n_max=n_max, confirmed_count=taken)
 
                 team_registration.status = TeamRegistrationStatus.CONFIRMED
-
-                # Auto-mark as paid if registration fee is zero
-                if not cfg or not cfg.team_reg_fee or cfg.team_reg_fee == 0:
-                    team_registration.paid = True
-                    team_registration.amount_paid = 0.0
-                    team_registration.paid_at = now_utc_naive()
+                paid_entry_service.cover_registration(
+                    team_registration,
+                    source_if_new=None if cfg and cfg.team_reg_fee else PaidEntrySource.FREE,
+                )
         except _CapExceeded as exc:
             return Err(ValidationError(f"Maximum number of teams ({exc.n_max}) already registered"))
 
@@ -255,7 +263,17 @@ class RegistrationService:
         jersey_number: str = "",
         jersey_name: str = "",
         waiver_legal_name_signature: str = "",
+        signed_waiver_sha256: str | None = None,
+        allow_closed_registration: bool = False,
     ) -> Result["PlayerRegistration", ArctosError]:
+        """Register *player_id*, pending *team_id*'s approval when given.
+
+        ``signed_waiver_sha256`` is the waiver the player signed earlier, for
+        checkouts; registration fails if the waiver has changed since.
+        ``allow_closed_registration`` is for checkouts paid before
+        registration closed.
+        """
+        from app.services import checkout_service
         from models import PlayerRegistration, db
 
         match RegistrationService._load_scope_context(scope):
@@ -267,7 +285,9 @@ class RegistrationService:
         cfg = ctx.cfg
         scope_label = "league" if scope.is_league else "tournament"
 
-        if scope.is_league:
+        if allow_closed_registration:
+            pass
+        elif scope.is_league:
             rc = cfg
             if not (rc and rc.player_registration_open):
                 return Err(RegistrationClosedError(f"Registration is not open for this {scope_label}"))
@@ -284,12 +304,10 @@ class RegistrationService:
 
         # Enforce exactly one PlayerRegistration row per (scope, player).
         # If a player was previously rejected/cancelled, allow resubmission by updating that row.
+        if existing_reg and existing_reg.status not in (RegistrationStatus.REJECTED, RegistrationStatus.CANCELLED):
+            return Err(ValidationError(f"You already have a registration for this {scope_label}"))
+        checkout_service.require_payment_settled(scope, cfg, UserType.PLAYER, player_id).Q()
         if existing_reg:
-            if existing_reg.status not in (
-                RegistrationStatus.REJECTED,
-                RegistrationStatus.CANCELLED,
-            ):
-                return Err(ValidationError(f"You already have a registration for this {scope_label}"))
             player_registration = existing_reg
             player_registration.team = team_id
             player_registration.jersey_number = jersey_number or ""
@@ -316,12 +334,6 @@ class RegistrationService:
                     status=status,
                 )
 
-        # Auto-mark as paid if registration fee is zero
-        if not cfg or not cfg.player_reg_fee or cfg.player_reg_fee == 0:
-            player_registration.paid = True
-            player_registration.amount_paid = 0.0
-            player_registration.paid_at = now_utc_naive()
-
         # If a waiver is configured, players must sign it.
         waiver_filepath = getattr(cfg, "waiver_filepath", None) if cfg else None
         if waiver_filepath:
@@ -331,6 +343,8 @@ class RegistrationService:
             current_waiver_sha = getattr(cfg, "waiver_sha256", None)
             if not current_waiver_sha:
                 return Err(ValidationError("Waiver is missing its checksum"))
+            if signed_waiver_sha256 is not None and signed_waiver_sha256 != current_waiver_sha:
+                return Err(ValidationError("The waiver changed after you signed it. Sign the new waiver to register."))
 
             now = now_utc_naive()
             player_registration.waiver_legal_name_signature = signature
@@ -338,6 +352,10 @@ class RegistrationService:
             player_registration.waiver_signature_submitted_at = now
 
         db.session.add(player_registration)
+        paid_entry_service.cover_registration(
+            player_registration,
+            source_if_new=None if cfg and cfg.player_reg_fee else PaidEntrySource.FREE,
+        )
 
         db.session.commit()
         return Ok(player_registration)
@@ -420,9 +438,6 @@ class RegistrationService:
             registration.jersey_number = jersey_number_value
             registration.jersey_name = jersey_name_value
             registration.status = RegistrationStatus.CONFIRMED
-            registration.paid = True
-            registration.amount_paid = 0
-            registration.paid_at = now
         else:
             registration = PlayerRegistration(
                 event=tournament_url,
@@ -431,9 +446,6 @@ class RegistrationService:
                 jersey_number=jersey_number_value,
                 jersey_name=jersey_name_value,
                 status=RegistrationStatus.CONFIRMED,
-                paid=True,
-                amount_paid=0,
-                paid_at=now,
             )
             db.session.add(registration)
         if waiver_signature_data is not None:
@@ -441,6 +453,7 @@ class RegistrationService:
             registration.waiver_legal_name_signature = sig
             registration.waiver_legal_name_signature_sha256 = sha
             registration.waiver_signature_submitted_at = ts
+        paid_entry_service.cover_registration(registration, source_if_new=PaidEntrySource.ORGANIZER, actor=actor)
         db.session.commit()
         return Ok(registration)
 
@@ -489,8 +502,6 @@ class RegistrationService:
         cfg = get_registrable_config(tournament)
         n_max = getattr(cfg, "n_max_teams", None) if cfg else None
 
-        now = now_utc_naive()
-
         existing_reg = TeamRegistration.query.filter_by(event=tournament_url, team=team_id).first()
         if existing_reg and existing_reg.status != TeamRegistrationStatus.CANCELLED:
             return Err(ValidationError("This team is already registered"))
@@ -513,25 +524,16 @@ class RegistrationService:
                 db.session.flush()
 
                 if n_max is not None:
-                    if getattr(tournament, "league_id", None):
-                        confirmed_count = TeamRegistration.query.filter_by(
-                            league_id=tournament.league_id,
-                            status=TeamRegistrationStatus.CONFIRMED,
-                        ).count()
-                    else:
-                        confirmed_count = TeamRegistration.query.filter_by(
-                            event=tournament_url,
-                            status=TeamRegistrationStatus.CONFIRMED,
-                        ).count()
-                    if confirmed_count >= n_max:
-                        raise _CapExceeded(n_max=n_max, confirmed_count=confirmed_count)
+                    taken = RegistrationService._taken_team_places(Scope.event(tournament_url), tournament, team_id)
+                    if taken >= n_max:
+                        raise _CapExceeded(n_max=n_max, confirmed_count=taken)
 
                 registration.pseudonym = pseudonym_value
                 registration.shortname = normalised_shortname
                 registration.status = TeamRegistrationStatus.CONFIRMED
-                registration.paid = True
-                registration.amount_paid = 0
-                registration.paid_at = now
+                paid_entry_service.cover_registration(
+                    registration, source_if_new=PaidEntrySource.ORGANIZER, actor=actor
+                )
         except _CapExceeded as exc:
             return Err(ValidationError(f"Maximum teams reached ({exc.confirmed_count}/{exc.n_max})"))
 
@@ -540,8 +542,19 @@ class RegistrationService:
 
     @staticmethod
     @allow_Q
-    def deregister_team(scope: Scope, team_id: str) -> Result[None, ArctosError]:
-        from models import Match, TeamRegistration, PlayerRegistration, db
+    def deregister_team(
+        scope: Scope,
+        team_id: str,
+        *,
+        transfer_to: str | None = None,
+        actor=None,
+    ) -> Result[None, ArctosError]:
+        """Cancel a team's own registration; its roster stays registered, unattached.
+
+        The team keeps its paid entry for re-registration, or passes it to
+        *transfer_to* along with its place under the team cap.
+        """
+        from models import Match, TeamRegistration, db
 
         match RegistrationService._load_scope_context(scope):
             case Ok(ctx):
@@ -591,13 +604,48 @@ class RegistrationService:
         if in_progress:
             return Err(ValidationError("Cannot deregister once your team has played in a match that is in progress."))
 
-        team_registration.status = RegistrationStatus.CANCELLED
-        pseudonym = getattr(team_registration, "pseudonym", None)
+        match RegistrationService._pass_on_entry(
+            team_registration, transfer_to=transfer_to, reserve_team_slot=True, actor=actor
+        ):
+            case Err(_) as err:
+                db.session.rollback()
+                return err
+        RegistrationService._cancel_team_registration(scope, team_registration)
+        db.session.commit()
+        return Ok(None)
+
+    @staticmethod
+    def _pass_on_entry(
+        registration,
+        *,
+        transfer_to: str | None,
+        reserve_team_slot: bool,
+        actor,
+    ) -> Result[None, ArctosError]:
+        """Release the entry covering *registration*, then transfer it if asked."""
+        match paid_entry_service.release_registration(registration, actor=actor):
+            case Some(entry) if transfer_to:
+                return paid_entry_service.transfer_entry(
+                    entry, transfer_to, actor=actor, reserve_team_slot=reserve_team_slot
+                ).map(lambda _: None)
+            case _ if transfer_to:
+                return Err(ValidationError("There is no paid entry to transfer."))
+        return Ok(None)
+
+    @staticmethod
+    def _cancel_team_registration(scope: Scope, team_registration) -> None:
+        """Cancel *team_registration*, leave its roster registered unattached, and clear it from brackets."""
+        from models import PlayerRegistration
+
+        team_id = team_registration.team
+        team_registration.status = TeamRegistrationStatus.CANCELLED
+        pseudonym = team_registration.pseudonym
+        filters = {"league_id": scope.league_url} if scope.is_league else {"event": scope.event_url}
+        PlayerRegistration.query.filter_by(**filters, team=team_id).filter(
+            PlayerRegistration.status.in_(paid_entry_service.ACTIVE_PLAYER_STATUSES)
+        ).update({"team": None, "status": RegistrationStatus.CONFIRMED})
 
         if scope.is_league:
-            PlayerRegistration.query.filter_by(league_id=scope.league_url, team=team_id).update(
-                {"status": RegistrationStatus.CANCELLED}
-            )
             from app.services.bracket_cleanup_service import scrub_deleted_teams_for_league
 
             scrub_deleted_teams_for_league(
@@ -606,20 +654,6 @@ class RegistrationService:
                 pseudonyms=[pseudonym] if pseudonym else None,
             )
         else:
-            affected_player_ids = [
-                r.player for r in PlayerRegistration.query.filter_by(event=scope.event_url, team=team_id).all()
-            ]
-
-            PlayerRegistration.query.filter_by(event=scope.event_url, team=team_id).update(
-                {"status": RegistrationStatus.CANCELLED}
-            )
-
-            # Cascade: hard-delete side-competition registrations for the players
-            # whose event registration was just cancelled.
-            from app.services.sidecomp_service import SideCompService
-
-            SideCompService.cancel_players_in_event(scope.event_url, affected_player_ids)
-
             from app.services.bracket_cleanup_service import scrub_deleted_teams
 
             scrub_deleted_teams(
@@ -628,12 +662,81 @@ class RegistrationService:
                 pseudonyms=[pseudonym] if pseudonym else None,
             )
 
+    @staticmethod
+    def _cancel_player_registration(scope: Scope, player_registration) -> None:
+        player_registration.status = RegistrationStatus.CANCELLED
+        if not scope.is_league:
+            # Side comp participation requires an active event registration.
+            from app.services.sidecomp_service import SideCompService
+
+            SideCompService.cancel_player_registrations_in_event(scope.event_url, player_registration.player)
+
+    @staticmethod
+    def deregister_team_as_organizer(
+        scope: Scope,
+        team_id: str,
+        *,
+        void_entry: bool,
+        actor,
+    ) -> Result[None, ArctosError]:
+        """Cancel any team's registration. The caller must have checked organizer rights.
+
+        The team keeps its paid entry unless *void_entry* is set.
+        """
+        from models import TeamRegistration, db
+
+        filters = {"league_id": scope.league_url} if scope.is_league else {"event": scope.event_url}
+        team_registration = TeamRegistration.query.filter_by(
+            **filters, team=team_id, status=TeamRegistrationStatus.CONFIRMED
+        ).first()
+        if team_registration is None:
+            return Err(ArctosError("Team not found or already deregistered", status_code=404, public=True))
+        match paid_entry_service.release_registration(team_registration, actor=actor):
+            case Some(entry) if void_entry:
+                paid_entry_service.void_entry(entry, actor=actor)
+        RegistrationService._cancel_team_registration(scope, team_registration)
+        db.session.commit()
+        return Ok(None)
+
+    @staticmethod
+    def deregister_player_as_organizer(
+        scope: Scope,
+        player_id: str,
+        *,
+        void_entry: bool,
+        actor,
+    ) -> Result[None, ArctosError]:
+        """Cancel any player's registration. The caller must have checked organizer rights.
+
+        The player keeps their paid entry unless *void_entry* is set.
+        """
+        from models import PlayerRegistration, db
+
+        filters = {"league_id": scope.league_url} if scope.is_league else {"event": scope.event_url}
+        player_registration = (
+            PlayerRegistration.query.filter_by(**filters, player=player_id)
+            .filter(PlayerRegistration.status.in_(paid_entry_service.ACTIVE_PLAYER_STATUSES))
+            .first()
+        )
+        if player_registration is None:
+            return Err(ArctosError("Player not found or already deregistered", status_code=404, public=True))
+        match paid_entry_service.release_registration(player_registration, actor=actor):
+            case Some(entry) if void_entry:
+                paid_entry_service.void_entry(entry, actor=actor)
+        RegistrationService._cancel_player_registration(scope, player_registration)
         db.session.commit()
         return Ok(None)
 
     @staticmethod
     @allow_Q
-    def deregister_player(scope: Scope, player_id: str) -> Result[None, ArctosError]:
+    def deregister_player(
+        scope: Scope,
+        player_id: str,
+        *,
+        transfer_to: str | None = None,
+        actor=None,
+    ) -> Result[None, ArctosError]:
+        """Cancel a player's own registration, keeping or transferring their paid entry."""
         from models import Match, PlayerRegistration, db
 
         match RegistrationService._load_scope_context(scope):
@@ -704,15 +807,12 @@ class RegistrationService:
             if in_progress:
                 return Err(ValidationError("Cannot deregister once you have played in a match that is in progress."))
 
-        player_registration.status = RegistrationStatus.CANCELLED
-
-        if not scope.is_league:
-            # Cascade: hard-delete any side-competition registrations for this
-            # (event, player) since side comp participation requires an active
-            # event registration.
-            from app.services.sidecomp_service import SideCompService
-
-            SideCompService.cancel_player_registrations_in_event(scope.event_url, player_id)
-
+        match RegistrationService._pass_on_entry(
+            player_registration, transfer_to=transfer_to, reserve_team_slot=False, actor=actor
+        ):
+            case Err(_) as err:
+                db.session.rollback()
+                return err
+        RegistrationService._cancel_player_registration(scope, player_registration)
         db.session.commit()
         return Ok(None)

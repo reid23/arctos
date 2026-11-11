@@ -1,5 +1,5 @@
 use crate::api;
-use crate::components::{BannerAccountKind, BannerUpload, EventBannerPhoto, SettingsSaveActions, SettingsSaveJump, ToolPageHeader};
+use crate::components::{BannerAccountKind, BannerUpload, EventBannerPhoto, OnlinePaymentsCard, SettingsSaveActions, SettingsSaveJump, ToolPageHeader};
 use crate::types::Tournament;
 use crate::Route;
 use dioxus::prelude::*;
@@ -1150,6 +1150,9 @@ pub fn TournamentSettings(url: String) -> Element {
                 }
 
                 div { class: "col-12 mt-4",
+                    if d.tournament.league.is_none() {
+                        OnlinePaymentsCard { scope_kind: "events".to_string(), slug: url.clone() }
+                    }
                     if d.tournament.league.is_none() {
                     section { class: "edit-section penalty-types-section",
                         div { class: "edit-section-heading penalty-types-heading",

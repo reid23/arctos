@@ -80,6 +80,7 @@ pub(super) fn main_section(route: &Route) -> Option<MainSection> {
         | Route::ScoreboardRender { .. }
         | Route::About { .. }
         | Route::Thanks { .. }
+        | Route::CheckoutReturn { .. }
         | Route::Docs { .. }
         | Route::Privacy { .. }
         | Route::Terms { .. }
