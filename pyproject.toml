@@ -22,6 +22,7 @@ dependencies = [
     "playwright>=1.64.0",
     "python-dateutil==2.9.0.post0",
     "requests==2.32.5",
+    "stripe==16.1.0",
     "tomli==2.3.0",
     "werkzeug==3.1.4",
     "wtforms==3.2.1",

@@ -26,6 +26,7 @@ from app.exceptions import ArctosError, ValidationError
 from app.services._common import Scope
 from app.utils.datetime_helpers import now_utc_naive
 from models import (
+    CheckoutHold,
     PaidEntry,
     PaidEntryEvent,
     Payment,
@@ -165,19 +166,25 @@ def cover_registration(
         case _:
             if source_if_new is None:
                 return Null()
-            entry = PaidEntry(
-                **_scope_filters(scope),
-                kind=kind.value,
-                **_holder_filters(kind, holder_id),
-                status=PaidEntryStatus.AVAILABLE,
-                source=source_if_new,
-            )
-            db.session.add(entry)
-            db.session.flush()
-            _record(entry, PaidEntryAction.CREATED, actor=actor, to_holder=holder_id)
+            entry = create_entry(scope, kind, holder_id, source=source_if_new, actor=actor)
             _apply(entry, registration, actor=actor)
     _refresh_paid_state(registration)
     return Some(entry)
+
+
+def create_entry(scope: Scope, kind: UserType, holder_id: str, *, source: PaidEntrySource, actor=None) -> PaidEntry:
+    """A new ``AVAILABLE`` entry for a holder who has none in *scope*."""
+    entry = PaidEntry(
+        **_scope_filters(scope),
+        kind=kind.value,
+        **_holder_filters(kind, holder_id),
+        status=PaidEntryStatus.AVAILABLE,
+        source=source,
+    )
+    db.session.add(entry)
+    db.session.flush()
+    _record(entry, PaidEntryAction.CREATED, actor=actor, to_holder=holder_id)
+    return entry
 
 
 def _covers(entry: PaidEntry, registration: TeamRegistration | PlayerRegistration) -> bool:
@@ -341,7 +348,7 @@ def record_manual_payment(
 
 
 def delete_for_scope(scope: Scope) -> None:
-    """Delete every entry, entry event, and payment in *scope* before its registrations go."""
+    """Delete every entry, entry event, payment, and checkout hold in *scope* before its registrations go."""
     filters = _scope_filters(scope)
     entry_ids = db.session.query(PaidEntry.id).filter_by(**filters)
     PaidEntryEvent.query.filter(PaidEntryEvent.entry_id.in_(entry_ids)).delete(synchronize_session=False)
@@ -350,5 +357,7 @@ def delete_for_scope(scope: Scope) -> None:
     Payment.query.filter(
         Payment.team_registration_id.in_(team_registration_ids)
         | Payment.player_registration_id.in_(player_registration_ids)
+        | Payment.entry_id.in_(entry_ids)
     ).delete(synchronize_session=False)
+    CheckoutHold.query.filter_by(**filters).delete(synchronize_session=False)
     PaidEntry.query.filter_by(**filters).delete(synchronize_session=False)

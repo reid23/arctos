@@ -21,6 +21,7 @@ from models import (
     TeamRegistration,
     Field,
 )
+from tests.stripe_fakes import FakeStripeGateway
 from tests.utils import make_registrable_config, mark_paid
 from scripts.prepare_public_assets import prepare_presentation
 
@@ -41,6 +42,7 @@ def app():
             "SQLALCHEMY_DATABASE_URI": f"sqlite:///{db_path}",
             "WTF_CSRF_ENABLED": False,
             "SECRET_KEY": "test-secret-key",  # pragma: allowlist secret -- test-only Flask signing key
+            "STRIPE_SECRET_KEY": "",
         }
     )
 
@@ -123,6 +125,16 @@ def tournament(test_db):
     db.session.commit()
     db.session.refresh(tourn)
     return tourn
+
+
+@pytest.fixture
+def stripe_gateway(app, monkeypatch):
+    """Route Stripe calls to an in-memory fake for this test."""
+    from app.utils.stripe_gateway import EXTENSION_KEY
+
+    fake = FakeStripeGateway()
+    monkeypatch.setitem(app.extensions, EXTENSION_KEY, fake)
+    return fake
 
 
 @pytest.fixture

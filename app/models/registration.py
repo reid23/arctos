@@ -47,8 +47,11 @@ class PaidStateMixin:
 
     @property
     def amount_paid(self) -> Decimal:
-        """Total recorded payments, in currency units."""
-        total_cents = sum(payment.amount_cents for payment in self.payments)
+        """Manual payments plus Stripe payments for the covering entry, in currency units."""
+        entry_payments = self.applied_entry.payments if self.applied_entry is not None else []
+        total_cents = sum(payment.amount_cents for payment in self.payments) + sum(
+            payment.amount_cents for payment in entry_payments if payment.stripe_checkout_session_id is not None
+        )
         return (Decimal(total_cents) / CENTS_PER_UNIT).quantize(CURRENCY_QUANTUM)
 
     @property

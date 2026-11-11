@@ -316,6 +316,7 @@ def test_missing_api_and_static_requests_never_receive_public_or_app_document(pu
         "/docs.md",
         "/developers/apps",
         "/oauth/authorize",
+        "/checkout/cs_test_123",
     ],
 )
 def test_existing_application_paths_keep_application_ownership(public_client, path):

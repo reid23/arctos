@@ -52,7 +52,7 @@ _APP_NESTED = re.compile(
     r"^(?:register/(?:player|team)|auth/google/(?:choose-account-type|complete-profile)|"
     r"leagues/(?:new|[^/]+(?:/(?:register|results|settings|new-tournament|manage|invitations))?)|"
     r"players/[^/]+(?:/(?:edit|injuries/new|injuries/[0-9]+/edit))?|"
-    r"teams/[^/]+(?:/edit)?|developers/apps|oauth/authorize)$"
+    r"teams/[^/]+(?:/edit)?|developers/apps|oauth/authorize|checkout/[^/]+)$"
 )
 _EVENT_WORKFLOW = re.compile(
     r"^(?P<slug>[^/]+)/(?P<workflow>schedule(?:/edit)?|results|bracket|legacy-bracket|settings|register|"

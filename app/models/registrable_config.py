@@ -40,6 +40,11 @@ class RegistrableConfig(db.Model):  # type: ignore[misc]
         n_max_teams: Cap on the number of registered teams, or ``None``.
         max_team_size_roster: Maximum players on a team's full roster.
         max_team_size_field: Maximum players allowed on the field at once.
+        online_payments_enabled: Whether registrants pay fees online by
+            card. Paid registration is blocked, not made free, while the
+            payout account can't accept charges.
+        payout_account_id: The :class:`~app.models.payments.PayoutAccount`
+            that receives online payments.
     """
 
     __tablename__ = "registrable_configs"
@@ -60,6 +65,10 @@ class RegistrableConfig(db.Model):  # type: ignore[misc]
     n_max_teams = db.Column(db.Integer)
     max_team_size_roster = db.Column(db.Integer)
     max_team_size_field = db.Column(db.Integer)
+    online_payments_enabled = db.Column(db.Boolean, default=False, nullable=False)
+    payout_account_id = db.Column(db.Integer, db.ForeignKey("payout_accounts.id"), nullable=True, index=True)
+
+    payout_account = db.relationship("PayoutAccount")
 
     __table_args__ = (
         db.CheckConstraint("team_reg_fee >= 0", name="ck_registrable_config_team_reg_fee_nonneg"),

@@ -68,6 +68,11 @@ The registration service provides the following key methods:
 registration is paid exactly when an `APPLIED` entry covers it; `paid`,
 `amount_paid`, and `paid_at` on registrations are read-only properties.
 
+`payout_account_service` mirrors players' Stripe connected accounts
+(`PayoutAccount`) and attaches them to registration configs. Stripe calls go
+through `app.utils.stripe_gateway`, which is `None` without
+`STRIPE_SECRET_KEY`; tests install a fake gateway in `app.extensions`.
+
 - `cover_registration(registration, *, source_if_new, actor=None)` applies the
   holder's entry for the scope, or creates one from `source_if_new`. Every
   registration path calls it.
@@ -82,6 +87,23 @@ registration is paid exactly when an `APPLIED` entry covers it; `paid`,
 
 A holder has at most one non-voided entry per scope. Functions flush but never
 commit.
+
+`checkout_service` sells entries through Stripe Checkout. When a config
+takes online payments and charges a fee, `register_team` and
+`register_player` refuse a registrant without an entry
+(`require_payment_settled`); TO registration on someone's behalf is
+unaffected.
+
+- `start_checkout` validates the registration form, expires the
+  registrant's previous checkout, and creates a session as a direct charge
+  on the organizer's payout account plus a `CheckoutHold`. An open hold for
+  a new team registration takes a place under `n_max_teams` until it
+  expires. A registrant with an unpaid registration pays for it instead
+  ("pay now").
+- `fulfill` runs from the checkout webhook and from the return page
+  (`sync`), once per hold. It commits the `Payment` and a `STRIPE` entry,
+  then registers with the kept form, even if registration has closed. If
+  registration fails, the entry stays `AVAILABLE` and the hold records why.
 
 ## Team roster changes
 

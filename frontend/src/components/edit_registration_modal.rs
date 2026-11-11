@@ -2,7 +2,7 @@
 //! Shared between league home, tournament home (league events), etc.
 
 use crate::api;
-use crate::components::{use_scope_paid_entries, Modal, ModalKind, PaidEntryScope, WithdrawEntryChoice};
+use crate::components::{use_scope_paid_entries, Modal, ModalKind, PaidEntryScope, PayNowNotice, WithdrawEntryChoice};
 use crate::types::{PaidEntryAccount, UpdatePlayerRegistrationRequest, UpdateTeamRegistrationRequest};
 use dioxus::prelude::*;
 
@@ -46,6 +46,11 @@ pub fn EditRegistrationModal(
     let pending = mutation() != RegistrationMutation::Idle;
     let actions_disabled =
         pending || load() != RegistrationLoad::Ready || show_deregister_confirm();
+    let current_route = use_route::<crate::Route>();
+    let entry_scope = match &context {
+        EditRegistrationContext::League { league_url } => PaidEntryScope::league(league_url),
+        EditRegistrationContext::Tournament { tournament_url } => PaidEntryScope::event(tournament_url),
+    };
 
     rsx! {
         style { {REGISTRATION_ACTIONS_CSS} }
@@ -68,6 +73,14 @@ pub fn EditRegistrationModal(
                 }
             }
             div { class: "modal-body",
+                if !historical && load() == RegistrationLoad::Ready {
+                    PayNowNotice {
+                        scope: entry_scope.clone(),
+                        registrant: String::from(if is_team { "team" } else { "player" }),
+                        team_id: team_id.clone(),
+                        return_to: current_route.to_string(),
+                    }
+                }
                 if is_team {
                     EditTeamRegistrationContent { context: context.clone(), team_id: team_id.clone(), load, mutation, save_error, on_close, on_success }
                 } else {

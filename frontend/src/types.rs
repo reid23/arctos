@@ -2421,6 +2421,99 @@ pub struct PaidEntriesResponse {
     pub sent: Vec<PaidEntry>,
 }
 
+/// A player's Stripe connected account, which receives online registration fees.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct PayoutAccount {
+    pub id: u32,
+    pub owner: PaidEntryAccount,
+    pub charges_enabled: bool,
+    pub payouts_enabled: bool,
+    pub details_submitted: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PayoutAccountStatus {
+    /// Onboarding isn't finished.
+    Incomplete,
+    /// Onboarding is finished but Stripe isn't allowing charges yet.
+    InReview,
+    Ready,
+}
+
+impl PayoutAccount {
+    pub fn status(&self) -> PayoutAccountStatus {
+        if self.charges_enabled {
+            PayoutAccountStatus::Ready
+        } else if self.details_submitted {
+            PayoutAccountStatus::InReview
+        } else {
+            PayoutAccountStatus::Incomplete
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct PayoutAccountResponse {
+    pub available: bool,
+    pub account: Option<PayoutAccount>,
+}
+
+/// Whether an event's or league's registrants pay online, and into which account.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct OnlinePaymentSettings {
+    pub available: bool,
+    pub enabled: bool,
+    /// Enabled, and the attached account can take charges.
+    pub accepting: bool,
+    pub account: Option<PayoutAccount>,
+    pub own_account: Option<PayoutAccount>,
+}
+
+/// How a registrant pays an event's or league's fee before registering.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct CheckoutOptions {
+    /// `none` (register directly), `checkout`, or `unavailable` (online
+    /// payment is required but the organizer can't accept it).
+    pub mode: String,
+    pub amount_cents: u32,
+}
+
+impl CheckoutOptions {
+    pub fn pays_online(&self) -> bool {
+        self.mode == "checkout"
+    }
+
+    pub fn blocked(&self) -> bool {
+        self.mode == "unavailable"
+    }
+
+    pub fn amount(&self) -> String {
+        format!("${}.{:02}", self.amount_cents / 100, self.amount_cents % 100)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct CheckoutScope {
+    /// `events` or `leagues`.
+    pub kind: String,
+    pub slug: String,
+    pub name: String,
+}
+
+/// A Stripe checkout after the payer returns from it.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct CheckoutStatus {
+    /// `open`, `completed`, or `expired`.
+    pub status: String,
+    /// Why registration couldn't complete after payment, or why payment failed.
+    pub failure: Option<String>,
+    pub registered: bool,
+    /// `team` or `player`.
+    pub registrant: String,
+    pub team_id: Option<String>,
+    pub scope: CheckoutScope,
+}
+
 impl User {
     pub fn can_manage_team(&self, team_id: &str) -> bool {
         (self.user_type == "team" && self.id == team_id)

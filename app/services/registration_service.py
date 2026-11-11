@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import select
 
-from app.domain.enums import MatchStatus, PaidEntrySource, RegistrationStatus, TeamRegistrationStatus
+from app.domain.enums import MatchStatus, PaidEntrySource, RegistrationStatus, TeamRegistrationStatus, UserType
 from app.error_values import Err, Ok, Result, Some, allow_Q
 from app.exceptions import (
     ArctosError,
@@ -79,7 +79,8 @@ class RegistrationService:
 
     @staticmethod
     def _taken_team_places(scope: Scope, parent, team_id: str) -> int:
-        """Confirmed teams plus places reserved for other teams' unclaimed transfers."""
+        """Confirmed teams plus places held for other teams' unclaimed transfers and open checkouts."""
+        from app.services import checkout_service
         from models import TeamRegistration
 
         if scope.is_event and getattr(parent, "league_id", None):
@@ -87,7 +88,11 @@ class RegistrationService:
             scope = Scope.league(parent.league_id)
         filters = {"league_id": scope.league_url} if scope.is_league else {"event": scope.event_url}
         confirmed_count = TeamRegistration.query.filter_by(**filters, status=TeamRegistrationStatus.CONFIRMED).count()
-        return confirmed_count + paid_entry_service.reserved_team_slots(scope, excluding_team=team_id)
+        return (
+            confirmed_count
+            + paid_entry_service.reserved_team_slots(scope, excluding_team=team_id)
+            + checkout_service.held_team_places(scope, excluding_team=team_id)
+        )
 
     @staticmethod
     def _get_tournament(tournament_url: str) -> Result["Tournament", ArctosError]:
@@ -160,7 +165,11 @@ class RegistrationService:
         team_id: str,
         pseudonym: str,
         shortname: str | None = None,
+        *,
+        allow_closed_registration: bool = False,
     ) -> Result["TeamRegistration", ArctosError]:
+        """Register *team_id*. ``allow_closed_registration`` is for checkouts paid before registration closed."""
+        from app.services import checkout_service
         from models import TeamRegistration, db
 
         match RegistrationService._load_scope_context(scope):
@@ -172,7 +181,9 @@ class RegistrationService:
         cfg = ctx.cfg
         scope_label = "league" if scope.is_league else "tournament"
 
-        if scope.is_league:
+        if allow_closed_registration:
+            pass
+        elif scope.is_league:
             rc = cfg
             if not (rc and rc.team_registration_open):
                 return Err(RegistrationClosedError(f"Registration is not open for this {scope_label}"))
@@ -191,9 +202,10 @@ class RegistrationService:
             existing_reg = TeamRegistration.query.filter_by(league_id=scope.league_url, team=team_id).first()
         else:
             existing_reg = TeamRegistration.query.filter_by(event=scope.event_url, team=team_id).first()
+        if existing_reg and existing_reg.status != TeamRegistrationStatus.CANCELLED:
+            return Err(ValidationError(f"Your team is already registered for this {scope_label}"))
+        checkout_service.require_payment_settled(scope, cfg, UserType.TEAM, team_id).Q()
         if existing_reg:
-            if existing_reg.status != TeamRegistrationStatus.CANCELLED:
-                return Err(ValidationError(f"Your team is already registered for this {scope_label}"))
             team_registration = existing_reg
             team_registration.pseudonym = pseudonym
             team_registration.shortname = normalised_shortname
@@ -251,7 +263,17 @@ class RegistrationService:
         jersey_number: str = "",
         jersey_name: str = "",
         waiver_legal_name_signature: str = "",
+        signed_waiver_sha256: str | None = None,
+        allow_closed_registration: bool = False,
     ) -> Result["PlayerRegistration", ArctosError]:
+        """Register *player_id*, pending *team_id*'s approval when given.
+
+        ``signed_waiver_sha256`` is the waiver the player signed earlier, for
+        checkouts; registration fails if the waiver has changed since.
+        ``allow_closed_registration`` is for checkouts paid before
+        registration closed.
+        """
+        from app.services import checkout_service
         from models import PlayerRegistration, db
 
         match RegistrationService._load_scope_context(scope):
@@ -263,7 +285,9 @@ class RegistrationService:
         cfg = ctx.cfg
         scope_label = "league" if scope.is_league else "tournament"
 
-        if scope.is_league:
+        if allow_closed_registration:
+            pass
+        elif scope.is_league:
             rc = cfg
             if not (rc and rc.player_registration_open):
                 return Err(RegistrationClosedError(f"Registration is not open for this {scope_label}"))
@@ -280,12 +304,10 @@ class RegistrationService:
 
         # Enforce exactly one PlayerRegistration row per (scope, player).
         # If a player was previously rejected/cancelled, allow resubmission by updating that row.
+        if existing_reg and existing_reg.status not in (RegistrationStatus.REJECTED, RegistrationStatus.CANCELLED):
+            return Err(ValidationError(f"You already have a registration for this {scope_label}"))
+        checkout_service.require_payment_settled(scope, cfg, UserType.PLAYER, player_id).Q()
         if existing_reg:
-            if existing_reg.status not in (
-                RegistrationStatus.REJECTED,
-                RegistrationStatus.CANCELLED,
-            ):
-                return Err(ValidationError(f"You already have a registration for this {scope_label}"))
             player_registration = existing_reg
             player_registration.team = team_id
             player_registration.jersey_number = jersey_number or ""
@@ -321,6 +343,8 @@ class RegistrationService:
             current_waiver_sha = getattr(cfg, "waiver_sha256", None)
             if not current_waiver_sha:
                 return Err(ValidationError("Waiver is missing its checksum"))
+            if signed_waiver_sha256 is not None and signed_waiver_sha256 != current_waiver_sha:
+                return Err(ValidationError("The waiver changed after you signed it. Sign the new waiver to register."))
 
             now = now_utc_naive()
             player_registration.waiver_legal_name_signature = signature

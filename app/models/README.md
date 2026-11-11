@@ -119,6 +119,14 @@ db.session.commit()
 reconciling many partial payments accumulates rounding error. Stay in
 `Decimal`.
 
+Online payments go to the `PayoutAccount` (a player's Stripe connected
+account) attached as `RegistrableConfig.payout_account_id`. Its status
+flags mirror Stripe and are written only by `payout_account_service`.
+A `CheckoutHold` tracks one Stripe Checkout Session, keeping the
+registration form until payment completes; `checkout_service` writes it.
+A Stripe `Payment` belongs to the entry it bought, not to a registration,
+so a registration's `payments` are only an organizer's manual records.
+
 ## Times
 
 Datetime columns store naive UTC: `datetime.now(timezone.utc).replace(tzinfo=None)`.

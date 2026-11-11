@@ -1,7 +1,8 @@
 use crate::api;
 use crate::components::{
-    has_existing_registration, use_scope_paid_entries, EditRegistrationContext, ExistingRegistration, PaidEntryScope,
-    PrepaidEntryNotice, TeamRegistrationHelpModal,
+    continue_to_checkout, has_existing_registration, registrant_kind, use_checkout_options, use_scope_paid_entries,
+    CheckoutFeeNotice, EditRegistrationContext, ExistingRegistration, PaidEntryScope, PrepaidEntryNotice,
+    TeamRegistrationHelpModal,
 };
 use dioxus::prelude::*;
 use wasm_bindgen::JsCast;
@@ -38,6 +39,17 @@ pub fn LeagueRegister(league_url: String) -> Element {
     let mut show_help_modal = use_signal(|| false);
     let entries = use_scope_paid_entries(PaidEntryScope::league(&league_url), None);
     let prepaid = entries.read().as_ref().and_then(|result| result.as_ref().ok()).is_some_and(|current| current.prepaid());
+    let checkout = use_checkout_options(
+        PaidEntryScope::league(&league_url),
+        None,
+        move || me.read().as_ref().and_then(|result| result.as_ref().ok()).and_then(|user| registrant_kind(&user.user_type)),
+        entries,
+    );
+    let checkout_options = checkout.read().clone().flatten();
+    let checkout_loading = checkout.read().is_none();
+    let pays_online = checkout_options.as_ref().is_some_and(|options| options.pays_online());
+    let payment_blocked = checkout_options.as_ref().is_some_and(|options| options.blocked());
+    let online_fee = pays_online || payment_blocked;
 
     if let Some(Ok(detail)) = data.value().read().as_ref() {
         if let Some(Ok(user)) = me.read().as_ref() {
@@ -87,7 +99,8 @@ pub fn LeagueRegister(league_url: String) -> Element {
                                 p { class: "form-text mb-3", "Registering as {me.name} (@{me.id})" }
                                 if me.user_type == "team" {
                                     PrepaidEntryNotice { scope: PaidEntryScope::league(&league_url), entries, registration_open: d.league.team_registration_open }
-                                    if let Some(fee) = d.league.team_reg_fee.filter(|fee| *fee > 0.0 && !prepaid) {
+                                    CheckoutFeeNotice { options: checkout_options.clone() }
+                                    if let Some(fee) = d.league.team_reg_fee.filter(|fee| *fee > 0.0 && !prepaid && !online_fee) {
                                         div { class: "alert alert-info",
                                             strong { {format!("Registration fee: ${:.2}", fee)} }
                                             p { class: "small mb-0 mt-1",
@@ -117,6 +130,15 @@ pub fn LeagueRegister(league_url: String) -> Element {
                                             let lu = league_url.clone();
                                             busy.set(true);
                                             spawn(async move {
+                                                if pays_online {
+                                                    let form = serde_json::json!({"pseudonym": pseudonym, "shortname": shortname});
+                                                    let return_to = crate::Route::LeagueRegister { league_url: lu.clone() }.to_string();
+                                                    if let Err(e) = continue_to_checkout(&PaidEntryScope::league(&lu), "team", None, form, &return_to).await {
+                                                        error.set(Some(e));
+                                                        busy.set(false);
+                                                    }
+                                                    return;
+                                                }
                                                 match api::league_register_team(&lu, &pseudonym, shortname.as_deref()).await
                                                 {
                                                     Ok(res) if res.success => {
@@ -179,9 +201,13 @@ pub fn LeagueRegister(league_url: String) -> Element {
                                             button {
                                                 r#type: "submit",
                                                 class: "btn btn-primary",
-                                                disabled: busy() || !d.league.team_registration_open,
-                                                if busy() {
+                                                disabled: busy() || checkout_loading || payment_blocked || !d.league.team_registration_open,
+                                                if busy() && pays_online {
+                                                    "Opening checkout…"
+                                                } else if busy() {
                                                     "Registering…"
+                                                } else if pays_online {
+                                                    "Continue to payment"
                                                 } else {
                                                     "Register"
                                                 }
@@ -190,7 +216,8 @@ pub fn LeagueRegister(league_url: String) -> Element {
                                     }
                                 } else if me.user_type == "player" {
                                     PrepaidEntryNotice { scope: PaidEntryScope::league(&league_url), entries, registration_open: d.league.player_registration_open }
-                                    if let Some(fee) = d.league.player_reg_fee.filter(|fee| *fee > 0.0 && !prepaid) {
+                                    CheckoutFeeNotice { options: checkout_options.clone() }
+                                    if let Some(fee) = d.league.player_reg_fee.filter(|fee| *fee > 0.0 && !prepaid && !online_fee) {
                                         div { class: "alert alert-info",
                                             strong { {format!("Registration fee: ${:.2}", fee)} }
                                             p { class: "small mb-0 mt-1",
@@ -214,6 +241,20 @@ pub fn LeagueRegister(league_url: String) -> Element {
                                             let lu = league_url.clone();
                                             busy.set(true);
                                             spawn(async move {
+                                                if pays_online {
+                                                    let form = serde_json::json!({
+                                                        "jersey_name": jersey_name,
+                                                        "jersey_number": jersey_number,
+                                                        "team": team_opt,
+                                                        "waiver_legal_name_signature": waiver_legal_name_signature,
+                                                    });
+                                                    let return_to = crate::Route::LeagueRegister { league_url: lu.clone() }.to_string();
+                                                    if let Err(e) = continue_to_checkout(&PaidEntryScope::league(&lu), "player", None, form, &return_to).await {
+                                                        error.set(Some(e));
+                                                        busy.set(false);
+                                                    }
+                                                    return;
+                                                }
                                                 match api::league_register_player(
                                                         &lu,
                                                         team_opt.as_deref(),
@@ -346,9 +387,13 @@ pub fn LeagueRegister(league_url: String) -> Element {
                                             button {
                                                 r#type: "submit",
                                                 class: "btn btn-primary",
-                                                disabled: busy() || !d.league.player_registration_open,
-                                                if busy() {
+                                                disabled: busy() || checkout_loading || payment_blocked || !d.league.player_registration_open,
+                                                if busy() && pays_online {
+                                                    "Opening checkout…"
+                                                } else if busy() {
                                                     "Registering…"
+                                                } else if pays_online {
+                                                    "Continue to payment"
                                                 } else {
                                                     "Register"
                                                 }

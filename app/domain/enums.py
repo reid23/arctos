@@ -111,6 +111,18 @@ class PaidEntrySource(StrEnum):
     MANUAL = "MANUAL"
     ORGANIZER = "ORGANIZER"
     FREE = "FREE"
+    STRIPE = "STRIPE"
+
+
+class CheckoutHoldStatus(StrEnum):
+    """Lifecycle status of a :class:`~app.models.payments.CheckoutHold`."""
+
+    # The Stripe Checkout Session may still be paid.
+    OPEN = "OPEN"
+    # Paid; the payment and entry are recorded.
+    COMPLETED = "COMPLETED"
+    # Stripe expired the session, or its payment failed. Nothing was charged.
+    EXPIRED = "EXPIRED"
 
 
 class PaidEntryAction(StrEnum):

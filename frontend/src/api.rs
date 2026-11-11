@@ -4207,6 +4207,103 @@ pub async fn paid_entry_action(entry_id: u32, action: &str, body: &serde_json::V
     response_json(response).await
 }
 
+pub async fn payout_account() -> Result<crate::types::PayoutAccountResponse, String> {
+    let response = with_credentials(client().get(format!("{}/_api/payments/payout-account", base())))
+        .send().await.map_err(|error| error.to_string())?;
+    response_json(response).await
+}
+
+#[derive(serde::Deserialize)]
+struct UrlResponse {
+    url: String,
+}
+
+#[derive(serde::Deserialize)]
+struct PayoutAccountRefresh {
+    account: crate::types::PayoutAccount,
+}
+
+/// A link to Stripe's hosted onboarding for the signed-in player.
+pub async fn payout_onboarding_url() -> Result<String, String> {
+    let url = format!("{}/_api/payments/payout-account/onboarding", base());
+    let response = with_credentials(client().post(url)).send().await.map_err(|error| error.to_string())?;
+    response_json::<UrlResponse>(response).await.map(|link| link.url)
+}
+
+pub async fn refresh_payout_account() -> Result<crate::types::PayoutAccount, String> {
+    let url = format!("{}/_api/payments/payout-account/refresh", base());
+    let response = with_credentials(client().post(url)).send().await.map_err(|error| error.to_string())?;
+    response_json::<PayoutAccountRefresh>(response).await.map(|refreshed| refreshed.account)
+}
+
+/// `scope_kind` is `events` or `leagues`.
+pub async fn online_payment_settings(scope_kind: &str, slug: &str) -> Result<crate::types::OnlinePaymentSettings, String> {
+    let url = format!("{}/_api/payments/settings/{}/{}", base(), scope_kind, urlencoding::encode(slug));
+    let response = with_credentials(client().get(url)).send().await.map_err(|error| error.to_string())?;
+    response_json(response).await
+}
+
+pub async fn update_online_payment_settings(
+    scope_kind: &str,
+    slug: &str,
+    enabled: bool,
+    payout_account_id: Option<u32>,
+) -> Result<crate::types::OnlinePaymentSettings, String> {
+    let url = format!("{}/_api/payments/settings/{}/{}", base(), scope_kind, urlencoding::encode(slug));
+    let body = serde_json::json!({"enabled": enabled, "payout_account_id": payout_account_id});
+    let response = with_credentials(client().put(url).json(&body)).send().await.map_err(|error| error.to_string())?;
+    response_json(response).await
+}
+
+/// `registrant` is `team` or `player`; `team_id` picks a managed team.
+pub async fn checkout_options(
+    scope_kind: &str,
+    slug: &str,
+    registrant: &str,
+    team_id: Option<&str>,
+) -> Result<crate::types::CheckoutOptions, String> {
+    let mut url = format!(
+        "{}/_api/payments/checkout/{}/{}?registrant={}",
+        base(),
+        scope_kind,
+        urlencoding::encode(slug),
+        registrant
+    );
+    if let Some(team_id) = team_id {
+        url.push_str(&format!("&team_id={}", urlencoding::encode(team_id)));
+    }
+    let response = with_credentials(client().get(url)).send().await.map_err(|error| error.to_string())?;
+    response_json(response).await
+}
+
+/// Starts a Stripe checkout and returns its URL. `form` holds the
+/// registration fields, which are ignored when paying for an existing
+/// registration.
+pub async fn start_checkout(
+    scope_kind: &str,
+    slug: &str,
+    registrant: &str,
+    team_id: Option<&str>,
+    form: serde_json::Value,
+    return_path: &str,
+) -> Result<String, String> {
+    let url = format!("{}/_api/payments/checkout/{}/{}", base(), scope_kind, urlencoding::encode(slug));
+    let body = serde_json::json!({
+        "registrant": registrant,
+        "team_id": team_id,
+        "form": form,
+        "return_path": return_path,
+    });
+    let response = with_credentials(client().post(url).json(&body)).send().await.map_err(|error| error.to_string())?;
+    response_json::<UrlResponse>(response).await.map(|checkout| checkout.url)
+}
+
+pub async fn sync_checkout(session_id: &str) -> Result<crate::types::CheckoutStatus, String> {
+    let url = format!("{}/_api/payments/checkouts/{}/sync", base(), urlencoding::encode(session_id));
+    let response = with_credentials(client().post(url)).send().await.map_err(|error| error.to_string())?;
+    response_json(response).await
+}
+
 pub async fn team_management_write(path: &str, method: &str, body: &serde_json::Value) -> Result<StatusResponse, String> {
     let method = reqwest::Method::from_bytes(method.as_bytes()).map_err(|error| error.to_string())?;
     let response = with_credentials(client().request(method, format!("{}/_api/teams/{}", base(), path)).json(body))

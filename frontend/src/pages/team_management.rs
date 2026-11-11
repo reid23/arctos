@@ -1,9 +1,10 @@
 use crate::api;
 use crate::components::{
-    use_scope_paid_entries, EventTab, EventTabs, Modal, ModalKind, PaidEntryScope, PaymentStatusBadge, PrepaidEntryNotice,
-    RegistrationStatusBadge, WithdrawEntryChoice,
+    continue_to_checkout, use_checkout_options, use_scope_paid_entries, CheckoutFeeNotice, EventTab, EventTabs, Modal,
+    ModalKind, PaidEntryScope, PayNowNotice, PaymentStatusBadge, PrepaidEntryNotice, RegistrationStatusBadge,
+    WithdrawEntryChoice,
 };
-use crate::types::{PaidEntryAccount, TeamCandidate, TeamCandidates, TeamEventData, TeamManagementData};
+use crate::types::{CheckoutOptions, PaidEntryAccount, TeamCandidate, TeamCandidates, TeamEventData, TeamManagementData};
 use crate::Route;
 use dioxus::prelude::*;
 
@@ -338,6 +339,8 @@ pub fn TeamEventPanel(team_id: String, kind: String, slug: String) -> Element {
     let mut confirmation = use_signal(|| None::<(TeamAction, String, String)>);
     let entry_scope = if kind == "leagues" { PaidEntryScope::league(&slug) } else { PaidEntryScope::event(&slug) };
     let mut entries = use_scope_paid_entries(entry_scope.clone(), Some(team_id.clone()));
+    let mut checkout = use_checkout_options(entry_scope.clone(), Some(team_id.clone()), || Some("team"), entries);
+    let return_to = Route::ManageTeamEvent { team_id: team_id.clone(), kind: kind.clone(), slug: slug.clone() }.to_string();
     let mut transferring = use_signal(|| false);
     let mut transfer_to = use_signal(|| None::<PaidEntryAccount>);
     let refresh_path = format!("{base_path}/registration");
@@ -363,6 +366,7 @@ pub fn TeamEventPanel(team_id: String, kind: String, slug: String) -> Element {
                         editing.set(false);
                         notice.set(Some(action.message));
                         entries.restart();
+                        checkout.restart();
                     } else {
                         error.set(Some(result.err().unwrap_or_else(|| {
                             "The change was not saved. Review the current roster and try again."
@@ -432,6 +436,22 @@ pub fn TeamEventPanel(team_id: String, kind: String, slug: String) -> Element {
                     if !info.registered || editing() {
                         TeamRegistrationForm { key: "{info.registered}", info: info.clone(), busy: busy() || needs_check(),
                             prepaid: entries.read().as_ref().and_then(|result| result.as_ref().ok()).is_some_and(|current| current.prepaid()),
+                            checkout: checkout.read().clone().flatten().filter(|_| !info.registered),
+                            on_checkout: {
+                                let scope = entry_scope.clone(); let team_id = team_id.clone(); let return_to = return_to.clone();
+                                move |form| {
+                                    if busy() { return; }
+                                    busy.set(true);
+                                    error.set(None);
+                                    let scope = scope.clone(); let team_id = team_id.clone(); let return_to = return_to.clone();
+                                    spawn(async move {
+                                        if let Err(message) = continue_to_checkout(&scope, "team", Some(&team_id), form, &return_to).await {
+                                            error.set(Some(message));
+                                            busy.set(false);
+                                        }
+                                    });
+                                }
+                            },
                             on_cancel: move |_| editing.set(false), on_save: {
                                 let path = format!("{base_path}/registration"); let registered = info.registered;
                                 move |body| write.call(TeamAction { path: path.clone(), method: if registered { "PUT" } else { "POST" }.into(), body, message: if registered { "Team registration saved." } else { "Team registered." }.into() })
@@ -443,6 +463,9 @@ pub fn TeamEventPanel(team_id: String, kind: String, slug: String) -> Element {
                             if let Some(shortname) = info.shortname { span { class: "text-muted", "{shortname}" } }
                             span { class: "badge arctos-badge-success", "Registered" }
                             PaymentStatusBadge { paid: info.paid }
+                        }
+                        if !info.paid {
+                            PayNowNotice { scope: entry_scope.clone(), registrant: String::from("team"), team_id: Some(team_id.clone()), return_to: return_to.clone() }
                         }
                         if !info.registration_open { p { class: "text-muted mt-2", "Registration changes are closed." } }
                     }
@@ -561,21 +584,31 @@ fn TeamRegistrationForm(
     info: TeamEventData,
     busy: bool,
     prepaid: bool,
+    checkout: Option<CheckoutOptions>,
     on_save: EventHandler<serde_json::Value>,
+    on_checkout: EventHandler<serde_json::Value>,
     on_cancel: EventHandler<()>,
 ) -> Element {
+    let pays_online = checkout.as_ref().is_some_and(|options| options.pays_online());
+    let payment_blocked = checkout.as_ref().is_some_and(|options| options.blocked());
     let mut name = use_signal(|| info.pseudonym.clone());
     let mut shortname = use_signal(|| info.shortname.clone().unwrap_or_default());
     rsx! {
         if info.registration_open {
-            form { class: "team-registration-form", onsubmit: move |event| { event.prevent_default(); if !busy { on_save.call(serde_json::json!({"pseudonym": name().trim(), "shortname": shortname().trim()})); } },
+            form { class: "team-registration-form", onsubmit: move |event| {
+                    event.prevent_default();
+                    if busy { return; }
+                    let body = serde_json::json!({"pseudonym": name().trim(), "shortname": shortname().trim()});
+                    if pays_online { on_checkout.call(body); } else { on_save.call(body); }
+                },
                 div { label { class: "form-label", r#for: "managed-team-name", "Team name for this event" }
                     input { id: "managed-team-name", class: "form-control", required: true, maxlength: "100", disabled: busy, value: name, oninput: move |event| name.set(event.value()) } }
                 div { label { class: "form-label", r#for: "managed-team-shortname", "Short name (optional)" }
                     input { id: "managed-team-shortname", class: "form-control", maxlength: "8", disabled: busy, value: shortname, oninput: move |event| shortname.set(event.value()), aria_describedby: "managed-shortname-help" }
                     p { id: "managed-shortname-help", class: "form-text", "Up to 8 characters for schedules and brackets." } }
                 if !info.registered {
-                    if let Some(fee) = info.team_fee.filter(|fee| *fee > 0.0 && !prepaid) {
+                    CheckoutFeeNotice { options: checkout.clone() }
+                    if let Some(fee) = info.team_fee.filter(|fee| *fee > 0.0 && !prepaid && !pays_online && !payment_blocked) {
                         p { class: "mb-0", strong { "Team fee: ${fee:.2}" } }
                         p { class: "text-muted mb-0", "Pay the organizer separately. They will confirm payment in Arctos." }
                     }
@@ -587,7 +620,7 @@ fn TeamRegistrationForm(
                     }
                 }
                 div { class: "team-row-actions",
-                    button { r#type: "submit", class: "btn btn-primary", disabled: busy, if busy { "Saving…" } else if info.registered { "Save registration" } else { "Register team" } }
+                    button { r#type: "submit", class: "btn btn-primary", disabled: busy || payment_blocked, if busy { "Saving…" } else if info.registered { "Save registration" } else if pays_online { "Continue to payment" } else { "Register team" } }
                     if info.registered { button { r#type: "button", class: "btn btn-outline-secondary", disabled: busy, onclick: move |_| on_cancel.call(()), "Cancel" } }
                 }
             }

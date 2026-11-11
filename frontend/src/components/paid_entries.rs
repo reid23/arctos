@@ -24,6 +24,15 @@ impl PaidEntryScope {
         Self { kind: "leagues", slug: slug.to_string() }
     }
 
+    /// `events` or `leagues`.
+    pub fn kind(&self) -> &'static str {
+        self.kind
+    }
+
+    pub fn slug(&self) -> &str {
+        &self.slug
+    }
+
     fn contains(&self, entry: &PaidEntry) -> bool {
         entry.event.kind == self.kind && entry.event.slug == self.slug
     }

@@ -1,7 +1,8 @@
 use crate::api;
 use crate::components::{
-    has_existing_registration, use_scope_paid_entries, EditRegistrationContext, ExistingRegistration, PaidEntryScope,
-    PrepaidEntryNotice, TeamRegistrationHelpModal,
+    continue_to_checkout, has_existing_registration, registrant_kind, use_checkout_options, use_scope_paid_entries,
+    CheckoutFeeNotice, EditRegistrationContext, ExistingRegistration, PaidEntryScope, PrepaidEntryNotice,
+    TeamRegistrationHelpModal,
 };
 use crate::Route;
 use dioxus::prelude::*;
@@ -34,6 +35,17 @@ pub fn TournamentRegister(url: String) -> Element {
     let me = crate::auth::use_account();
     let entries = use_scope_paid_entries(PaidEntryScope::event(&url), None);
     let prepaid = entries.read().as_ref().and_then(|result| result.as_ref().ok()).is_some_and(|current| current.prepaid());
+    let checkout = use_checkout_options(
+        PaidEntryScope::event(&url),
+        None,
+        move || me.read().as_ref().and_then(|result| result.as_ref().ok()).and_then(|user| registrant_kind(&user.user_type)),
+        entries,
+    );
+    let checkout_options = checkout.read().clone().flatten();
+    let checkout_loading = checkout.read().is_none();
+    let pays_online = checkout_options.as_ref().is_some_and(|options| options.pays_online());
+    let payment_blocked = checkout_options.as_ref().is_some_and(|options| options.blocked());
+    let online_fee = pays_online || payment_blocked;
     let val = data.value();
     let mut show_help_modal = use_signal(|| false);
     let mut register_error = use_signal(|| None::<String>);
@@ -119,6 +131,20 @@ pub fn TournamentRegister(url: String) -> Element {
                                                 let team = get_form_select_value("team");
                                                 let waiver_legal_name_signature =
                                                     get_form_value("waiver_legal_name_signature");
+                                                if pays_online {
+                                                    let form = serde_json::json!({
+                                                        "jersey_name": jersey_name,
+                                                        "jersey_number": jersey_number,
+                                                        "team": team,
+                                                        "waiver_legal_name_signature": waiver_legal_name_signature,
+                                                    });
+                                                    let return_to = Route::TournamentRegister { url: u.clone() }.to_string();
+                                                    if let Err(e) = continue_to_checkout(&PaidEntryScope::event(&u), "player", None, form, &return_to).await {
+                                                        register_error.set(Some(e));
+                                                        busy.set(false);
+                                                    }
+                                                    return;
+                                                }
                                                 match api::register_player(
                                                     &u,
                                                     &jersey_name,
@@ -167,7 +193,8 @@ pub fn TournamentRegister(url: String) -> Element {
                                             }
                                             div { id: "team-help", class: "form-text", "Your team must approve your request before you join its roster. Without a team, you register as a free merc." }
                                         }
-                                        if let Some(fee) = d.tournament.player_reg_fee.filter(|_| !prepaid) {
+                                        CheckoutFeeNotice { options: checkout_options.clone() }
+                                        if let Some(fee) = d.tournament.player_reg_fee.filter(|_| !prepaid && !online_fee) {
                                             if fee > 0.0 {
                                                 div { class: "mb-3",
                                                     div { class: "alert alert-info",
@@ -212,7 +239,8 @@ pub fn TournamentRegister(url: String) -> Element {
                                             if !d.tournament.player_registration_open {
                                                 p { class: "alert alert-warning", "Player registration is currently closed. Contact an organizer if you need help." }
                                             }
-                                            button { r#type: "submit", class: "btn btn-primary", disabled: busy() || !d.tournament.player_registration_open, if busy() { "Registering…" } else { "Register" } }
+                                            button { r#type: "submit", class: "btn btn-primary", disabled: busy() || checkout_loading || payment_blocked || !d.tournament.player_registration_open,
+                                                if busy() && pays_online { "Opening checkout…" } else if busy() { "Registering…" } else if pays_online { "Continue to payment" } else { "Register" } }
                                         }
                                     }
                                 }
@@ -240,6 +268,15 @@ pub fn TournamentRegister(url: String) -> Element {
                                                 let pseudonym = get_form_value("pseudonym");
                                                 let shortname_raw = get_form_value("shortname");
                                                 let shortname = if shortname_raw.trim().is_empty() { None } else { Some(shortname_raw) };
+                                                if pays_online {
+                                                    let form = serde_json::json!({"pseudonym": pseudonym, "shortname": shortname});
+                                                    let return_to = Route::TournamentRegister { url: u.clone() }.to_string();
+                                                    if let Err(e) = continue_to_checkout(&PaidEntryScope::event(&u), "team", None, form, &return_to).await {
+                                                        register_error.set(Some(e));
+                                                        busy.set(false);
+                                                    }
+                                                    return;
+                                                }
                                                     match api::register_team(&u, &pseudonym, shortname.as_deref()).await {
                                                     Ok(res) if res.success => {
                                                         navigator.push(Route::TournamentHome { url: u });
@@ -264,7 +301,8 @@ pub fn TournamentRegister(url: String) -> Element {
                                             input { r#type: "text", class: "form-control", id: "shortname", aria_describedby: "shortname-help", name: "shortname", maxlength: "8", placeholder: "e.g. UWaoW" }
                                             div { id: "shortname-help", class: "form-text", "Used in schedules and brackets. Leave blank to auto-shorten." }
                                         }
-                                        if let Some(fee) = d.tournament.team_reg_fee.filter(|_| !prepaid) {
+                                        CheckoutFeeNotice { options: checkout_options.clone() }
+                                        if let Some(fee) = d.tournament.team_reg_fee.filter(|_| !prepaid && !online_fee) {
                                             if fee > 0.0 {
                                                 div { class: "mb-3",
                                                     div { class: "alert alert-info",
@@ -282,7 +320,8 @@ pub fn TournamentRegister(url: String) -> Element {
                                             if !d.tournament.team_registration_open {
                                                 p { class: "alert alert-warning", "Team registration is currently closed. Contact an organizer if you need help." }
                                             }
-                                            button { r#type: "submit", class: "btn btn-primary", disabled: busy() || !d.tournament.team_registration_open, if busy() { "Registering…" } else { "Register" } }
+                                            button { r#type: "submit", class: "btn btn-primary", disabled: busy() || checkout_loading || payment_blocked || !d.tournament.team_registration_open,
+                                                if busy() && pays_online { "Opening checkout…" } else if busy() { "Registering…" } else if pays_online { "Continue to payment" } else { "Register" } }
                                         }
                                     }
                                 }
