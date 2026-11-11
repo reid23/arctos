@@ -141,8 +141,9 @@ Authorization: Bearer <access token>
 returns the account. `sub` and `id` are both the username, which is
 the stable identifier. `preferred_username` is the same value, `name`
 is the display name, and `type` is `"player"` or `"team"`. `picture`
-is included for the `profile` scope when the account has a photo. The
-ID token carries the same identity claims, without `id` and `type`.
+is included for the `profile` scope when the account has a photo.
+`email`, when requested, is that same username. It is not a mailbox.
+The ID token carries the same identity claims, without `id` and `type`.
 
 ## Tokens
 
@@ -200,13 +201,16 @@ only for the scopes you need:
 |-------|--------------|
 | `openid` | Sign in with OpenID Connect and receive an ID token |
 | `profile` | See the account's profile photo |
+| `email` | Receive the account id in the `email` claim |
 | `injuries` | Read all of the user's injury records, including private ones |
 | `footage` | See tournaments the user organizes, including unpublished ones, and upload match footage to them |
 
 Every user grant can see the account's name and username, with or
-without `profile`. A client may include `email` in the scope list.
-Arctos accepts that request and drops `email`; it does not return an
-address.
+without `profile`. `email` is granted whenever a client asks for it.
+Arctos does not show that scope on the consent screen or in Connected
+apps. The claim is the account id from the profile URL, the same value
+as `sub`. It is not an email address, and it is not the account's
+contact address.
 
 ## Errors
 
