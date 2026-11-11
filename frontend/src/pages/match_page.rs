@@ -238,6 +238,175 @@ fn seek_youtube_to(secs: f64) {
 #[cfg(not(target_arch = "wasm32"))]
 fn seek_youtube_to(_secs: f64) {}
 
+fn is_youtube_video_id(value: &str) -> bool {
+    value.len() == 11
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+fn is_youtube_host(host: &str) -> bool {
+    matches!(
+        host,
+        "youtube.com"
+            | "www.youtube.com"
+            | "m.youtube.com"
+            | "music.youtube.com"
+            | "youtu.be"
+            | "www.youtu.be"
+            | "youtube-nocookie.com"
+            | "www.youtube-nocookie.com"
+    )
+}
+
+/// Video id from a stored footage link. Links are canonical watch URLs;
+/// embed, shorts, live, youtu.be, and a bare id are accepted too.
+fn youtube_video_id(raw: &str) -> Option<&str> {
+    let text = raw.trim();
+    if text.is_empty() {
+        return None;
+    }
+    if is_youtube_video_id(text) {
+        return Some(text);
+    }
+    let without_fragment = text.split('#').next().unwrap_or(text);
+    let (before_query, query) = without_fragment
+        .split_once('?')
+        .unwrap_or((without_fragment, ""));
+    let host_and_path = before_query
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(before_query);
+    let (host, path) = host_and_path.split_once('/').unwrap_or((host_and_path, ""));
+    let host = host.split('@').next_back().unwrap_or(host);
+    let host = host.split(':').next().unwrap_or(host);
+    if !is_youtube_host(&host.to_ascii_lowercase()) {
+        return None;
+    }
+    if host.eq_ignore_ascii_case("youtu.be") || host.eq_ignore_ascii_case("www.youtu.be") {
+        let video_id = path.split('/').next().unwrap_or("");
+        return is_youtube_video_id(video_id).then_some(video_id);
+    }
+    let mut parts = path.split('/').filter(|part| !part.is_empty());
+    if let Some(first) = parts.next() {
+        if matches!(first, "embed" | "shorts" | "v" | "live") {
+            let video_id = parts.next().unwrap_or("");
+            return is_youtube_video_id(video_id).then_some(video_id);
+        }
+    }
+    query.split('&').find_map(|pair| {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        (key == "v" && is_youtube_video_id(value)).then_some(value)
+    })
+}
+
+fn youtube_embed_src(video_id: &str) -> String {
+    let mut src = format!(
+        "https://www.youtube-nocookie.com/embed/{video_id}?autoplay=1&controls=1&enablejsapi=1&iv_load_policy=1&modestbranding=1&playsinline=1&rel=0"
+    );
+    #[cfg(target_arch = "wasm32")]
+    if let Some(origin) = web_sys::window().and_then(|window| window.location().origin().ok()) {
+        if !origin.is_empty() && origin != "null" {
+            src.push_str("&origin=");
+            src.push_str(&urlencoding::encode(&origin));
+        }
+    }
+    src
+}
+
+/// Bind the IFrame API to `#youtube-player` once `YT.Player` exists.
+#[cfg(target_arch = "wasm32")]
+fn youtube_player_script(video_id: &str) -> String {
+    format!(
+        r#"
+(function() {{
+  var videoId = {video_id:?};
+  var generation = (window.__arctosYtGeneration || 0) + 1;
+  window.__arctosYtGeneration = generation;
+
+  function stale() {{
+    return generation !== window.__arctosYtGeneration;
+  }}
+
+  function attach() {{
+    if (stale()) return true;
+    var el = document.getElementById('youtube-player');
+    if (!el || el.tagName !== 'IFRAME') return false;
+    if (!(window.YT && typeof window.YT.Player === 'function')) return false;
+    if (window.__arctosYtPlayer && window.__arctosYtVideoId === videoId) {{
+      try {{
+        var iframe = window.__arctosYtPlayer.getIframe && window.__arctosYtPlayer.getIframe();
+        if (iframe === el && el.isConnected) return true;
+      }} catch (err) {{}}
+    }}
+    try {{
+      window.__arctosYtPlayer = new YT.Player('youtube-player', {{
+        events: {{ onError: function(event) {{ console.error('YouTube player error', event.data); }} }}
+      }});
+      window.__arctosYtVideoId = videoId;
+      return true;
+    }} catch (err) {{
+      console.error('YouTube player attach failed', err);
+      return false;
+    }}
+  }}
+
+  var previousReady = window.onYouTubeIframeAPIReady;
+  window.onYouTubeIframeAPIReady = function() {{
+    if (typeof previousReady === 'function') {{
+      try {{ previousReady(); }} catch (err) {{}}
+    }}
+    attach();
+  }};
+  if (window.YT && typeof window.YT.ready === 'function') {{
+    window.YT.ready(function() {{ attach(); }});
+  }}
+  if (!document.querySelector('script[src*="iframe_api"]')) {{
+    var tag = document.createElement('script');
+    tag.src = 'https://www.youtube.com/iframe_api';
+    tag.async = true;
+    document.head.appendChild(tag);
+  }}
+  if (!attach()) {{
+    var attempts = 0;
+    var timer = setInterval(function() {{
+      attempts += 1;
+      if (attach() || attempts >= 150) clearInterval(timer);
+    }}, 100);
+  }}
+}})();
+"#,
+        video_id = video_id,
+    )
+}
+
+/// Footage embed. The iframe plays on its own; the IFrame API is attached for seeking.
+#[component]
+fn YoutubeFootage(video_id: String) -> Element {
+    let embed_src = youtube_embed_src(&video_id);
+    #[cfg(target_arch = "wasm32")]
+    use_effect(use_reactive(&video_id, move |video_id| {
+        let script = youtube_player_script(&video_id);
+        spawn(async move {
+            let _ = dioxus::prelude::document::eval(&script).await;
+        });
+    }));
+    rsx! {
+        div {
+            id: "youtube-player-container",
+            style: "width: 100%; max-width: 100%; aspect-ratio: 16/9;",
+            iframe {
+                id: "youtube-player",
+                style: "width: 100%; height: 100%; border: 0;",
+                src: "{embed_src}",
+                title: "Match footage",
+                allow: "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share",
+                allowfullscreen: true,
+            }
+        }
+    }
+}
+
 /// Compute seek time in seconds for YouTube: (point_stamp - stream_start_time). Returns None if missing/invalid.
 fn youtube_seek_seconds(point_stamp: Option<&str>, stream_start_time: Option<&str>) -> Option<f64> {
     let point_str = point_stamp?.trim();
@@ -1153,117 +1322,6 @@ fn MatchPageContent(url: String, match_id: Option<String>, match_name: Option<St
         });
     }
 
-    // Initialize YouTube iframe player when selected camera is YouTube and has a URL.
-    #[cfg(target_arch = "wasm32")]
-    {
-        let val_yt = val.clone();
-        use_effect(move || {
-            let _ = selected_camera_idx();
-            let binding = val_yt.read();
-            let camera_url: Option<String> = binding
-                .as_ref()
-                .and_then(|r| r.as_ref().ok())
-                .and_then(|d| {
-                    let idx =
-                        selected_camera_idx().min(d.available_cameras.len().saturating_sub(1));
-                    let cam = d.available_cameras.get(idx)?;
-                    if cam.status.as_deref() == Some("SUCCESS") {
-                        cam.url.clone()
-                    } else {
-                        None
-                    }
-                });
-            if let Some(url) = camera_url {
-                let url_escaped = url
-                    .replace('\\', "\\\\")
-                    .replace('\'', "\\'")
-                    .replace('\n', " ");
-                let script = format!(
-                    r#"
-(function() {{
-  var url = '{}';
-  function ensureApiLoaded() {{
-    if (window.YT && window.YT.Player) return;
-    if (document.querySelector('script[data-arctos-yt-api="1"]')) return;
-    var tag = document.createElement('script');
-    tag.src = 'https://www.youtube.com/iframe_api';
-    tag.setAttribute('data-arctos-yt-api', '1');
-    document.head.appendChild(tag);
-  }}
-  function extractVideoId(u) {{
-    if (!u) return null;
-    var m = u.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/v\/)([^&\n?#]+)/) || u.match(/^([a-zA-Z0-9_-]{{11}})$/);
-    return m ? m[1] : null;
-  }}
-  var videoId = extractVideoId(url);
-  if (videoId) {{
-    function getMountEl() {{
-      return document.getElementById('youtube-player');
-    }}
-    function resetStalePlayer(mountEl) {{
-      if (!window.__arctosYtPlayer) return;
-      try {{
-        var iframe = window.__arctosYtPlayer.getIframe ? window.__arctosYtPlayer.getIframe() : null;
-        if (!iframe || !mountEl || !mountEl.contains(iframe)) {{
-          try {{ window.__arctosYtPlayer.destroy(); }} catch (_err) {{}}
-          window.__arctosYtPlayer = null;
-          if (mountEl) {{
-            mountEl.innerHTML = '';
-          }}
-        }}
-      }} catch (_err) {{
-        window.__arctosYtPlayer = null;
-        if (mountEl) {{
-          mountEl.innerHTML = '';
-        }}
-      }}
-    }}
-    function createOrLoad() {{
-      var el = getMountEl();
-      if (!el) return;
-      resetStalePlayer(el);
-      if (window.__arctosYtPlayer) {{
-        try {{
-          window.__arctosYtPlayer.loadVideoById(videoId);
-          return;
-        }} catch (e) {{
-          try {{ window.__arctosYtPlayer.destroy(); }} catch (_err) {{}}
-          window.__arctosYtPlayer = null;
-          el.innerHTML = '';
-        }}
-      }}
-      if (!window.__arctosYtPlayer) {{
-        el.innerHTML = '';
-        window.__arctosYtPlayer = new YT.Player(el, {{
-          videoId: videoId,
-          host: 'https://www.youtube-nocookie.com',
-          playerVars: {{ autoplay: 1, controls: 1, rel: 0, modestbranding: 1, enablejsapi: 1, origin: window.location.origin, iv_load_policy: 1, playsinline: 1 }},
-          events: {{ onReady: function() {{}}, onError: function(e) {{ console.error('YouTube player error', e.data); }} }}
-        }});
-      }}
-    }}
-    ensureApiLoaded();
-    window.onYouTubeIframeAPIReady = function() {{ createOrLoad(); }};
-    if (window.YT && window.YT.Player) {{
-      createOrLoad();
-    }} else {{
-      setTimeout(createOrLoad, 150);
-      setTimeout(createOrLoad, 500);
-    }}
-  }} else {{
-    console.warn('Arctos: no YouTube video ID in', url);
-  }}
-}})();
-"#,
-                    url_escaped
-                );
-                spawn(async move {
-                    let _ = dioxus::prelude::document::eval(&script).await;
-                });
-            }
-        });
-    }
-
     // When match is not completed and we have a YouTube stream start, seek to live (end of stream) after player loads.
     #[cfg(target_arch = "wasm32")]
     {
@@ -1539,6 +1597,10 @@ fn MatchPageContent(url: String, match_id: Option<String>, match_name: Option<St
                     let time_video_prev = time_video_go.clone();
                     let time_world_next = time_world_go.clone();
                     let time_video_next = time_video_go.clone();
+                    let footage_video_id = current
+                        .and_then(|camera| camera.url.as_deref())
+                        .and_then(youtube_video_id)
+                        .map(str::to_string);
 
                     rsx! {
                         div { class: "card mt-3 match-video",
@@ -1624,13 +1686,17 @@ fn MatchPageContent(url: String, match_id: Option<String>, match_name: Option<St
                                 } else if status == "FAILED" {
                                     p { class: "text-danger", "This video could not be processed. Try another camera or contact the event organizer." }
                                 } else {
-                                    div {
-                                        id: "youtube-player-container",
-                                        style: "width: 100%; max-width: 100%; aspect-ratio: 16/9;",
+                                    if let Some(video_id) = footage_video_id {
+                                        YoutubeFootage { video_id }
+                                    } else {
                                         div {
-                                            id: "youtube-player",
-                                            style: "width: 100%; height: 100%;",
-                                            "Loading YouTube player…"
+                                            id: "youtube-player-container",
+                                            style: "width: 100%; max-width: 100%; aspect-ratio: 16/9;",
+                                            div {
+                                                id: "youtube-player",
+                                                style: "width: 100%; height: 100%;",
+                                                "Loading YouTube player…"
+                                            }
                                         }
                                     }
                                     div { class: "mt-3 d-flex align-items-center flex-wrap gap-2",
@@ -2336,8 +2402,6 @@ fn MatchPageContent(url: String, match_id: Option<String>, match_name: Option<St
                     // Match Footage Section (rendered via footage_section above)
                     { footage_section }
 
-                    // YouTube IFrame API (script from youtube.com; use host: youtube-nocookie.com when creating player)
-                        script { src: "https://www.youtube.com/iframe_api" }
                         script { src: "https://cdnjs.cloudflare.com/polyfill/v3/polyfill.min.js?features=es6" }
 
                         {
@@ -2667,6 +2731,60 @@ fn MatchPageContent(url: String, match_id: Option<String>, match_name: Option<St
             p { "Loading…" }
         }
         }
+    }
+}
+
+#[cfg(test)]
+mod youtube_video_id_tests {
+    use super::{youtube_embed_src, youtube_video_id};
+
+    #[test]
+    fn accepts_the_links_footage_stores_and_the_other_youtube_shapes() {
+        assert_eq!(
+            youtube_video_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ"),
+            Some("dQw4w9WgXcQ")
+        );
+        assert_eq!(
+            youtube_video_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=12s"),
+            Some("dQw4w9WgXcQ")
+        );
+        assert_eq!(
+            youtube_video_id("https://youtu.be/dQw4w9WgXcQ"),
+            Some("dQw4w9WgXcQ")
+        );
+        assert_eq!(
+            youtube_video_id("https://www.youtube.com/embed/dQw4w9WgXcQ"),
+            Some("dQw4w9WgXcQ")
+        );
+        assert_eq!(
+            youtube_video_id("https://www.youtube.com/shorts/dQw4w9WgXcQ"),
+            Some("dQw4w9WgXcQ")
+        );
+        assert_eq!(
+            youtube_video_id("https://www.youtube.com/live/dQw4w9WgXcQ"),
+            Some("dQw4w9WgXcQ")
+        );
+        assert_eq!(youtube_video_id("dQw4w9WgXcQ"), Some("dQw4w9WgXcQ"));
+        assert_eq!(
+            youtube_video_id("https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ"),
+            Some("dQw4w9WgXcQ")
+        );
+    }
+
+    #[test]
+    fn rejects_missing_and_non_youtube_links() {
+        assert_eq!(youtube_video_id(""), None);
+        assert_eq!(youtube_video_id("https://example.com/watch?v=dQw4w9WgXcQ"), None);
+        assert_eq!(youtube_video_id("https://www.youtube.com/watch?v=short"), None);
+        assert_eq!(youtube_video_id("not a video"), None);
+    }
+
+    #[test]
+    fn embed_src_uses_the_privacy_host_and_enables_the_iframe_api() {
+        let src = youtube_embed_src("dQw4w9WgXcQ");
+        assert!(src.starts_with("https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?"));
+        assert!(src.contains("enablejsapi=1"));
+        assert!(src.contains("autoplay=1"));
     }
 }
 

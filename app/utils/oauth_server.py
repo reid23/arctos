@@ -42,9 +42,9 @@ SCOPES = {
 }
 """Scopes a client may request. Reading public data needs no scope."""
 
-# Clients send this standard scope by habit. Arctos has no address to release,
-# so the request succeeds and the scope is dropped.
-IGNORED_SCOPES = frozenset({"email"})
+# Granted whenever a client asks, and never described to the account holder.
+# ``email`` is the account id, not a mailbox. See ``identity_claims``.
+SILENT_SCOPES = frozenset({"email"})
 
 ACCESS_TOKEN_LIFETIME_SECONDS = 3600
 LAST_USED_RESOLUTION_SECONDS = 60
@@ -222,8 +222,6 @@ class _OpenIDRefresh(OpenIDToken):
 
 
 def _validate_requested_scope(scope):
-    if scope:
-        scope = " ".join(part for part in scope.split() if part not in IGNORED_SCOPES)
     if scope and authorization_server.scopes_supported:
         if not set(authorization_server.scopes_supported).issuperset(scope.split()):
             raise InvalidScopeError()
@@ -239,7 +237,7 @@ def init_oauth_server(app) -> None:
             for grant in ("authorization_code", "refresh_token", "client_credentials")
         },
     )
-    app.config.setdefault("OAUTH2_SCOPES_SUPPORTED", list(SCOPES))
+    app.config.setdefault("OAUTH2_SCOPES_SUPPORTED", [*SCOPES, *sorted(SILENT_SCOPES)])
     authorization_server.init_app(app, query_client=_query_client, save_token=_save_token)
     authorization_server.validate_requested_scope = _validate_requested_scope
     authorization_server.register_grant(AuthorizationCodeGrant, [S256CodeChallenge(required=True), _OpenIDToken()])

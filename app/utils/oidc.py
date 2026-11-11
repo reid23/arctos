@@ -91,10 +91,14 @@ def identity_claims(user, scope: str) -> dict:
     """Claims the account has agreed to release for *scope*.
 
     Name and username are released to every user grant, matching the
-    consent screen. A profile photo requires the profile scope.
+    consent screen. A profile photo requires the profile scope. The
+    ``email`` claim is the account id from the profile URL, not a mailbox
+    and not the account's contact address.
     """
     granted = set(scope.split())
     claims = {"sub": user.id, "name": user.name, "preferred_username": user.id}
+    if "email" in granted:
+        claims["email"] = user.id
     if "profile" in granted:
         picture = picture_url(getattr(user, "profile_photo", None))
         if picture:
@@ -119,7 +123,7 @@ def provider_metadata() -> dict:
         "userinfo_endpoint": f"{base}/api/oauth/userinfo",
         "jwks_uri": f"{base}/api/oauth/jwks",
         "revocation_endpoint": f"{base}/api/oauth/revoke",
-        "scopes_supported": ["openid", "profile", "injuries", "footage"],
+        "scopes_supported": ["openid", "profile", "email", "injuries", "footage"],
         "response_types_supported": ["code"],
         "response_modes_supported": ["query"],
         "grant_types_supported": ["authorization_code", "refresh_token", "client_credentials"],
@@ -127,7 +131,7 @@ def provider_metadata() -> dict:
         "subject_types_supported": ["public"],
         "id_token_signing_alg_values_supported": ["RS256"],
         "code_challenge_methods_supported": ["S256"],
-        "claims_supported": ["sub", "name", "preferred_username", "picture"],
+        "claims_supported": ["sub", "name", "preferred_username", "picture", "email"],
         "service_documentation": f"{base}/developers.md",
     }
 

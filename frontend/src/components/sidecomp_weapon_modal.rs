@@ -55,7 +55,25 @@ pub struct PompfenOption {
     pub icon: &'static str,
 }
 
+const QWIK: PompfenOption = PompfenOption {
+    id: "QWIK",
+    label: "Qwik",
+    icon: "pompfen_symbols/unarmed.png",
+};
+
+/// Pompfen offered on a player profile, in display order.
+pub fn profile_pompfen() -> Vec<&'static PompfenOption> {
+    ALL_POMPFEN
+        .iter()
+        .filter(|option| option.id != "SKULL" && option.id != "UNARMED")
+        .chain(std::iter::once(&QWIK))
+        .collect()
+}
+
 pub fn pompfen_by_id(id: &str) -> Option<&'static PompfenOption> {
+    if id == QWIK.id {
+        return Some(&QWIK);
+    }
     ALL_POMPFEN.iter().find(|p| p.id == id)
 }
 

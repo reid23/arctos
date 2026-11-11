@@ -8,6 +8,8 @@ URL endpoint names are stable across moves:
 
 - :mod:`app.routes.tournaments.management` - TO-side tournament/league
   CRUD, fields, tags, TO membership.
+- :mod:`app.routes.tournaments.licenses` - voluntary license keys for
+  standalone events.
 - :mod:`app.routes.tournaments.scheduling` - schedule editing, recompute,
   push-back, import/export, DSL validation.
 - :mod:`app.routes.tournaments.footage` - the footage API: TO-authenticated
@@ -189,6 +191,7 @@ def delete_matches_with_children(match_uuids: list[str]) -> None:
 from app.routes.tournaments import (  # noqa: E402, F401
     brackets,
     footage,
+    licenses,
     management,
     matches_admin,
     read,

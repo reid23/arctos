@@ -37,5 +37,5 @@
 {%- endmacro %}
 
 {% macro site_footer() -%}
-<footer class="app-footer"><div class="container-wide"><div class="footer-top"><nav class="footer-links" aria-label="Help and information">{% for path,label in [('about','About'),('docs.md','Documentation'),('developers.md','Developers'),('thanks','Thanks'),('privacy-policy.md','Privacy'),('terms.md','Terms'),('license.md','License')] %}<a href="{{ request.script_root }}/{{ path }}">{{ label }}</a>{% endfor %}</nav></div><div class="footer-bottom"><p><a href="https://github.com/reid23/arctos">Source code</a></p><p>An independent project, not affiliated with CAJA or the US NJA.</p></div></div></footer>
+<footer class="app-footer"><div class="container-wide"><div class="footer-top"><nav class="footer-links" aria-label="Help and information">{% for path,label in [('about','About'),('docs.md','Documentation'),('developers.md','Developers'),('thanks','Thanks'),('support.md','Support'),('privacy-policy.md','Privacy'),('terms.md','Terms'),('license.md','License')] %}<a href="{{ request.script_root }}/{{ path }}">{{ label }}</a>{% endfor %}</nav></div><div class="footer-bottom"><p><a href="https://github.com/reid23/arctos">Source code</a></p><p>An independent project, not affiliated with CAJA or the US NJA.</p></div></div></footer>
 {%- endmacro %}
