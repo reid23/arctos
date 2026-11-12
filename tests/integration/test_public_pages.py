@@ -628,3 +628,108 @@ def test_missing_build_stays_noindex_for_otherwise_public_application_route(publ
     response = public_client.get("/players")
     assert response.status_code == 503
     assert_robots(response, noindex=True)
+
+
+def _meta(html, *, prop=None, name=None):
+    for attrs in Elements(html).all("meta"):
+        if prop is not None and attrs.get("property") == prop:
+            return attrs.get("content")
+        if name is not None and attrs.get("name") == name:
+            return attrs.get("content")
+    return None
+
+
+def test_link_previews_use_the_logo_banner_or_profile_photo(public_client, app, monkeypatch, tournament, player, team):
+    from app.services.link_preview import logo_preview_url
+
+    with app.test_request_context("/"):
+        logo = logo_preview_url()
+    assert logo.startswith("https://arctos.example/static/public/arctos-logo.png?v=")
+
+    home = public_client.get("/").get_data(as_text=True)
+    login = public_client.get("/login").get_data(as_text=True)
+    for document in (home, login):
+        assert _meta(document, prop="og:image") == logo
+        assert _meta(document, prop="og:image:alt") == "Arctos"
+        assert _meta(document, prop="og:site_name") == "Arctos"
+        assert _meta(document, name="twitter:card") == "summary_large_image"
+        assert _meta(document, name="twitter:image") == logo
+
+    bare = public_client.get(f"/players/{player.id}").get_data(as_text=True)
+    assert _meta(bare, prop="og:image") == logo
+    assert _meta(bare, prop="og:title") == player.name
+    assert f"<title>{player.name}</title>" in bare
+    assert _meta(bare, prop="og:description") == f"{player.name} on Arctos."
+
+    player.profile_photo = "uploads/profiles/player.jpg"
+    team.profile_photo = "uploads/profiles/team.jpg"
+    tournament.banner_photo = "uploads/banners/cup.jpg"
+    league = make_league()
+    league.banner_photo = "uploads/league-banners/season.jpg"
+    db.session.commit()
+
+    banner = "https://arctos.example/static/uploads/banners/cup.jpg"
+    event = public_client.get(f"/{tournament.url}").get_data(as_text=True)
+    assert _meta(event, prop="og:image") == banner
+    assert _meta(event, prop="og:image:alt") == tournament.name
+    assert _meta(event, name="twitter:image") == banner
+    schedule = public_client.get(f"/{tournament.url}/settings").get_data(as_text=True)
+    assert _meta(schedule, prop="og:image") == banner
+    assert _meta(schedule, prop="og:title") == tournament.name
+    assert tournament.location in (_meta(schedule, prop="og:description") or "")
+
+    league_banner = "https://arctos.example/static/uploads/league-banners/season.jpg"
+    league_page = public_client.get(f"/leagues/{league.url}").get_data(as_text=True)
+    assert _meta(league_page, prop="og:image") == league_banner
+    assert _meta(league_page, prop="og:image:alt") == league.name
+    league_tools = public_client.get(f"/leagues/{league.url}/results").get_data(as_text=True)
+    assert _meta(league_tools, prop="og:image") == league_banner
+
+    player_photo = "https://arctos.example/static/uploads/profiles/player.jpg"
+    profile = public_client.get(f"/players/{player.id}/edit").get_data(as_text=True)
+    assert _meta(profile, prop="og:image") == player_photo
+    assert _meta(profile, prop="og:image:alt") == player.name
+    team_photo = "https://arctos.example/static/uploads/profiles/team.jpg"
+    roster = public_client.get(f"/teams/{team.id}").get_data(as_text=True)
+    assert _meta(roster, prop="og:image") == team_photo
+    assert _meta(roster, prop="og:title") == team.name
+    assert _meta(public_client.get("/teams").get_data(as_text=True), prop="og:image") == logo
+    assert _meta(public_client.get("/players/missing").get_data(as_text=True), prop="og:image") == logo
+
+    monkeypatch.setitem(app.config, "PUBLIC_HTML_ENABLED", False)
+    application_event = public_client.get(f"/{tournament.url}/schedule").get_data(as_text=True)
+    assert _meta(application_event, prop="og:image") == banner
+    monkeypatch.setitem(app.config, "PUBLIC_HTML_ENABLED", True)
+
+    prefixed = public_client.get(f"/{tournament.url}", environ_overrides={"SCRIPT_NAME": "/arctos"})
+    assert (
+        _meta(prefixed.get_data(as_text=True), prop="og:image")
+        == "https://arctos.example/arctos/static/uploads/banners/cup.jpg"
+    )
+
+    for stored in ("https://untrusted.example/image.jpg", "../private.png", "/etc/passwd"):
+        tournament.banner_photo = stored
+        db.session.commit()
+        document = public_client.get(f"/{tournament.url}").get_data(as_text=True)
+        assert _meta(document, prop="og:image") == logo
+        assert "untrusted.example" not in document
+        assert "private.png" not in document
+        assert "passwd" not in document
+
+    tournament.banner_photo = "uploads/banners/secret.jpg"
+    tournament.published = False
+    db.session.commit()
+    hidden = public_client.get(f"/{tournament.url}").get_data(as_text=True)
+    assert "secret.jpg" not in hidden
+    assert _meta(hidden, prop="og:image") == logo
+
+    monkeypatch.setitem(app.config, "PUBLIC_CANONICAL_ORIGIN", "")
+    without_origin = public_client.get("/login").get_data(as_text=True)
+    assert 'property="og:image"' not in without_origin
+    monkeypatch.setitem(app.config, "PUBLIC_CANONICAL_ORIGIN", "https://arctos.example")
+
+    db.session.add(TO(event=tournament.url, user_id=player.id, user_type="player"))
+    db.session.commit()
+    login_as(public_client, player)
+    draft = public_client.get(f"/{tournament.url}").get_data(as_text=True)
+    assert _meta(draft, prop="og:image") == "https://arctos.example/static/uploads/banners/secret.jpg"

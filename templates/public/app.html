@@ -6,7 +6,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   {% if noindex or not entry %}<meta name="robots" content="noindex">{% endif %}
   <title>{{ title }}</title>
+  <meta data-public-meta property="og:title" content="{{ title }}">
+  <meta data-public-meta property="og:type" content="website">
+  <meta data-public-meta property="og:site_name" content="Arctos">
+  {% if description %}
+  <meta data-public-meta name="description" content="{{ description }}">
+  <meta data-public-meta property="og:description" content="{{ description }}">
+  {% endif %}
   <link rel="icon" type="image/png" href="{{ public_asset('arctos-light.png') }}">
+  {% include "public/preview.html" %}
   {% if not bare %}
   {% if entry %}<link rel="modulepreload" href="{{ entry }}">{% endif %}
   <script src="{{ public_asset('appearance.js') }}"></script>
