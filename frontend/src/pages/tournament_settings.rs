@@ -826,8 +826,8 @@ pub fn TournamentSettings(url: String) -> Element {
             div { class: "penalty-settings-wrap organizer-settings",
                 ToolPageHeader { title: "Settings", actions: rsx! { SettingsSaveJump {} } }
 
-            div { class: "tournament-settings-layout",
-            div { class: "tournament-settings-columns",
+            div { class: "settings-layout",
+            div { class: "settings-columns",
                 div { class: "col-12",
                     div { class: "edit-section ordinary-form-rail",
                         div { class: "edit-section-heading",
@@ -1159,7 +1159,7 @@ pub fn TournamentSettings(url: String) -> Element {
                 }
                 }
 
-                div { class: "col-12 tournament-settings-side",
+                div { class: "col-12 settings-side",
                     LicenseKeySection {
                         kind: "event".to_string(),
                         target_url: url.clone(),

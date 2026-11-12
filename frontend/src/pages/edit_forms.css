@@ -40,16 +40,16 @@
 
 /* Ordinary task pages keep a readable rail; data and operational tools stay wide. */
 .arctos-app .ordinary-form-rail { width: 100%; max-width: 760px; min-width: 0; }
-.arctos-app .tournament-settings-layout { container-type: inline-size; }
-.arctos-app .tournament-settings-columns { align-items: start; }
+.arctos-app .settings-layout { container-type: inline-size; }
+.arctos-app .settings-columns { align-items: start; }
 @container (min-width: 72rem) {
-  .arctos-app .tournament-settings-columns {
+  .arctos-app .settings-columns {
     display: grid;
     grid-template-columns: 760px minmax(0, 1fr);
     column-gap: 2.5rem;
   }
-  .arctos-app .tournament-settings-columns > .col-12 { width: auto; max-width: none; min-width: 0; }
-  .arctos-app .tournament-settings-side .ordinary-form-rail { max-width: none; }
+  .arctos-app .settings-columns > .col-12 { width: auto; max-width: none; min-width: 0; }
+  .arctos-app .settings-side .ordinary-form-rail { max-width: none; }
 }
 .arctos-app .tool-page-header { min-width: 0; margin-bottom: 1.5rem; }
 .arctos-app .tool-page-back { display: inline-flex; align-items: center; gap: .5rem; min-height: 44px; margin-bottom: .25rem; color: var(--ui-link); font-size: .875rem; text-decoration: none; }
