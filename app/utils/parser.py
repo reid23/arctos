@@ -684,6 +684,17 @@ class Simplifier:
                 return True
         return False
 
+    def _has_unbound_list_argument(self, head: str, args) -> bool:
+        """True if an argument in a LIST position is a free identifier.
+
+        Free identifiers stay strings until they are bound, and a string must
+        not be iterated as if it were a list of its characters.
+        """
+        expected_types = _SIGNATURES[head].get("args", ())
+        return any(
+            expected == _LIST and self._is_unresolved_identifier(arg) for arg, expected in zip(args, expected_types)
+        )
+
     def _validate_arity(self, head: str, args, min_count: int, max_count, optional_count: int = 0):
         """Validate argument count. Raises DSLValidationError if invalid."""
         actual = len(args)
@@ -912,6 +923,8 @@ class Simplifier:
             if head in _SIGNATURES:
                 # Validate against the centralized signature table before dispatching.
                 self._validate_call(head, args)
+                if self._has_unbound_list_argument(head, args):
+                    return Preserved([head, *args])
             # Handle built-in functions
             if head == "car":
                 return self._evaluate_car(head, args)
