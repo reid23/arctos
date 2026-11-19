@@ -28,7 +28,6 @@ from models import (
 from app.error_values import Ok, Err, Some
 from app.services.dual_write import (
     clear_match_referees,
-    get_match_referee_rows,
     get_match_refs_csv,
     get_match_refs_initial_csv,
     set_match_referees_from_csv,
@@ -38,7 +37,9 @@ from app.services.match_start_eligibility import (
     get_can_start_and_reasons,
     get_conflicting_match_on_field,
 )
+from app.services.schedule_edit_service import ScheduleEditService
 from app.services.schedule_import_export_service import ScheduleImportExportService
+from app.services.tournament_management_service import TournamentManagementService
 from app.utils.dependencies import apply_match_dependencies
 from app.utils.helpers import (
     can_head_ref_match,
@@ -54,7 +55,6 @@ from app.utils.scheduling import (
     compute_dynamic_match_nominal_start_time,
     validate_match_input,
     validate_match_warnings,
-    recompute_all_match_times,
     recompute_scheduled_and_nominal_times,
     push_back_unstarted_matches,
 )
@@ -62,7 +62,7 @@ from app.utils.datetime_helpers import now_utc_naive, parse_datetime_local_to_ut
 from app.utils.name_validation import match_name_char_error
 from app.utils.decorators import require_tournament_organizer
 from app.utils.responses import json_error
-from app.utils.result_helpers import json_from_result, public_error_message
+from app.utils.result_helpers import json_from_result, public_error_message, result_response
 from app.utils.user_helpers import is_player
 
 
@@ -1270,48 +1270,19 @@ def force_start_match_api(tournament_url, match_id):
 def update_all_references_api(tournament_url):
     if not _check_to(tournament_url):
         return jsonify({"error": "Forbidden"}), 403
-
-    completed = (
-        Match.query.filter_by(event=tournament_url)
-        .filter(Match.status.in_([MatchStatus.COMPLETED, MatchStatus.SKIPPED]))
-        .all()
-    )
-    for m in completed:
-        apply_match_dependencies(tournament_url, m)
-
+    ScheduleEditService.update_all_references(tournament_url)
     return jsonify({"success": True})
 
 
 @bp.route("/tournaments/<tournament_url>/push-back-matches", methods=["POST"])
 @login_required
 def push_back_matches_api(tournament_url):
-    from datetime import date
-
     if not _check_to(tournament_url):
         return jsonify({"error": "Forbidden"}), 403
-
-    data = request.get_json() or {}
-    try:
-        minutes = int(data.get("minutes", 0))
-    except (TypeError, ValueError):
-        return jsonify({"error": "Invalid number of minutes"}), 400
-    if not minutes:
-        return jsonify({"success": True})
-
-    day_str = (data.get("day") or "").strip()
-    if not day_str:
-        return jsonify({"error": "day is required (YYYY-MM-DD)."}), 400
-    try:
-        day = date.fromisoformat(day_str)
-    except ValueError:
-        return jsonify({"error": "day must be YYYY-MM-DD."}), 400
-    try:
-        tz_offset_minutes = int(data.get("tz_offset_minutes", 0))
-    except (TypeError, ValueError):
-        return jsonify({"error": "Invalid tz_offset_minutes"}), 400
-
-    push_back_unstarted_matches(tournament_url, minutes, day, tz_offset_minutes=tz_offset_minutes)
-    return jsonify({"success": True})
+    return result_response(
+        ScheduleEditService.push_back_matches(tournament_url, request.get_json() or {}),
+        lambda _count: {"success": True},
+    )
 
 
 @bp.route("/tournaments/<tournament_url>/update-tags", methods=["POST"])
@@ -1322,49 +1293,11 @@ def update_tags_api(tournament_url):
 
     data = request.get_json()
     tag_id = data.get("tag_id")
-
     if not tag_id:
         return jsonify({"error": "Tag required"}), 400
-
-    tag = Tag.query.filter_by(id=tag_id, event=tournament_url).first_or_404()
-    if "expression" in data:
-        from app.routes.tournaments.matches_admin import validate_tag_expression
-
-        expression, err = validate_tag_expression(tournament_url, data.get("expression"))
-        if err:
-            return jsonify({"error": err}), 400
-        tag.expression = expression
-    if "team_id" in data:
-        team_id = data.get("team_id")
-        tag.team = team_id if team_id else None
-    db.session.commit()
-
-    # Effective resolution: manual override if set, else the tag's expression.
-    effective_team = resolve_tag_to_team(f"tag::{tag.name}", tournament_url)
-
-    # Update matches
-    matches = Match.query.filter_by(event=tournament_url).all()
-    tag_ref = f"tag::{tag.name}"
-
-    for m in matches:
-        if m.status in (
-            MatchStatus.COMPLETED,
-            MatchStatus.SKIPPED,
-            MatchStatus.IN_PROGRESS,
-        ):
-            continue
-        if m.team1_initial == tag_ref:
-            m.team1 = effective_team
-        if m.team2_initial == tag_ref:
-            m.team2 = effective_team
-
-        for row in get_match_referee_rows(m):
-            if (row.initial or "").strip() == tag_ref:
-                row.team_id = effective_team
-
-    db.session.commit()
-    recompute_all_match_times(tournament_url)
-    return jsonify({"success": True})
+    return result_response(
+        TournamentManagementService.assign_tag(tournament_url, tag_id, data), lambda _tag: {"success": True}
+    )
 
 
 @bp.route("/tournaments/<tournament_url>/export-schedule", methods=["GET"])
