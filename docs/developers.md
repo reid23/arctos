@@ -873,3 +873,313 @@ All team accounts, by name, 50 to a page, in the same shape as
 
 Each registration's `players` is its confirmed roster, in the same shape
 as a tournament's `/players`.
+
+### Registrations
+
+Organizers can see every registration with its payment and waiver
+status, register teams and players, record payments, and cancel
+registrations. These need a token with the `manage` scope whose user
+organizes the tournament or league (otherwise `403`). A tournament in a
+league shares the league's registrations.
+
+#### `GET /tournaments/{tournament_id}/registrations` and `GET /leagues/{league_id}/registrations`
+
+Team registrations that aren't cancelled, and pending, confirmed, and
+rejected player registrations:
+
+```json
+{
+  "teams": [
+    {
+      "id": 31,
+      "team": {"id": "jsmith-team", "name": "Smith Team Account"},
+      "name": "Smith & Co",
+      "shortname": "SMC",
+      "status": "CONFIRMED",
+      "registered_at": "2026-03-02T18:21:00Z",
+      "payment": {
+        "paid": true,
+        "amount_paid": 40.0,
+        "paid_at": "2026-03-03T10:00:00Z",
+        "payment_method": "venmo",
+        "payment_reference": "8812",
+        "payment_notes": null
+      }
+    }
+  ],
+  "players": [
+    {
+      "id": 207,
+      "player": {"id": "jsmith", "name": "Jane Smith"},
+      "team": {"id": "jsmith-team", "name": "Smith & Co", "shortname": "SMC"},
+      "jersey_name": "SMITH",
+      "jersey_number": "7",
+      "status": "PENDING_TEAM_APPROVAL",
+      "registered_at": "2026-03-04T08:00:00Z",
+      "waiver_status": "NOT_SIGNED",
+      "payment": {"paid": false, "...": "..."}
+    }
+  ]
+}
+```
+
+`id` is the registration id. A player's `status` is
+`PENDING_TEAM_APPROVAL` (waiting for their team), `CONFIRMED`, or
+`REJECTED`. `waiver_status` is `VALID`, `NOT_SIGNED`, `OUT_OF_DATE`
+(signed an earlier waiver), or `null` when no waiver is required.
+
+#### `POST /tournaments/{tournament_id}/registrations/teams`
+
+Register a team, confirmed and marked paid:
+
+```json
+{"team_id": "jsmith-team", "name": "Smith & Co", "shortname": "SMC"}
+```
+
+`name` defaults to the team account's name; `shortname` is optional.
+Returns `201` with `{"registration": {...}}` in the shape above. `400` when the
+team is already registered or the tournament is full.
+
+#### `POST /tournaments/{tournament_id}/registrations/players`
+
+Register a player, confirmed and marked paid:
+
+```json
+{
+  "player_id": "jsmith",
+  "team_id": "jsmith-team",
+  "jersey_name": "SMITH",
+  "jersey_number": "7",
+  "waiver_legal_name_signature": "Jane Smith"
+}
+```
+
+Only `player_id` is required. `waiver_legal_name_signature` is required
+when the tournament has a waiver. Returns `201` with `{"registration": {...}}`.
+
+#### `PATCH .../registrations/teams/{registration_id}` and `PATCH .../registrations/players/{registration_id}`
+
+Under `/tournaments/{tournament_id}` or `/leagues/{league_id}`. Replaces
+the registration's payment details:
+
+```json
+{"paid": true, "amount_paid": 40, "payment_method": "venmo", "payment_reference": "8812", "payment_notes": ""}
+```
+
+`paid` is required; the other fields default to `0` and empty. Returns
+`{"registration": {...}}`.
+
+#### `DELETE .../registrations/teams/{team_id}` and `DELETE .../registrations/players/{player_id}`
+
+Under `/tournaments/{tournament_id}` or `/leagues/{league_id}`. Cancels a
+confirmed team registration (with its players' registrations), or a
+pending or confirmed player registration, even when registration is
+closed. In a standalone tournament the players' side competition
+registrations are cancelled too. Returns `204`, or `404` when there is
+nothing to cancel.
+
+### Penalty types
+
+The penalty categories referees attach to match notes. A tournament in
+a league uses the league's penalty types. Listing them needs no scope;
+changes need a token with the `manage` scope whose user organizes the
+tournament or league.
+
+#### `GET /tournaments/{tournament_id}/penalty-types` and `GET /leagues/{league_id}/penalty-types`
+
+```json
+{"penalty_types": [{"id": 4, "name": "Shield foul", "color": "e6194b", "description": "Rule 4.2"}]}
+```
+
+`color` is six hex digits.
+
+#### `POST .../penalty-types`
+
+```json
+{"name": "Shield foul", "description": "Rule 4.2", "color": "#e6194b"}
+```
+
+`name` (up to 50 characters) is required. Without `color`, Arctos picks
+one not yet used. Returns `201` with `{"penalty_type": {...}}`.
+
+#### `PATCH .../penalty-types/{penalty_type_id}` and `DELETE .../penalty-types/{penalty_type_id}`
+
+`PATCH` changes the fields present in the body (an invalid `color` is
+ignored) and returns `{"penalty_type": {...}}`. `DELETE` returns `204`,
+or `409` while a match note uses the penalty type.
+
+### Side competitions (organizers)
+
+Set up side competitions. These need a token with the `manage` scope
+whose user organizes the tournament. Creating returns `201`. Responses are
+`{"side_competition": {...}}` in the shape of
+[`GET .../side-competitions/{side_competition_id}`](#get-tournamentstournament_idside-competitionsside_competition_id),
+which also has `only_show_top_n_results`.
+
+#### `POST /tournaments/{tournament_id}/side-competitions`
+
+```json
+{
+  "name": "Dueling",
+  "type": "DUELING",
+  "description": "Best of three.",
+  "allowed_weapons": ["LONG", "STAFF"],
+  "only_show_top_n_results": 10,
+  "schedule": {"start_time": "2026-05-01T12:00:00Z", "end_time": "2026-05-01T13:00:00Z", "field": "Field 1"}
+}
+```
+
+`name` and `type` (`DUELING`, `CHAIN_BREAKING`, or `OTHER`) are
+required. `allowed_weapons` defaults to every weapon.
+`only_show_top_n_results` limits the public results (`null` shows all).
+`schedule` (optional) also puts the side competition on the schedule,
+with the fields of a [schedule item](#schedule-items) other than `title`
+and `description`.
+
+#### `PATCH /tournaments/{tournament_id}/side-competitions/{side_competition_id}`
+
+Changes the fields present in the body: `name`, `type`, `description`,
+`registration_open`, `active`, `track_losses`, `track_chain_losses`,
+`track_break_losses`, `track_matchups`, `allowed_weapons`, and
+`only_show_top_n_results`. Registrants whose weapon is no longer allowed
+are deregistered.
+
+#### `DELETE /tournaments/{tournament_id}/side-competitions/{side_competition_id}`
+
+Deletes the side competition with its registrations and results.
+Returns `204`.
+
+#### `POST /tournaments/{tournament_id}/side-competitions/{side_competition_id}/finalize`
+
+Permanently finalizes the results.
+
+### Schedule items
+
+Activities on the schedule other than matches (ceremonies, meals,
+clinics). Listing them follows the schedule's visibility, like
+[`/matches`](#get-tournamentstournament_idmatches); changes need a token
+with the `manage` scope whose user organizes the tournament.
+
+#### `GET /tournaments/{tournament_id}/schedule-items`
+
+By start time:
+
+```json
+{
+  "schedule_items": [
+    {
+      "id": 9,
+      "sidecomp_id": null,
+      "title": "Opening ceremony",
+      "description": "All teams on Field 1.",
+      "start_time": "2026-05-01T13:00:00Z",
+      "end_time": "2026-05-01T13:30:00Z",
+      "field": "Field 1",
+      "location": null
+    }
+  ]
+}
+```
+
+An item with a `sidecomp_id` schedules that side competition and shows
+its name and description.
+
+#### `POST /tournaments/{tournament_id}/schedule-items`
+
+```json
+{
+  "title": "Opening ceremony",
+  "description": "All teams on Field 1.",
+  "start_time": "2026-05-01T09:00:00-04:00",
+  "end_time": "2026-05-01T09:30:00-04:00",
+  "field": "Field 1",
+  "location": null,
+  "sidecomp_id": null,
+  "request_id": "6f1c3e1a-8a8c-4a52-9a43-2b1f0b0c7c11"
+}
+```
+
+Times need a timezone, and an item lasts at most 31 days. `title` is
+required unless `sidecomp_id` names one of the tournament's side
+competitions. `field` must be one of the tournament's fields. Returns
+`201` with `{"schedule_item": {...}}`. `request_id` (optional, a UUID)
+makes retries safe: sending the same item again returns `200` with the
+saved one, and different details with a used `request_id` get `409`.
+
+#### `PUT /tournaments/{tournament_id}/schedule-items/{item_id}` and `DELETE /tournaments/{tournament_id}/schedule-items/{item_id}`
+
+`PUT` replaces the item's details (same body; `request_id` is ignored)
+and returns `{"schedule_item": {...}}`. `DELETE` returns `204`.
+
+### Brackets
+
+The bracket diagram: matches placed on a canvas and connected by wires,
+plus text, labeled teams, and images. Reading it needs the bracket to be
+published (otherwise `403`), except for a token with the `footage` or
+`manage` scope whose user organizes the tournament. Changes need the
+`manage` scope and an organizer.
+
+#### `GET /tournaments/{tournament_id}/bracket`
+
+```json
+{
+  "bracket": {
+    "published": true,
+    "placements": [
+      {
+        "match": "5b1e...",
+        "placed": true,
+        "x_pos": 300.0,
+        "y_pos": 40.0,
+        "width": 280.0,
+        "height": 100.0,
+        "team1": "NET",
+        "team2": "LABEL",
+        "inputs_flipped": false
+      }
+    ],
+    "texts": [{"id": "title", "text": "Finals", "x_pos": 10.0, "y_pos": 10.0, "size": 18.0}],
+    "labeled_teams": [
+      {"id": "seed-1", "label": "1st seed", "team": "tag::Seed 1", "kind": "LABEL", "x_pos": 10.0, "y_pos": 80.0}
+    ],
+    "images": [
+      {"id": "logo", "image": "uploads/brackets/...", "x_pos": 0.0, "y_pos": 0.0, "width": 200.0, "height": 120.0}
+    ]
+  }
+}
+```
+
+`match` is a match id. A placement with `placed: false` is off the
+canvas but keeps its settings. `team1` and `team2` are `NET` (a wire
+from the match a `Match::winner` or `Match::loser` slot comes from) or
+`LABEL` (a text label). A labeled team's `team` is a team id, a `tag::`
+reference, or a `Match::winner` reference. `image` is a path on the
+Arctos host under `/static/`.
+
+#### `PATCH /tournaments/{tournament_id}/bracket`
+
+`{"published": true}` shows the bracket to everyone; `false` hides it.
+Returns `{"bracket": {...}}`.
+
+#### `PUT /tournaments/{tournament_id}/bracket/layout`
+
+Saves the canvas, in the shape `GET` returns:
+
+```json
+{
+  "placements": [{"match": "5b1e...", "x_pos": 300, "y_pos": 40, "team1": "NET", "team2": "LABEL"}],
+  "texts": [{"id": "title", "text": "Finals", "x_pos": 10, "y_pos": 10, "size": 18}],
+  "labeled_teams": [],
+  "images": [],
+  "clear_missing": false
+}
+```
+
+`placements` is required; `texts`, `labeled_teams`, and `images` are
+optional. Rows are matched by `match` or `id`, then created or updated;
+choose your own ids for new text and labeled teams. Breaks and joins
+can't be placed. A match without both `x_pos` and `y_pos` is unplaced.
+`NET` on a slot that doesn't come from another match becomes `LABEL`.
+With `clear_missing: true`, rows left out of a list you sent are
+deleted. Images can only refer to files already uploaded on the
+website. Returns `{"bracket": {...}}`.
