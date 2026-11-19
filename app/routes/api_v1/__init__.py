@@ -20,6 +20,11 @@ Submodules, one per resource area:
 - :mod:`~app.routes.api_v1.footage` - footage upload (``footage`` scope).
 - :mod:`~app.routes.api_v1.manage_tournaments`, :mod:`~app.routes.api_v1.manage_schedule`,
   :mod:`~app.routes.api_v1.manage_leagues` - organizer writes (``manage`` scope).
+- :mod:`~app.routes.api_v1.manage_registrations` - organizer registration lists, payments, and
+  deregistration (``manage`` scope).
+- :mod:`~app.routes.api_v1.manage_penalty_types`, :mod:`~app.routes.api_v1.manage_side_competitions`,
+  :mod:`~app.routes.api_v1.manage_schedule_items`, :mod:`~app.routes.api_v1.manage_brackets` - event setup
+  (reads public, writes ``manage`` scope).
 - :mod:`~app.routes.api_v1.leagues`, :mod:`~app.routes.api_v1.players`, :mod:`~app.routes.api_v1.teams`.
 """
 
@@ -76,6 +81,10 @@ def can_view_tournament(tournament) -> bool:
 
 def can_view_schedule(tournament) -> bool:
     return bool(tournament.schedule_published) or _is_organizer_view(tournament)
+
+
+def can_view_bracket(tournament) -> bool:
+    return bool(tournament.bracket_published) or _is_organizer_view(tournament)
 
 
 def can_view_league(league) -> bool:
@@ -202,8 +211,13 @@ def method_not_allowed(exception):
 from app.routes.api_v1 import (  # noqa: E402, F401
     footage,
     leagues,
+    manage_brackets,
     manage_leagues,
+    manage_penalty_types,
+    manage_registrations,
     manage_schedule,
+    manage_schedule_items,
+    manage_side_competitions,
     manage_tournaments,
     matches,
     me,

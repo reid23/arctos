@@ -9,6 +9,7 @@ app.services
    :maxdepth: 1
 
    app.services._common
+   app.services.bracket_service
    app.services.dual_write
    app.services.frontend_shell
    app.services.historical_claims_service
@@ -17,6 +18,7 @@ app.services
    app.services.match_actions_service
    app.services.match_service
    app.services.match_start_eligibility
+   app.services.penalty_type_service
    app.services.permission_service
    app.services.public_league_service
    app.services.public_page_service
