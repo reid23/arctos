@@ -887,7 +887,9 @@ or league. Other users get `403`, or `404` when the tournament isn't
 published. Changes return `200` with the changed resource, creations
 `201`, and deletions `204` with no body.
 
-To set up a tournament from scratch:
+To set up a tournament from scratch (for LLM agents, [For AI
+Agents](agents.md) walks through this with a tested example and
+checks):
 
 1. `POST /tournaments` to create it.
 2. `PATCH /tournaments/{tournament_id}` with dates, location, and

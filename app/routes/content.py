@@ -102,6 +102,7 @@ def markdown_page(slug):
         "support": ("support.md", "Support Arctos"),
         "terms": ("terms.md", "Terms and Conditions"),
         "developers": ("developers.md", "For Developers"),
+        "agents": ("agents.md", "For AI Agents"),
     }
     if slug not in mapping:
         return jsonify({"error": "Not found"}), 404

@@ -159,6 +159,7 @@ fn page_title_for_route(route: &Route) -> String {
         Route::ArctosScheduleScript { .. } => "Arctos Schedule Script".into(),
         Route::DataAccessibilityGuide { .. } => "Data Accessibility Guide".into(),
         Route::Developers { .. } => "For Developers".into(),
+        Route::Agents { .. } => "For AI Agents".into(),
         Route::DeveloperApps { .. } => "Your Apps".into(),
         Route::OAuthAuthorize { .. } => "Sign in with Arctos".into(),
         Route::SideCompNew { url } => format!("{url} New Side Competition"),

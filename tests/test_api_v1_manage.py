@@ -5,6 +5,7 @@ and building the schedule.
 """
 
 import textwrap
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -478,3 +479,36 @@ def test_set_up_a_tournament_end_to_end(client, headers, people):
     assert reimported.status_code == 200, reimported.get_json()
     assert reimported.get_json()["matches_updated"] == 3
     assert Match.query.filter_by(event="summer-cup").count() == 3
+
+
+def test_agents_guide_example_schedule_imports_without_warnings(client, headers):
+    guide = (Path(__file__).resolve().parents[1] / "docs" / "agents.md").read_text()
+    script = guide.split("```toml\n", 1)[1].split("```", 1)[0]
+    teams = ("bears", "wolves", "otters", "foxes", "hawks", "crows")
+    for team_id in teams:
+        db.session.add(Team(id=team_id, name=team_id.title(), pw_hash="x"))
+    db.session.commit()
+    assert (
+        client.post("/api/v1/tournaments", headers=headers, json={"id": "summer-cup", "name": "Summer Cup"}).status_code
+        == 201
+    )
+    for team_id in teams:
+        registered = client.post(
+            "/api/v1/tournaments/summer-cup/registrations/teams", headers=headers, json={"team_id": team_id}
+        )
+        assert registered.status_code == 201, registered.get_json()
+
+    imported = client.put("/api/v1/tournaments/summer-cup/schedule", headers=headers, json={"script": script})
+
+    assert imported.status_code == 200, imported.get_json()
+    assert imported.get_json()["warnings"] == []
+    assert client.get("/api/v1/tournaments/summer-cup/schedule/warnings", headers=headers).get_json()["warnings"] == []
+    matches = client.get("/api/v1/tournaments/summer-cup/matches", headers=headers).get_json()["matches"]
+    assert {match["name"]: match["start_time"] for match in matches if match["field"] == "North"} == {
+        "A: Bears v Wolves": "2026-07-04T16:00:00Z",
+        "A: Wolves v Otters": "2026-07-04T16:30:00Z",
+        "A: Otters v Bears": "2026-07-04T17:00:00Z",
+        "Lunch": "2026-07-04T17:30:00Z",
+        "Final": "2026-07-04T18:15:00Z",
+        "Final (if necessary)": "2026-07-04T18:55:00Z",
+    }
