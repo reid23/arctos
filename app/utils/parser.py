@@ -2117,3 +2117,65 @@ def get_parser(event: str, match_resolver=None, env=None, include_variables: boo
                 self.static_check = static_check_func
 
         return Parser(parse, static_check)
+
+
+def _serialize_value(value):
+    """An interpreted value as JSON: teams by id, matches by name, unresolved references by literal."""
+    if isinstance(value, Nil):
+        return None
+    if isinstance(value, (int, bool)):
+        return value
+    if isinstance(value, list):
+        return [_serialize_value(item) for item in value]
+    if isinstance(value, Team):
+        return {"type": "team", "id": value.obj.id}
+    if isinstance(value, Match):
+        return {"type": "match", "name": value.obj.name}
+    if isinstance(value, SymbolicTeam):
+        return {"type": "symbolic_team", "literal": value.literal}
+    if isinstance(value, SymbolicMatch):
+        return {"type": "symbolic_match", "literal": value.literal}
+    if isinstance(value, Lambda):
+        # Lambda objects shouldn't appear in final results, but handle gracefully
+        return {"type": "lambda", "params": value.params}
+    return str(value)
+
+
+def check_expression(event: str, expression: str) -> dict:
+    """Parse and evaluate *expression* against *event*'s schedule for an editor preview.
+
+    Returns ``{"valid", "value", "simplified", "error"}``, plus ``warnings`` and,
+    when valid, ``result_type``. Unknown team or match names make it invalid so
+    typos get noticed. A blank expression is valid with no value.
+    """
+    expression = expression.strip()
+    if not expression:
+        return {"valid": True, "value": None, "simplified": None, "error": None}
+
+    try:
+        parser = get_parser(event)
+        warnings = parser.static_check(expression)
+        result = parser.parse(expression)
+        if warnings:
+            return {
+                "valid": False,
+                "value": None,
+                "simplified": None,
+                "error": "; ".join(warnings),
+                "warnings": warnings,
+            }
+        # The simplified form is always returned so the editor can render it (with
+        # chips), even when it equals the input, e.g. an unset [tag::Foo] that stays
+        # symbolic.
+        return {
+            "valid": True,
+            "value": _serialize_value(result),
+            "simplified": _format_dsl_value(result),
+            "error": None,
+            "warnings": [],
+            "result_type": sorted(_infer_types(result)),
+        }
+    except DSLValidationError as e:
+        return {"valid": False, "value": None, "simplified": None, "error": str(e)}
+    except Exception as e:
+        return {"valid": False, "value": None, "simplified": None, "error": f"Parse error: {str(e)}"}

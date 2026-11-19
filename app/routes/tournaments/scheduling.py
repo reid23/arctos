@@ -819,103 +819,11 @@ def tournament_autocomplete(tournament_url):
 
 @bp.route("/<tournament_url>/validate-dsl", methods=["POST"])
 def validate_dsl(tournament_url):
-    """Validate and simplify a DSL expression.
-    Returns JSON with: valid (bool), value (the full interpreted value), simplified (str representation), error (str or None)
-    """
-    from flask import jsonify
-    from app.utils.parser import (
-        get_parser,
-        DSLValidationError,
-        Team,
-        Match,
-        SymbolicTeam,
-        SymbolicMatch,
-        Lambda,
-        Nil,
-        _format_dsl_value,
-        _infer_types,
-    )
-
-    def serialize_value(value):
-        """Convert the interpreted value to a JSON-serializable format."""
-        if isinstance(value, Nil):
-            return None
-        if isinstance(value, (int, bool)):
-            return value
-        elif isinstance(value, list):
-            return [serialize_value(item) for item in value]
-        elif isinstance(value, Team):
-            # Return team ID
-            return {"type": "team", "id": value.obj.id}
-        elif isinstance(value, Match):
-            # Return match name
-            return {"type": "match", "name": value.obj.name}
-        elif isinstance(value, SymbolicTeam):
-            # Return symbolic representation
-            return {"type": "symbolic_team", "literal": value.literal}
-        elif isinstance(value, SymbolicMatch):
-            # Return symbolic representation
-            return {"type": "symbolic_match", "literal": value.literal}
-        elif isinstance(value, Lambda):
-            # Lambda objects shouldn't appear in final results, but handle gracefully
-            return {"type": "lambda", "params": value.params}
-        else:
-            # Fallback to string representation
-            return str(value)
+    """Validate and simplify a DSL expression; see :func:`app.utils.parser.check_expression`."""
+    from app.utils.parser import check_expression
 
     data = request.get_json()
-    expression = data.get("expression", "").strip()
-
-    if not expression:
-        return jsonify({"valid": True, "value": None, "simplified": None, "error": None})
-
-    try:
-        parser = get_parser(tournament_url)
-        warnings = parser.static_check(expression)
-        result = parser.parse(expression)
-
-        # Serialize the full value for JSON response
-        serialized_value = serialize_value(result)
-
-        # Create string representation. We always send it back so the frontend can render
-        # the simplified form (with chips). Suppressing on equality hid useful previews
-        # for expressions whose literal text already happens to be in canonical form
-        # (e.g. anything containing an unset [tag::Foo] that stays symbolic).
-        simplified = _format_dsl_value(result)
-
-        # Treat unresolvable team/match references as errors so the user notices typos.
-        if warnings:
-            return jsonify(
-                {
-                    "valid": False,
-                    "value": None,
-                    "simplified": None,
-                    "error": "; ".join(warnings),
-                    "warnings": warnings,
-                }
-            )
-
-        return jsonify(
-            {
-                "valid": True,
-                "value": serialized_value,
-                "simplified": simplified,
-                "error": None,
-                "warnings": [],
-                "result_type": sorted(_infer_types(result)),
-            }
-        )
-    except DSLValidationError as e:
-        return jsonify({"valid": False, "value": None, "simplified": None, "error": str(e)})
-    except Exception as e:
-        return jsonify(
-            {
-                "valid": False,
-                "value": None,
-                "simplified": None,
-                "error": f"Parse error: {str(e)}",
-            }
-        )
+    return jsonify(check_expression(tournament_url, data.get("expression", "")))
 
 
 @bp.route("/tournaments/<tournament_url>/start-match", methods=["GET"])
