@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 
 from app.domain.enums import ScheduleType
-from app.routes.tournaments import detach_match_from_chain, update_match_previous_link
+from app.utils.match_chain import detach_match_from_chain, update_match_previous_link
 from models import Match, db
 
 

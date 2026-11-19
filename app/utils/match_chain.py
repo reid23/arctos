@@ -1,0 +1,164 @@
+"""Per-field match chains and match deletion.
+
+Dynamic matches on a field form a doubly-linked chain through
+``previous_match`` / ``next_match``. These helpers splice matches in and
+out of a chain and hard-delete matches with every row that references them.
+None of them commit; the caller owns the transaction.
+"""
+
+from __future__ import annotations
+
+from models import (
+    BracketPlacement,
+    Camera,
+    CameraTimepoint,
+    Match,
+    MatchNote,
+    MatchPlayer,
+    MatchReferee,
+    Point,
+)
+
+
+def _lookup_match_in(uid: str | None, tournament_url: str) -> Match | None:
+    """Fetch a match by uuid scoped to *tournament_url*, or ``None`` for empty/missing."""
+    if not uid:
+        return None
+    return Match.query.filter_by(uuid=uid, event=tournament_url).first()
+
+
+def _chain_successor(match: Match, tournament_url: str, exclude_uuid: str | None = None) -> Match | None:
+    """The match that sits after *match* in its per-field chain.
+
+    Trusts ``match.next_match`` when set. Otherwise falls back to the unique
+    match whose ``previous_match`` back-pointer aims at *match* — chains can be
+    "half-linked" (child points at parent, parent's ``next_match`` unset), e.g.
+    around STATIC matches (which are deliberately detached on edit) or after a
+    TOML import that only populates ``previous_match``. If several candidates
+    point back (already-degenerate state), returns ``None`` rather than guess.
+
+    Args:
+        match: Chain node whose successor we want.
+        tournament_url: Tournament scope.
+        exclude_uuid: Optional uuid to ignore among back-pointer candidates
+            (used to exclude the match currently being spliced).
+    """
+    if match.next_match:
+        nxt = _lookup_match_in(match.next_match, tournament_url)
+        if nxt is not None:
+            return nxt
+    candidates = [
+        m
+        for m in Match.query.filter_by(previous_match=match.uuid, event=tournament_url).all()
+        if m.uuid != exclude_uuid
+    ]
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def detach_match_from_chain(match: Match, tournament_url: str) -> None:
+    """Remove *match* from its per-field doubly-linked chain.
+
+    Closes up the gap left behind: the predecessor's ``next_match`` (when it
+    pointed at *match*) is rewritten to the successor, and the successor's
+    ``previous_match`` (when it pointed at *match*) is rewritten to the
+    predecessor. The successor is resolved via :func:`_chain_successor` so
+    half-linked chains (child ``previous_match`` set, parent's ``next_match``
+    unset) still get spliced closed. Both of *match*'s own pointers are then
+    cleared.
+    """
+    old_prev_id = match.previous_match
+    old_prev = _lookup_match_in(old_prev_id, tournament_url)
+    successor = _chain_successor(match, tournament_url)
+    old_next_id = successor.uuid if successor is not None else None
+    if old_prev is not None and old_prev.next_match == match.uuid:
+        old_prev.next_match = old_next_id
+    if successor is not None and successor.previous_match == match.uuid:
+        successor.previous_match = old_prev_id
+    match.previous_match = None
+    match.next_match = None
+
+
+def update_match_previous_link(match: Match, prev_match_id: str, tournament_url: str, is_new: bool = False) -> None:
+    """Insert *match* immediately after *prev_match_id* in the doubly-linked chain.
+
+    The chain is the per-field ``previous_match`` / ``next_match`` linkage. The
+    operation is two clean steps: (1) detach *match* from its current position
+    so the surrounding nodes close up, then (2) splice it in between
+    *prev_match* and *prev_match*'s current next.
+
+    A no-op if *prev_match_id* doesn't resolve or points at *match* itself.
+
+    Args:
+        match: The match being moved (or, if ``is_new``, freshly created).
+        prev_match_id: UUID of the match that should sit immediately before *match*.
+        tournament_url: Tournament scope for the lookup.
+        is_new: ``True`` if *match* is brand-new and currently has no chain links;
+            skips the detach step.
+    """
+    if not prev_match_id or prev_match_id == match.uuid:
+        return
+    prev_match = _lookup_match_in(prev_match_id, tournament_url)
+    if not prev_match:
+        return
+
+    if not is_new:
+        detach_match_from_chain(match, tournament_url)
+
+    # Splice *match* between prev_match and whatever currently sits after
+    # prev_match. The successor is derived via _chain_successor rather than
+    # prev_match.next_match alone: half-linked chains (successor's
+    # previous_match set, prev's next_match unset — STATIC matches, TOML
+    # imports) would otherwise leave the old successor also pointing at
+    # prev_match, giving two matches the same dependency and thus the same
+    # solved start time.
+    new_next = _chain_successor(prev_match, tournament_url, exclude_uuid=match.uuid)
+    match.previous_match = prev_match.uuid
+    match.next_match = new_next.uuid if new_next is not None else None
+    prev_match.next_match = match.uuid
+    if new_next is not None:
+        new_next.previous_match = match.uuid
+
+
+def delete_matches_with_children(match_uuids: list[str]) -> None:
+    """Hard-delete matches and every row that references them.
+
+    Deletes child rows (points, notes, referee/player join rows, cameras and
+    their timepoints) and clears the self-referential chain links before
+    deleting the matches themselves, so foreign-key constraints don't block the
+    delete. Also scrubs soft bracket/diagram refs that pointed at the deleted
+    matches by name. Does not commit; the caller owns the transaction.
+    """
+    if not match_uuids:
+        return
+
+    # Scrub diagram soft-refs (MatchName::winner/loser) before rows disappear.
+    doomed = Match.query.filter(Match.uuid.in_(match_uuids)).all()
+    by_event: dict[str, set[str]] = {}
+    for m in doomed:
+        if m.event and m.name:
+            by_event.setdefault(m.event, set()).add(m.name)
+    if by_event:
+        from app.services.bracket_cleanup_service import scrub_deleted_matches
+
+        for event_url, names in by_event.items():
+            scrub_deleted_matches(event_url, names)
+
+    camera_uuids = [c.uuid for c in Camera.query.filter(Camera.match_uuid.in_(match_uuids)).all()]
+    if camera_uuids:
+        CameraTimepoint.query.filter(CameraTimepoint.camera_uuid.in_(camera_uuids)).delete(synchronize_session=False)
+    Camera.query.filter(Camera.match_uuid.in_(match_uuids)).delete(synchronize_session=False)
+
+    Point.query.filter(Point.match.in_(match_uuids)).delete(synchronize_session=False)
+    MatchNote.query.filter(MatchNote.match.in_(match_uuids)).delete(synchronize_session=False)
+    MatchReferee.query.filter(MatchReferee.match_uuid.in_(match_uuids)).delete(synchronize_session=False)
+    MatchPlayer.query.filter(MatchPlayer.match_uuid.in_(match_uuids)).delete(synchronize_session=False)
+    BracketPlacement.query.filter(BracketPlacement.match.in_(match_uuids)).delete(synchronize_session=False)
+
+    # Clear self-referential chain links so deleting the matches doesn't trip the
+    # previous_match / next_match FKs (covers references from outside the batch).
+    Match.query.filter(Match.previous_match.in_(match_uuids)).update(
+        {"previous_match": None}, synchronize_session=False
+    )
+    Match.query.filter(Match.next_match.in_(match_uuids)).update({"next_match": None}, synchronize_session=False)
+
+    Match.query.filter(Match.uuid.in_(match_uuids)).delete(synchronize_session=False)

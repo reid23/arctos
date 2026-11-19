@@ -203,7 +203,7 @@ def test_recompute_is_idempotent_with_cross_field_sharing(app, test_db, tourname
         url = tournament.url
         t0 = datetime(2026, 6, 9, 10, 0)
         # F1: S1 static @10:00 → A safe. F2: S2 static @10:30 → B safe. A and B share team_1.
-        from app.routes.tournaments import update_match_previous_link
+        from app.utils.match_chain import update_match_previous_link
 
         s1 = _mk(
             url,

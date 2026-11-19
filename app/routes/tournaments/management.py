@@ -49,7 +49,9 @@ from app.utils.profile_banner_helpers import (
 
 from app.services.permission_service import PermissionService
 
-from . import bp, delete_matches_with_children
+from app.utils.match_chain import delete_matches_with_children
+
+from . import bp
 
 
 @bp.route("/tournaments/<tournament_url>/banner-photo", methods=["POST", "DELETE"])

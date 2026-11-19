@@ -50,12 +50,13 @@ from models import (
     db,
 )
 
-from . import (
-    bp,
+from app.utils.match_chain import (
     delete_matches_with_children,
     detach_match_from_chain,
     update_match_previous_link,
 )
+
+from . import bp
 
 
 def _check_to(tournament_url):

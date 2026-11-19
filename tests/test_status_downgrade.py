@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from app.domain.enums import MatchStatus, ScheduleType
-from app.routes.tournaments import update_match_previous_link
+from app.utils.match_chain import update_match_previous_link
 from app.utils.scheduling import recompute_all_match_times, recompute_scheduled_and_nominal_times
 from models import Match, db
 

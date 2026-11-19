@@ -84,7 +84,9 @@ from app.services.registration_resolver import (
 )
 from app.services.permission_service import PermissionService
 
-from . import bp, detach_match_from_chain, update_match_previous_link
+from app.utils.match_chain import detach_match_from_chain, update_match_previous_link
+
+from . import bp
 
 
 def _check_to(tournament_url):

@@ -258,7 +258,7 @@ def update_match(tournament_url: str, match_uuid: str):
 @login_required
 def delete_match(tournament_url: str, match_uuid: str):
     """TO-only: delete a recorded match that no other match references."""
-    from app.routes.tournaments import delete_matches_with_children
+    from app.utils.match_chain import delete_matches_with_children
 
     result = HistoricalRecordsService.deletable_match(tournament_url, **_actor(), match_uuid=match_uuid)
     if result.is_ok():
