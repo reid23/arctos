@@ -356,6 +356,10 @@ class SideCompService:
             type=parsed_type,
             description=description_value,
             only_show_top_n_results=top_n_value,
+            track_losses=True,
+            track_chain_losses=True,
+            track_break_losses=True,
+            track_matchups=True,
         )
         sc.set_allowed_weapons(parsed_weapons)
         db.session.add(sc)
