@@ -16,6 +16,7 @@ from app.domain.enums import MatchStatus, RegistrationStatus, TeamRegistrationSt
 from app.error_values import Err, Ok, Result, Some, allow_Q
 from app.exceptions import (
     ArctosError,
+    NotFoundError,
     RegistrationClosedError,
     UnauthorizedError,
     ValidationError,
@@ -35,6 +36,17 @@ class ScopeContext:
     scope: Scope
     parent: object  # Tournament or League
     cfg: object  # registrable_config
+
+
+@dataclass(frozen=True)
+class Payment:
+    """Payment details an organizer records on a registration."""
+
+    paid: bool
+    amount_paid: float
+    payment_method: str
+    payment_reference: str
+    payment_notes: str
 
 
 class _CapExceeded(Exception):
@@ -714,5 +726,106 @@ class RegistrationService:
 
             SideCompService.cancel_player_registrations_in_event(scope.event_url, player_id)
 
+        db.session.commit()
+        return Ok(None)
+
+    @staticmethod
+    def _scope_filter(scope: Scope) -> dict:
+        return {"league_id": scope.league_url} if scope.is_league else {"event": scope.event_url}
+
+    @staticmethod
+    def _update_payment(registration_model, scope: Scope, registration_id, payment: "Payment"):
+        from models import db
+
+        registration = registration_model.query.filter_by(
+            id=registration_id, **RegistrationService._scope_filter(scope)
+        ).first()
+        if registration is None:
+            return Err(NotFoundError("Registration not found"))
+        registration.paid = payment.paid
+        registration.amount_paid = payment.amount_paid
+        registration.payment_method = payment.payment_method
+        registration.payment_reference = payment.payment_reference
+        registration.payment_notes = payment.payment_notes
+        registration.paid_at = now_utc_naive() if payment.paid else None
+        db.session.commit()
+        return Ok(registration)
+
+    @staticmethod
+    def update_team_payment(
+        scope: Scope, registration_id, payment: "Payment"
+    ) -> Result["TeamRegistration", ArctosError]:
+        """Record an organizer's payment details on a team registration in *scope*."""
+        from models import TeamRegistration
+
+        return RegistrationService._update_payment(TeamRegistration, scope, registration_id, payment)
+
+    @staticmethod
+    def update_player_payment(
+        scope: Scope, registration_id, payment: "Payment"
+    ) -> Result["PlayerRegistration", ArctosError]:
+        """Record an organizer's payment details on a player registration in *scope*."""
+        from models import PlayerRegistration
+
+        return RegistrationService._update_payment(PlayerRegistration, scope, registration_id, payment)
+
+    @staticmethod
+    def deregister_team_as_to(scope: Scope, team_id: str) -> Result[None, ArctosError]:
+        """Cancel a confirmed team registration and its players' registrations, open or not.
+
+        In a standalone event this also drops the players' side competition
+        registrations. Brackets stop referring to the team in either scope.
+        """
+        from models import PlayerRegistration, TeamRegistration, db
+
+        scope_filter = RegistrationService._scope_filter(scope)
+        team_registration = TeamRegistration.query.filter_by(
+            team=team_id, status=RegistrationStatus.CONFIRMED, **scope_filter
+        ).first()
+        if team_registration is None:
+            return Err(NotFoundError("Team not found or already deregistered"))
+
+        team_registration.status = RegistrationStatus.CANCELLED
+        pseudonyms = [team_registration.pseudonym] if team_registration.pseudonym else None
+        player_registrations = PlayerRegistration.query.filter_by(team=team_id, **scope_filter)
+        if scope.is_league:
+            player_registrations.update({"status": RegistrationStatus.CANCELLED})
+            from app.services.bracket_cleanup_service import scrub_deleted_teams_for_league
+
+            scrub_deleted_teams_for_league(scope.league_url, [team_id], pseudonyms=pseudonyms)
+        else:
+            affected_player_ids = [registration.player for registration in player_registrations.all()]
+            player_registrations.update({"status": RegistrationStatus.CANCELLED})
+            from app.services.bracket_cleanup_service import scrub_deleted_teams
+            from app.services.sidecomp_service import SideCompService
+
+            SideCompService.cancel_players_in_event(scope.event_url, affected_player_ids)
+            scrub_deleted_teams(scope.event_url, [team_id], pseudonyms=pseudonyms)
+        db.session.commit()
+        return Ok(None)
+
+    @staticmethod
+    def deregister_player_as_to(scope: Scope, player_id: str) -> Result[None, ArctosError]:
+        """Cancel a pending or confirmed player registration, open or not.
+
+        In a standalone event this also drops the player's side competition registrations.
+        """
+        from models import PlayerRegistration, db
+
+        player_registration = (
+            PlayerRegistration.query.filter_by(player=player_id, **RegistrationService._scope_filter(scope))
+            .filter(
+                PlayerRegistration.status.in_([RegistrationStatus.PENDING_TEAM_APPROVAL, RegistrationStatus.CONFIRMED])
+            )
+            .first()
+        )
+        if player_registration is None:
+            return Err(NotFoundError("Player not found or already deregistered"))
+
+        player_registration.status = RegistrationStatus.CANCELLED
+        if not scope.is_league:
+            from app.services.sidecomp_service import SideCompService
+
+            SideCompService.cancel_player_registrations_in_event(scope.event_url, player_id)
         db.session.commit()
         return Ok(None)
