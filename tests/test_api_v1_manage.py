@@ -294,8 +294,14 @@ def test_edit_matches_one_at_a_time(client, headers, organized):
 def test_validate_expressions_and_schedule_warnings(client, headers, organized):
     base = "/api/v1/tournaments/open-cup"
     valid = client.post(f"{base}/schedule/validate", headers=headers, json={"expression": "(+ 1 2)"}).get_json()
-    assert valid["valid"] is True
-    assert valid["value"] == 3
+    assert valid == {
+        "valid": True,
+        "value": 3,
+        "simplified": "3",
+        "error": None,
+        "warnings": [],
+        "result_type": ["INT"],
+    }
     invalid = client.post(f"{base}/schedule/validate", headers=headers, json={"expression": "(+ 1"}).get_json()
     assert invalid["valid"] is False
     assert invalid["error"]

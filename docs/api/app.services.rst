@@ -14,6 +14,7 @@ app.services
    app.services.frontend_shell
    app.services.historical_claims_service
    app.services.historical_records_service
+   app.services.league_management_service
    app.services.license_service
    app.services.match_actions_service
    app.services.match_service
@@ -24,9 +25,11 @@ app.services
    app.services.public_page_service
    app.services.registration_resolver
    app.services.registration_service
+   app.services.schedule_edit_service
    app.services.schedule_import_export_service
    app.services.scoreboard_service
    app.services.sidecomp_service
    app.services.team_management_service
    app.services.team_stats_service
+   app.services.tournament_management_service
    app.services.tournament_service
