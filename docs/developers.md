@@ -460,8 +460,8 @@ endpoint. `403` while the schedule is unpublished. Query parameters:
 - `winner` is `TEAM1`, `TEAM2`, or `null`.
 - `schedule_type` says how the start time is planned; `STATBREAK`
   entries are breaks in the schedule rather than games.
-- `set_type` is `SETS` or `STONES`. `sets` counts points won per set,
-  leaving out rerolled points.
+- `set_type` is `SETS`, `STONES`, or `TIMED`. `sets` counts points won
+  per set, leaving out rerolled points.
 
 #### `GET /tournaments/{tournament_id}/matches/{match_id}`
 
@@ -475,6 +475,7 @@ point in order:
     "...": "...",
     "sets_to_win": 2,
     "stones": null,
+    "set_minutes": null,
     "referees": [{"id": "ref-team", "name": "Ref Team", "shortname": null}],
     "footage": [
       {
@@ -502,7 +503,8 @@ point in order:
 Each point's `stamp` is when it started and `end_stamp` when it ended
 (`null` while it's being played). `stones` is
 `{"per_set", "remaining"}` for stones matches, where `stones_at_start` is
-also set on each point.
+also set on each point. `set_minutes` is the length of each set for timed
+matches: a set's clock starts with its first point and runs on wall time.
 
 #### `GET /tournaments/{tournament_id}/fields/{field_name}/scoreboard`
 
@@ -518,6 +520,7 @@ URL-encode the field name (`Field%201`). While a match is in progress:
     "set_type": "SETS",
     "sets": [{"number": 1, "team1_score": 2, "team2_score": 1}],
     "stones": null,
+    "set_minutes": null,
     "points": [
       {
         "stamp": "2026-05-01T14:06:12Z",
@@ -1081,7 +1084,9 @@ ids, registered team names, `tag::Name`, or `Match Name::winner` /
 `previous_match` on the same field), `BREAK` or `JOIN` (a pause or a
 point where fields wait for each other, same-named rows across fields
 start together), or `STATBREAK` (a break at a fixed time). `set_type` is
-`SETS` (with `nsets`) or `STONES` (with `stones_per_set`). Lengths are
+`SETS` (with `nsets`), `STONES` (with `stones_per_set`), or `TIMED`
+(with `nsets`, and `stones_per_set` holding each set's length in
+minutes; a set's clock starts with its first point). Lengths are
 in minutes. Exported files also carry each row's `uuid` / `id`; keep
 them to update rows in place, or leave them out to create new ones.
 Names that aren't registered teams become tags, with a warning.
@@ -1142,8 +1147,9 @@ organizers see it before it's published.
 `STATIC` and `STATBREAK` matches take `start_time` (ISO 8601) instead of
 `previous_match_id`, which `FAST`, `SAFE`, `BREAK`, and `JOIN` need (on
 the same field). Names are unique, except that breaks and joins share a
-name across fields. Breaks and joins have no teams. Returns `201` with
-`{"match": {...}}`, in the shape of
+name across fields. Breaks and joins have no teams. `set_type`, `nsets`,
+and `stones_per_set` work as in a [schedule file](#put-tournamentstournament_idschedule).
+Returns `201` with `{"match": {...}}`, in the shape of
 `GET /tournaments/{tournament_id}/matches/{match_id}`.
 
 #### `PATCH /tournaments/{tournament_id}/matches/{match_id}`

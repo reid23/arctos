@@ -162,10 +162,19 @@ class SetType(StrEnum):
     Attributes:
         SETS: Winner is determined by number of sets won.
         STONES: Winner is determined by total stone count (points).
+        TIMED: Each set lasts a fixed number of minutes of wall time, counted
+            from the start of the set's first point. ``stones_per_set``
+            stores the set length in minutes.
     """
 
     SETS = "SETS"
     STONES = "STONES"
+    TIMED = "TIMED"
+
+
+#: Set types that store a per-set length in ``Match.stones_per_set``:
+#: stones for ``STONES``, minutes for ``TIMED``.
+SET_TYPES_WITH_SET_LENGTH: tuple[SetType, ...] = (SetType.STONES, SetType.TIMED)
 
 
 class SideCompType(StrEnum):

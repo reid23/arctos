@@ -123,7 +123,7 @@ pub fn Scoreboard(url: String, field: String) -> Element {
             let s: Option<&crate::types::ScoreboardStateResponse> =
                 guard.as_ref().and_then(|r| r.as_ref().ok());
             let Some(s) = s else { return };
-            if !s.has_active_match || s.stones_info.is_none() {
+            if !s.has_active_match || (s.stones_info.is_none() && s.set_clock.is_none()) {
                 stones_interval_handle.set(None);
                 return;
             }
@@ -172,10 +172,39 @@ pub fn Scoreboard(url: String, field: String) -> Element {
             _ => 0,
         }
     };
+    let set_clock_seconds = {
+        #[cfg(target_arch = "wasm32")]
+        let _ = stones_update_tick();
+        let guard = val.read();
+        guard
+            .as_ref()
+            .and_then(|state| state.as_ref().ok())
+            .and_then(|s| s.set_clock.as_ref())
+            .map(|clock| {
+                #[cfg(target_arch = "wasm32")]
+                let started = clock
+                    .set_started_at
+                    .as_deref()
+                    .and_then(|stamp| chrono::DateTime::parse_from_rfc3339(stamp).ok())
+                    .map(|stamp| stamp.timestamp_millis() as f64 / 1000.0);
+                #[cfg(target_arch = "wasm32")]
+                let seconds = match started {
+                    Some(started) => crate::set_clock::seconds_remaining(
+                        &[(1, started)],
+                        clock.set_minutes,
+                        time_sync.server_now_secs(),
+                    ),
+                    None => clock.seconds_remaining,
+                };
+                #[cfg(not(target_arch = "wasm32"))]
+                let seconds = clock.seconds_remaining;
+                seconds
+            })
+    };
     rsx! {
         style { "{SCOREBOARD_CSS}" }
         if let Some(Ok(s)) = val.read().as_ref() {
-            ScoreboardDisplay { state: s.clone(), stones_remaining }
+            ScoreboardDisplay { state: s.clone(), stones_remaining, set_clock_seconds }
         } else if let Some(Err(e)) = val.read().as_ref() {
             div { class: "error-message", "{e}" }
         } else {
@@ -209,9 +238,14 @@ pub const SCOREBOARD_CSS: &str = r#"
 
 /// Scoreboard markup shared by the live OBS page and the offline render page
 /// (`/scoreboard-render`), so rendered overlay frames match the live overlay.
-/// `stones_remaining` is only shown when `state.stones_info` is set.
+/// `stones_remaining` is only shown when `state.stones_info` is set, and
+/// `set_clock_seconds` only when `state.set_clock` is set.
 #[component]
-pub fn ScoreboardDisplay(state: ScoreboardStateResponse, stones_remaining: u32) -> Element {
+pub fn ScoreboardDisplay(
+    state: ScoreboardStateResponse,
+    stones_remaining: u32,
+    set_clock_seconds: Option<u32>,
+) -> Element {
     let s = &state;
     if s.has_active_match {
         rsx! {
@@ -280,6 +314,23 @@ pub fn ScoreboardDisplay(state: ScoreboardStateResponse, stones_remaining: u32) 
                                 div { class: "stones-header",
                                     span { "Stones remaining" }
                                     span { class: "stones-count", "{stones_remaining} / {stones.stones_per_set}" }
+                                }
+                                div { class: "progress-bar-container",
+                                    div { class: "progress-bar", style: "width: {pct}%;" }
+                                }
+                            }
+                        }
+                    }
+                }
+                if let (Some(clock), Some(seconds)) = (&s.set_clock, set_clock_seconds) {
+                    {
+                        let set_seconds = clock.set_minutes * 60;
+                        let pct = if set_seconds == 0 { 0.0 } else { (seconds as f64 / set_seconds as f64) * 100.0 };
+                        rsx! {
+                            div { class: "stones-info",
+                                div { class: "stones-header",
+                                    span { "Time left in set" }
+                                    span { class: "stones-count", "{crate::set_clock::format_clock(seconds)}" }
                                 }
                                 div { class: "progress-bar-container",
                                     div { class: "progress-bar", style: "width: {pct}%;" }

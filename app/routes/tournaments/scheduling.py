@@ -67,6 +67,7 @@ from app.utils.user_helpers import is_player
 
 
 from app.domain.enums import (
+    SET_TYPES_WITH_SET_LENGTH,
     MatchStatus,
     RegistrationStatus,
     ScheduleType,
@@ -262,7 +263,7 @@ def add_match(tournament_url):
             )
 
     stones_per_set_value = None
-    if set_type == SetType.STONES:
+    if set_type in SET_TYPES_WITH_SET_LENGTH:
         stones_per_set_str = request.form.get("stones_per_set")
         if stones_per_set_str:
             try:
@@ -591,7 +592,7 @@ def update_match(tournament_url):
     else:
         match.nsets = None
 
-    if set_type == SetType.STONES:
+    if set_type in SET_TYPES_WITH_SET_LENGTH:
         stones_per_set_str = request.form.get("stones_per_set")
         if stones_per_set_str:
             try:
@@ -599,7 +600,6 @@ def update_match(tournament_url):
             except (ValueError, TypeError):
                 pass  # Keep existing value if invalid
     else:
-        # Clear stones_per_set for non-STONES matches
         match.stones_per_set = None
 
     # JOIN has zero length, BREAK can have length
