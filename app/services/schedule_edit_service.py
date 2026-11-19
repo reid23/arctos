@@ -387,7 +387,7 @@ class ScheduleEditService:
         return Ok(match)
 
     @staticmethod
-    def update_match(tournament_url: str, match_id: str, data: dict) -> Result[None, ArctosError]:
+    def update_match(tournament_url: str, match_id: str, data: dict) -> Result[Match, ArctosError]:
         """Edit one match. Its name is immutable; a ``name`` in *data* is ignored."""
         match = Match.query.filter_by(uuid=match_id, event=tournament_url).first()
         if match is None:
@@ -639,7 +639,7 @@ class ScheduleEditService:
         db.session.flush()  # Emit UPDATE for previous_match etc. before commit
         db.session.commit()
         recompute_scheduled_and_nominal_times(tournament_url)
-        return Ok(None)
+        return Ok(match)
 
     @staticmethod
     def delete_match(tournament_url: str, match_id: str) -> Result[None, ArctosError]:

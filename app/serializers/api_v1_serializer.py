@@ -13,13 +13,22 @@ from __future__ import annotations
 import collections
 
 from app.domain.enums import RegistrationStatus, SetType, TeamRegistrationStatus
-from app.services._common import Scope
-from app.services.dual_write import get_camera_timepoint_arrays, get_match_ref_initials, get_match_ref_team_ids
-from app.services.registration_resolver import player_registrations_for_scope, team_registrations_for_scope
+from app.services._common import Scope, resolve_actor
+from app.services.dual_write import (
+    get_camera_timepoint_arrays,
+    get_head_ref_allowlist_ids,
+    get_match_ref_initials,
+    get_match_ref_team_ids,
+)
+from app.services.registration_resolver import (
+    player_registrations_for_scope,
+    team_registrations_for_scope,
+    to_entries_for_tournament,
+)
 from app.services.scoreboard_service import set_scores
 from app.utils.datetime_helpers import to_iso_z
 from app.utils.helpers import get_registrable_config
-from models import Camera, League, Player, PlayerRegistration, Team, TeamRegistration, Tournament
+from models import TO, Camera, League, Player, PlayerRegistration, Team, TeamRegistration, Tournament
 
 STONES_PER_SET_DEFAULT = 100
 
@@ -493,3 +502,86 @@ def team_registrations_json(team_id: str) -> list[dict]:
             }
         )
     return rows
+
+
+def organizers_json(organizer_entries) -> list[dict]:
+    """``{"id", "name", "type"}`` of the users in *organizer_entries* (``TO`` rows)."""
+    organizers = []
+    for entry in organizer_entries:
+        user = resolve_actor(entry.user_id, entry.user_type)
+        organizers.append({"id": entry.user_id, "name": user.name if user else entry.user_id, "type": entry.user_type})
+    return organizers
+
+
+def _registration_config_json(config, text_keys: tuple[str, ...]) -> dict:
+    """Editable registration settings, keyed like the settings ``PATCH`` body."""
+    return {
+        "team_reg_fee": config.team_reg_fee,
+        "player_reg_fee": config.player_reg_fee,
+        "team_registration_open": bool(config.team_registration_open),
+        "player_registration_open": bool(config.player_registration_open),
+        **{key: getattr(config, key) for key in text_keys},
+        "n_max_teams": config.n_max_teams,
+        "max_team_size_roster": config.max_team_size_roster,
+        "max_team_size_field": config.max_team_size_field,
+        "require_waiver_signature": bool(config.waiver_filepath),
+    }
+
+
+def _date_only(dt) -> str | None:
+    return dt.strftime("%Y-%m-%d") if dt else None
+
+
+def tournament_settings_json(tournament) -> dict:
+    """Organizer-only: every setting the tournament ``PATCH`` accepts, under the same keys.
+
+    ``registration`` is ``null`` for league events, whose registration settings are the league's.
+    """
+    config = tournament.registrable_config if not tournament.league_id else None
+    return {
+        "id": tournament.url,
+        "name": tournament.name,
+        "location": tournament.location,
+        "about": tournament.about,
+        "start_date": _date_only(tournament.start_date),
+        "end_date": _date_only(tournament.end_date),
+        "published": bool(tournament.published),
+        "schedule_published": bool(tournament.schedule_published),
+        "bracket_published": bool(tournament.bracket_published),
+        "historical": bool(tournament.historical),
+        "league": tournament.league_id,
+        "head_refs_allow_reffing_teams": bool(tournament.head_refs_allow_reffing_teams),
+        "head_refs_allow_anyone": bool(tournament.head_refs_allow_anyone),
+        "head_refs_allowed_list": ",".join(get_head_ref_allowlist_ids(tournament)),
+        "registration": _registration_config_json(config, ("terms_link",)) if config is not None else None,
+        "organizers": organizers_json(to_entries_for_tournament(tournament)),
+    }
+
+
+def league_settings_json(league) -> dict:
+    """Organizer-only: every setting the league ``PATCH`` accepts, under the same keys."""
+    return {
+        "id": league.url,
+        "name": league.name,
+        "about": league.about,
+        "published": bool(league.published),
+        "registration": _registration_config_json(league.registrable_config, ("terms_link", "payment_info")),
+        "organizers": league_organizers_json(league),
+    }
+
+
+def league_organizers_json(league) -> list[dict]:
+    return organizers_json(TO.query.filter_by(league_id=league.url).order_by(TO.id).all())
+
+
+def field_json(field) -> dict:
+    return {"id": field.id, "name": field.name}
+
+
+def tag_json(tag) -> dict:
+    """Organizer-only: a tag with its expression and manual team override."""
+    return {"id": tag.id, "name": tag.name, "expression": tag.expression, "team": tag.team}
+
+
+def script_variable_json(variable) -> dict:
+    return {"id": variable.id, "name": variable.name, "expression": variable.expression}

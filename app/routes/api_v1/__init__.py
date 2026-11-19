@@ -202,6 +202,9 @@ def method_not_allowed(exception):
 from app.routes.api_v1 import (  # noqa: E402, F401
     footage,
     leagues,
+    manage_leagues,
+    manage_schedule,
+    manage_tournaments,
     matches,
     me,
     players,
