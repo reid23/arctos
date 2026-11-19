@@ -192,6 +192,10 @@ def _stones_json(match) -> dict | None:
     return {"per_set": match.stones_per_set or STONES_PER_SET_DEFAULT, "remaining": match.stones_remaining}
 
 
+def _set_minutes(match) -> int | None:
+    return match.stones_per_set if match.set_type == SetType.TIMED else None
+
+
 def match_json(match, teams: TeamNames, points) -> dict:
     return {
         "id": match.uuid,
@@ -244,6 +248,7 @@ def match_detail_json(match, teams: TeamNames, points) -> dict:
     return match_json(match, teams, points) | {
         "sets_to_win": match.nsets,
         "stones": _stones_json(match),
+        "set_minutes": _set_minutes(match),
         "referees": referees,
         "footage": footage,
         "points": [{"id": point.uuid} | point_json(point, match.set_type) for point in points],
@@ -288,6 +293,7 @@ def scoreboard_json(state) -> dict:
                 for number, (team1_score, team2_score) in state.set_scores.items()
             ],
             "stones": _stones_json(match),
+            "set_minutes": _set_minutes(match),
             "points": [point_json(point, match.set_type) for point in state.points],
         }
     }
