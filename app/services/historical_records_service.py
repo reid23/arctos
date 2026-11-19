@@ -473,7 +473,7 @@ class HistoricalRecordsService:
             referees: Referee slots, each as *team1*. Blanks are ignored.
             winner: ``"TEAM1"`` or ``"TEAM2"``.
             points: Points in order, each ``{"set": <n >= 1>, "winner": "TEAM1" | "TEAM2"}``.
-            set_type: ``"SETS"`` or ``"STONES"``. Blank means sets.
+            set_type: ``"SETS"``, ``"STONES"`` or ``"TIMED"``. Blank means sets.
 
         Returns:
             ``Ok(match)``, or an ``Err`` naming the first problem. Nothing is

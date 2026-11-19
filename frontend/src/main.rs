@@ -9,6 +9,7 @@ mod form_validation;
 mod league_cache;
 mod pages;
 mod public_navigation;
+mod set_clock;
 mod time_format;
 mod url_slug;
 mod viewport;

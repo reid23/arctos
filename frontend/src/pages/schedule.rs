@@ -17,6 +17,16 @@ use std::rc::Rc;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast as _;
 
+/// Initial set length for a match format: stones per set for `STONES`,
+/// minutes per set for `TIMED`. Unused for `SETS`.
+fn default_set_length(set_type: &str) -> u32 {
+    if set_type == "TIMED" {
+        12
+    } else {
+        100
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 struct PinchZoomGuard {
     el_id: String,
@@ -2576,7 +2586,7 @@ fn CreateMatchModal(
     let mut team2 = use_signal(|| "".to_string());
     let set_type = use_signal(|| "SETS".to_string());
     let nsets = use_signal(|| 3u32);
-    let stones_per_set = use_signal(|| 100u32);
+    let stones_per_set = use_signal(|| default_set_length("SETS"));
     let ribbon = use_signal(|| false);
     let mut skip_condition = use_signal(|| "".to_string());
     let mut skip_condition_help_open = use_signal(|| false);
@@ -3303,9 +3313,10 @@ fn CreateMatchModal(
                                     div { class: "col-md-4",
                                         div { class: "mb-3",
                                             label { r#for: "schedule-create-format", class: "form-label", "Format" }
-                                            select { id: "schedule-create-format", class: "form-select", value: "{set_type}", onchange: move |e| { let mut set_type = set_type; set_type.set(e.value()); },
+                                            select { id: "schedule-create-format", class: "form-select", value: "{set_type}", onchange: move |e| { let mut set_type = set_type; let mut stones_per_set = stones_per_set; stones_per_set.set(default_set_length(&e.value())); set_type.set(e.value()); },
                                                 option { value: "SETS", "Sets" }
                                                 option { value: "STONES", "Stones" }
+                                                option { value: "TIMED", "Timed" }
                                             }
                                         }
                                     }
@@ -3315,11 +3326,11 @@ fn CreateMatchModal(
                                             input { id: "schedule-create-sets", class: "form-control", "type": "number", min: "1", value: "{nsets}", oninput: move |e| { let mut nsets = nsets; nsets.set(e.value().parse().unwrap_or(3)); } }
                                         }
                                     }
-                                    if set_type() == "STONES" {
+                                    if set_type() == "STONES" || set_type() == "TIMED" {
                                         div { class: "col-md-4",
                                             div { class: "mb-3",
-                                                label { r#for: "schedule-create-stones", class: "form-label", "Stones per set" }
-                                                input { id: "schedule-create-stones", class: "form-control", "type": "number", min: "1", value: "{stones_per_set}", oninput: move |e| { let mut stones_per_set = stones_per_set; stones_per_set.set(e.value().parse().unwrap_or(100)); } }
+                                                label { r#for: "schedule-create-stones", class: "form-label", if set_type() == "TIMED" { "Minutes per set" } else { "Stones per set" } }
+                                                input { id: "schedule-create-stones", class: "form-control", "type": "number", min: "1", value: "{stones_per_set}", oninput: move |e| { let mut stones_per_set = stones_per_set; stones_per_set.set(e.value().parse().unwrap_or(default_set_length(&set_type()))); } }
                                             }
                                         }
                                     }
@@ -7825,7 +7836,7 @@ fn EditMatchModal(
     });
     let set_type = use_signal(|| m.set_type.clone().unwrap_or("SETS".to_string()));
     let nsets = use_signal(|| m.nsets.unwrap_or(3));
-    let stones_per_set = use_signal(|| m.stones_per_set.unwrap_or(100));
+    let stones_per_set = use_signal(|| m.stones_per_set.unwrap_or_else(|| default_set_length(&set_type())));
     let ribbon = use_signal(|| m.ribbon);
     let mut skip_condition = use_signal(|| m.skip_condition.clone().unwrap_or_default());
     let mut skip_condition_help_open = use_signal(|| false);
@@ -8238,9 +8249,10 @@ fn EditMatchModal(
                                     div { class: "col-md-4",
                                         div { class: "mb-3",
                                             label { r#for: "schedule-edit-format", class: "form-label", "Format" }
-                                            select { id: "schedule-edit-format", class: "form-select", value: "{set_type}", onchange: move |e| { let mut set_type = set_type; set_type.set(e.value()); },
+                                            select { id: "schedule-edit-format", class: "form-select", value: "{set_type}", onchange: move |e| { let mut set_type = set_type; let mut stones_per_set = stones_per_set; stones_per_set.set(default_set_length(&e.value())); set_type.set(e.value()); },
                                                 option { value: "SETS", "Sets" }
                                                 option { value: "STONES", "Stones" }
+                                                option { value: "TIMED", "Timed" }
                                             }
                                         }
                                     }
@@ -8250,11 +8262,11 @@ fn EditMatchModal(
                                             input { id: "schedule-edit-sets", class: "form-control", "type": "number", min: "1", value: "{nsets}", oninput: move |e| { let mut nsets = nsets; nsets.set(e.value().parse().unwrap_or(3)); } }
                                         }
                                     }
-                                    if set_type() == "STONES" {
+                                    if set_type() == "STONES" || set_type() == "TIMED" {
                                         div { class: "col-md-4",
                                             div { class: "mb-3",
-                                                label { r#for: "schedule-edit-stones", class: "form-label", "Stones per set" }
-                                                input { id: "schedule-edit-stones", class: "form-control", "type": "number", min: "1", value: "{stones_per_set}", oninput: move |e| { let mut stones_per_set = stones_per_set; stones_per_set.set(e.value().parse().unwrap_or(100)); } }
+                                                label { r#for: "schedule-edit-stones", class: "form-label", if set_type() == "TIMED" { "Minutes per set" } else { "Stones per set" } }
+                                                input { id: "schedule-edit-stones", class: "form-control", "type": "number", min: "1", value: "{stones_per_set}", oninput: move |e| { let mut stones_per_set = stones_per_set; stones_per_set.set(e.value().parse().unwrap_or(default_set_length(&set_type()))); } }
                                             }
                                         }
                                     }
