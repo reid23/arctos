@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, TypeVar
 
+from flask import jsonify
+
 from app.error_values import Err, Ok, Result
 from app.exceptions import ArctosError
 from app.utils.responses import json_error, json_success
@@ -63,3 +65,18 @@ def json_from_result(
             elif isinstance(err, ArctosError):
                 status = err.status_code
             return json_error(public_error_message(err), status_code=status)
+
+
+def result_response(res: Result[T, E], ok_to_payload: Callable[[T], dict], ok_status_code: int = 200):
+    """Convert a :class:`~app.error_values.Result` into a JSON response without a ``success`` key.
+
+    ``Ok`` becomes ``ok_to_payload(value)``; ``Err`` becomes ``{"error": "..."}``
+    with the error's ``status_code`` (400 for errors that aren't an
+    :class:`~app.exceptions.ArctosError`).
+    """
+    match res:
+        case Ok(value):
+            return jsonify(ok_to_payload(value)), ok_status_code
+        case Err(err):
+            status_code = err.status_code if isinstance(err, ArctosError) else 400
+            return jsonify({"error": public_error_message(err)}), status_code

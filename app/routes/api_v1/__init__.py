@@ -2,7 +2,8 @@
 
 Hosts the ``api_v1`` blueprint at ``/api/v1``: stable read access to
 everything an anonymous visitor of the website can see, plus footage
-upload for tournament organizers. Documented in ``docs/developers.md``;
+upload (``footage`` scope) and tournament and league management
+(``manage`` scope) for organizers. Documented in ``docs/developers.md``;
 every route is a contract with third-party apps, so change response shapes
 only additively (see :mod:`app.serializers.api_v1_serializer`).
 
@@ -17,6 +18,8 @@ Submodules, one per resource area:
 - :mod:`~app.routes.api_v1.tournaments` - tournaments, fields, rosters, results, side competitions.
 - :mod:`~app.routes.api_v1.matches` - schedule, match detail, live field scoreboards.
 - :mod:`~app.routes.api_v1.footage` - footage upload (``footage`` scope).
+- :mod:`~app.routes.api_v1.manage_tournaments`, :mod:`~app.routes.api_v1.manage_schedule`,
+  :mod:`~app.routes.api_v1.manage_leagues` - organizer writes (``manage`` scope).
 - :mod:`~app.routes.api_v1.leagues`, :mod:`~app.routes.api_v1.players`, :mod:`~app.routes.api_v1.teams`.
 """
 
@@ -29,9 +32,8 @@ import time
 
 from flask import Blueprint, g, jsonify, request
 
-from app.error_values import Err, Ok
 from app.services.permission_service import PermissionService
-from app.utils.result_helpers import public_error_message
+from app.utils.result_helpers import result_response  # noqa: F401 - shared by submodules
 from models import League, Tournament
 
 bp = Blueprint("api_v1", __name__, url_prefix="/api/v1")
@@ -43,14 +45,6 @@ PAGE_SIZE = 50
 
 def error(message: str, status_code: int):
     return jsonify({"error": message}), status_code
-
-
-def result_response(result, ok_to_payload):
-    match result:
-        case Ok(value):
-            return jsonify(ok_to_payload(value))
-        case Err(err):
-            return error(public_error_message(err), err.status_code)
 
 
 def json_object_body() -> dict | None:
@@ -69,7 +63,7 @@ def token_actor() -> dict:
 
 def sees_unpublished_organized() -> bool:
     """Whether the token may see unpublished tournaments and leagues its user organizes."""
-    return g.oauth_user is not None and token_has_scope("footage")
+    return g.oauth_user is not None and (token_has_scope("footage") or token_has_scope("manage"))
 
 
 def _is_organizer_view(tournament) -> bool:
@@ -111,6 +105,32 @@ def with_league(view):
         league = League.query.get(league_id)
         if league is None or not can_view_league(league):
             return error("League not found", 404)
+        return view(league, **kwargs)
+
+    return wrapper
+
+
+def with_organized_tournament(view):
+    """Like :func:`with_tournament`, then 403 unless the token's user organizes the tournament."""
+
+    @with_tournament
+    @functools.wraps(view)
+    def wrapper(tournament, **kwargs):
+        if not PermissionService.is_tournament_organizer_of(tournament, g.oauth_user):
+            return error("Only organizers of this tournament can do this", 403)
+        return view(tournament, **kwargs)
+
+    return wrapper
+
+
+def with_organized_league(view):
+    """Like :func:`with_league`, then 403 unless the token's user organizes the league."""
+
+    @with_league
+    @functools.wraps(view)
+    def wrapper(league, **kwargs):
+        if not PermissionService.is_league_organizer(league.url, g.oauth_user):
+            return error("Only organizers of this league can do this", 403)
         return view(league, **kwargs)
 
     return wrapper
