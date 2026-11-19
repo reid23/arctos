@@ -238,6 +238,11 @@ Useful patterns:
   waits for `Semi 1` and fills in its team when it finishes.
 - **Referees:** `refs_initial` is comma-separated (`"otters, hawks"`) and
   takes the same references as teams.
+- **Match formats:** `set_type = "SETS"` with `nsets`; `"STONES"` with
+  `stones_per_set`; or `"TIMED"` for fixed-length sets of wall time, such
+  as two 12-minute halves (`nsets = 2`, `stones_per_set = 12`, in
+  minutes). Make `nominal_length` cover the whole match, including the
+  time between sets.
 - **Optional games:** `skip_condition` is an expression that skips the
   match when it becomes `true`; check it with
   `POST .../schedule/validate` first.
