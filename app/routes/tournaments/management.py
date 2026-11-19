@@ -111,9 +111,6 @@ def create_league():
 def update_tournament_settings(tournament_url):
     """Update tournament settings."""
     tournament = Tournament.query.filter_by(url=tournament_url).first_or_404()
-    if tournament.historical:
-        return jsonify({"success": False, "error": "Edit historical tournaments from the records editor."}), 400
-
     try:
         save_tournament_settings(tournament)
     except SettingsSaveError as error:
