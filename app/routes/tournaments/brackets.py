@@ -7,13 +7,12 @@ defined in :mod:`app.routes.tournaments.__init__`.
 from __future__ import annotations
 
 import os
-import re
 from datetime import datetime, timezone
 
 from flask import current_app, g, jsonify, request
 from flask_login import current_user, login_required
 
-from app.domain.enums import BracketPortMode, MatchStatus, ScheduleType, TeamRegistrationStatus, parse_enum
+from app.domain.enums import BracketPortMode, MatchStatus, ScheduleType, TeamRegistrationStatus
 from app.models.bracket import (
     DEFAULT_BRACKET_HEIGHT,
     DEFAULT_BRACKET_WIDTH,
@@ -39,34 +38,22 @@ from models import (
     db,
 )
 
-from . import bp
+from app.error_values import Err
+from app.services.bracket_service import (
+    BracketService,
+    delete_bracket_image_file,
+    parse_match_ref,
+    playable_matches,
+    port_mode,
+)
 
-_MATCH_REF_RE = re.compile(r"^(?P<name>.+)::(?P<qual>winner|loser)$", re.IGNORECASE)
+from . import bp
 
 
 def _check_to(tournament_url):
     if not current_user.is_authenticated:
         return False
     return PermissionService.is_tournament_organizer(tournament_url, current_user)
-
-
-def _parse_match_ref(initial: str | None) -> tuple[str, str] | None:
-    """Return ``(match_name, 'winner'|'loser')`` if *initial* is a match ref."""
-    if not initial:
-        return None
-    m = _MATCH_REF_RE.match(initial.strip())
-    if not m:
-        return None
-    return m.group("name").strip(), m.group("qual").lower()
-
-
-def _port_mode(value) -> BracketPortMode:
-    parsed = parse_enum(BracketPortMode, value)
-    if parsed.is_some():
-        return parsed.unwrap()
-    if isinstance(value, str) and value.strip().upper() == "NET":
-        return BracketPortMode.NET
-    return BracketPortMode.LABEL
 
 
 def _team_display(tournament, team_id: str | None) -> dict | None:
@@ -124,21 +111,6 @@ def _bracket_match_payload(tournament, match: Match) -> dict:
     }
 
 
-def _playable_matches(tournament_url: str) -> list[Match]:
-    """Matches that can appear on a bracket (exclude BREAK/STATBREAK/JOIN)."""
-    rows = Match.query.filter_by(event=tournament_url).order_by(Match.name).all()
-    out = []
-    for m in rows:
-        st = m.schedule_type
-        if st in (ScheduleType.BREAK, ScheduleType.STATBREAK, ScheduleType.JOIN):
-            continue
-        # Also skip stringy legacy values just in case
-        if isinstance(st, str) and st.upper() in ("BREAK", "JOIN", "STATBREAK"):
-            continue
-        out.append(m)
-    return out
-
-
 def _default_port_modes(
     match: Match,
     placed_by_name: dict[str, Match],
@@ -150,7 +122,7 @@ def _default_port_modes(
     """
 
     def mode_for(initial: str | None) -> BracketPortMode:
-        ref = _parse_match_ref(initial)
+        ref = parse_match_ref(initial)
         if ref is None:
             return BracketPortMode.LABEL
         name, _qual = ref
@@ -218,7 +190,7 @@ def _labeled_team_payload(tournament, row: BracketLabeledTeam) -> dict:
             tag_name = team_token[5:].strip()
             display_text = f"tag::{tag_name}" if tag_name else team_token
     elif "::" in team_token:
-        ref = _parse_match_ref(team_token)
+        ref = parse_match_ref(team_token)
         if ref:
             name, qual = ref
             m = Match.query.filter_by(event=tournament.url, name=name).first()
@@ -273,26 +245,6 @@ def _image_payload(row: BracketImage) -> dict:
         "width": row.width if row.width is not None else DEFAULT_IMAGE_WIDTH,
         "height": row.height if row.height is not None else DEFAULT_IMAGE_HEIGHT,
     }
-
-
-def _delete_image_file(rel_path: str | None) -> None:
-    """Best-effort delete of a bracket image under static/."""
-    if not rel_path:
-        return
-    # Only allow paths under uploads/brackets/
-    norm = rel_path.replace("\\", "/").lstrip("/")
-    if not norm.startswith("uploads/brackets/"):
-        return
-    root = os.path.join(current_app.root_path, "../static")
-    full = os.path.normpath(os.path.join(root, norm))
-    static_root = os.path.normpath(root)
-    if not full.startswith(static_root + os.sep):
-        return
-    try:
-        if os.path.isfile(full):
-            os.remove(full)
-    except OSError:
-        pass
 
 
 def _parse_legacy_brackets_raw(tournament) -> list:
@@ -547,7 +499,7 @@ def _bracket_layout_response(tournament, is_to: bool) -> dict:
 def _bracket_matches_response(tournament, is_to: bool) -> dict:
     """Playable matches (+ TO token pickers) for joining with the layout doc."""
     tournament_url = tournament.url
-    matches = [_bracket_match_payload(tournament, m) for m in _playable_matches(tournament_url)]
+    matches = [_bracket_match_payload(tournament, m) for m in playable_matches(tournament_url)]
     out = {"matches": matches}
     if is_to:
         team_options, tags = _team_options_and_tags(tournament_url)
@@ -617,8 +569,7 @@ def tournament_bracket_published_api(tournament_url):
     if "published" not in data:
         return jsonify({"error": "published is required"}), 400
 
-    tournament.bracket_published = bool(data.get("published"))
-    db.session.commit()
+    BracketService.set_published(tournament, bool(data.get("published")))
     return jsonify(
         {
             "success": True,
@@ -660,178 +611,9 @@ def tournament_bracket_placements_save_api(tournament_url):
         return jsonify({"error": "Forbidden"}), 403
 
     tournament = Tournament.query.filter_by(url=tournament_url).first_or_404()
-    data = g.json_body or {}
-    items = data.get("placements")
-    if not isinstance(items, list):
-        return jsonify({"error": "placements must be a list"}), 400
-
-    clear_missing = bool(data.get("clear_missing", False))
-
-    playable = {m.uuid: m for m in _playable_matches(tournament_url)}
-    existing = {p.match: p for p in BracketPlacement.query.filter_by(event=tournament_url).all()}
-    seen: set[str] = set()
-
-    for raw in items:
-        if not isinstance(raw, dict):
-            continue
-        match_id = (raw.get("match") or raw.get("uuid") or "").strip()
-        if not match_id or match_id not in playable:
-            continue
-        seen.add(match_id)
-
-        x_raw = raw.get("x_pos", raw.get("x"))
-        y_raw = raw.get("y_pos", raw.get("y"))
-        try:
-            x_pos = float(x_raw) if x_raw is not None else None
-            y_pos = float(y_raw) if y_raw is not None else None
-        except (TypeError, ValueError):
-            x_pos, y_pos = None, None
-
-        # Both-or-neither: partial coords mean unplaced.
-        if x_pos is None or y_pos is None:
-            x_pos, y_pos = None, None
-
-        try:
-            width = float(raw.get("width", DEFAULT_BRACKET_WIDTH) or DEFAULT_BRACKET_WIDTH)
-        except (TypeError, ValueError):
-            width = DEFAULT_BRACKET_WIDTH
-        try:
-            height = float(raw.get("height", DEFAULT_BRACKET_HEIGHT) or DEFAULT_BRACKET_HEIGHT)
-        except (TypeError, ValueError):
-            height = DEFAULT_BRACKET_HEIGHT
-        width = max(160.0, min(width, 800.0))
-        height = max(70.0, min(height, 400.0))
-
-        team1 = _port_mode(raw.get("team1", "LABEL"))
-        team2 = _port_mode(raw.get("team2", "LABEL"))
-        inputs_flipped = bool(raw.get("inputs_flipped", False))
-
-        # NET is only valid for winner/loser refs; coerce otherwise.
-        m = playable[match_id]
-        if team1 == BracketPortMode.NET and _parse_match_ref(m.team1_initial) is None:
-            team1 = BracketPortMode.LABEL
-        if team2 == BracketPortMode.NET and _parse_match_ref(m.team2_initial) is None:
-            team2 = BracketPortMode.LABEL
-
-        row = existing.get(match_id)
-        if row is None:
-            row = BracketPlacement(event=tournament_url, match=match_id)
-            db.session.add(row)
-            existing[match_id] = row
-        row.x_pos = x_pos
-        row.y_pos = y_pos
-        row.width = width
-        row.height = height
-        row.team1 = team1
-        row.team2 = team2
-        row.inputs_flipped = inputs_flipped
-
-    if clear_missing:
-        for mid, row in list(existing.items()):
-            if mid not in seen:
-                db.session.delete(row)
-
-    # --- texts ---
-    texts_in = data.get("texts")
-    if isinstance(texts_in, list):
-        existing_texts = {t.id: t for t in BracketText.query.filter_by(event=tournament_url).all()}
-        seen_t: set[str] = set()
-        for raw in texts_in:
-            if not isinstance(raw, dict):
-                continue
-            tid = (raw.get("id") or "").strip()
-            if not tid:
-                continue
-            seen_t.add(tid)
-            row = existing_texts.get(tid)
-            if row is None:
-                row = BracketText(id=tid, event=tournament_url)
-                db.session.add(row)
-            row.text = str(raw.get("text") or "")
-            try:
-                row.x_pos = float(raw.get("x_pos", 40) or 40)
-                row.y_pos = float(raw.get("y_pos", 40) or 40)
-                row.size = float(raw.get("size", DEFAULT_TEXT_SIZE) or DEFAULT_TEXT_SIZE)
-            except (TypeError, ValueError):
-                row.x_pos = row.x_pos or 40.0
-                row.y_pos = row.y_pos or 40.0
-                row.size = row.size or DEFAULT_TEXT_SIZE
-            row.size = max(8.0, min(row.size, 200.0))
-        if clear_missing:
-            for tid, row in list(existing_texts.items()):
-                if tid not in seen_t:
-                    db.session.delete(row)
-
-    # --- labeled teams ---
-    lts_in = data.get("labeled_teams")
-    if isinstance(lts_in, list):
-        existing_lt = {t.id: t for t in BracketLabeledTeam.query.filter_by(event=tournament_url).all()}
-        seen_lt: set[str] = set()
-        for raw in lts_in:
-            if not isinstance(raw, dict):
-                continue
-            tid = (raw.get("id") or "").strip()
-            if not tid:
-                continue
-            seen_lt.add(tid)
-            row = existing_lt.get(tid)
-            if row is None:
-                row = BracketLabeledTeam(id=tid, event=tournament_url)
-                db.session.add(row)
-            team_token = str(raw.get("team") or "").strip()
-            kind = _port_mode(raw.get("kind", "LABEL"))
-            if kind == BracketPortMode.NET and _parse_match_ref(team_token) is None:
-                kind = BracketPortMode.LABEL
-            row.label = str(raw.get("label") or "")[:50]
-            row.team = team_token
-            row.kind = kind
-            try:
-                row.x_pos = float(raw.get("x_pos", 40) or 40)
-                row.y_pos = float(raw.get("y_pos", 40) or 40)
-            except (TypeError, ValueError):
-                row.x_pos = row.x_pos or 40.0
-                row.y_pos = row.y_pos or 40.0
-        if clear_missing:
-            for tid, row in list(existing_lt.items()):
-                if tid not in seen_lt:
-                    db.session.delete(row)
-
-    # --- images ---
-    imgs_in = data.get("images")
-    if isinstance(imgs_in, list):
-        existing_img = {i.id: i for i in BracketImage.query.filter_by(event=tournament_url).all()}
-        seen_i: set[str] = set()
-        for raw in imgs_in:
-            if not isinstance(raw, dict):
-                continue
-            iid = (raw.get("id") or "").strip()
-            if not iid:
-                continue
-            seen_i.add(iid)
-            row = existing_img.get(iid)
-            if row is None:
-                row = BracketImage(id=iid, event=tournament_url)
-                db.session.add(row)
-            new_path = str(raw.get("image") or row.image or "").strip()
-            if row.image and new_path and new_path != row.image:
-                _delete_image_file(row.image)
-            row.image = new_path
-            try:
-                row.x_pos = float(raw.get("x_pos", 40) or 40)
-                row.y_pos = float(raw.get("y_pos", 40) or 40)
-                row.width = float(raw.get("width", DEFAULT_IMAGE_WIDTH) or DEFAULT_IMAGE_WIDTH)
-                row.height = float(raw.get("height", DEFAULT_IMAGE_HEIGHT) or DEFAULT_IMAGE_HEIGHT)
-            except (TypeError, ValueError):
-                pass
-            row.width = max(20.0, min(row.width or DEFAULT_IMAGE_WIDTH, 4000.0))
-            row.height = max(20.0, min(row.height or DEFAULT_IMAGE_HEIGHT, 4000.0))
-        if clear_missing:
-            for iid, row in list(existing_img.items()):
-                if iid not in seen_i:
-                    _delete_image_file(row.image)
-                    db.session.delete(row)
-
-    db.session.commit()
+    match BracketService.save_layout(tournament_url, g.json_body or {}):
+        case Err(error):
+            return jsonify({"error": error.message}), error.status_code
 
     return jsonify({"success": True, **_bracket_response(tournament, True)})
 
@@ -862,7 +644,7 @@ def tournament_bracket_placement_add_api(tournament_url):
 
     existing_placed = {p.match: p for p in BracketPlacement.query.filter_by(event=tournament_url).all() if p.is_placed}
     # name → match for auto-wire decisions
-    playable = _playable_matches(tournament_url)
+    playable = playable_matches(tournament_url)
     placed_by_name: dict[str, Match] = {}
     uuid_to_match = {m.uuid: m for m in playable}
     for mid in existing_placed:
@@ -947,7 +729,7 @@ def tournament_bracket_convert_port_api(tournament_url):
     data = g.json_body or {}
     match_id = (data.get("match") or "").strip()
     side = (data.get("side") or "").strip().lower()
-    mode = _port_mode(data.get("mode"))
+    mode = port_mode(data.get("mode"))
 
     if side not in ("team1", "team2"):
         return jsonify({"error": "side must be team1 or team2"}), 400
@@ -957,7 +739,7 @@ def tournament_bracket_convert_port_api(tournament_url):
         return jsonify({"error": "Match not found"}), 404
 
     initial = match.team1_initial if side == "team1" else match.team2_initial
-    ref = _parse_match_ref(initial)
+    ref = parse_match_ref(initial)
 
     row = BracketPlacement.query.filter_by(event=tournament_url, match=match_id).first()
     if row is None or not row.is_placed:
@@ -981,7 +763,7 @@ def tournament_bracket_convert_port_api(tournament_url):
             src_row.y_pos = row.y_pos or 40.0
             src_row.width = DEFAULT_BRACKET_WIDTH
             src_row.height = DEFAULT_BRACKET_HEIGHT
-            playable = _playable_matches(tournament_url)
+            playable = playable_matches(tournament_url)
             placed = {
                 p.match: p
                 for p in BracketPlacement.query.filter_by(event=tournament_url).all()
@@ -1044,8 +826,8 @@ def tournament_bracket_add_labeled_team_api(tournament_url):
     import uuid as _uuid
 
     team_token = str(data.get("team") or "").strip()
-    kind = _port_mode(data.get("kind", "LABEL"))
-    if kind == BracketPortMode.NET and _parse_match_ref(team_token) is None:
+    kind = port_mode(data.get("kind", "LABEL"))
+    if kind == BracketPortMode.NET and parse_match_ref(team_token) is None:
         kind = BracketPortMode.LABEL
     row = BracketLabeledTeam(
         id=str(_uuid.uuid4()),
@@ -1107,9 +889,9 @@ def tournament_bracket_convert_labeled_team_api(tournament_url, element_id):
     row = BracketLabeledTeam.query.filter_by(event=tournament_url, id=element_id).first()
     if row is None:
         return jsonify({"error": "Not found"}), 404
-    mode = _port_mode(data.get("mode", "LABEL"))
+    mode = port_mode(data.get("mode", "LABEL"))
     if mode == BracketPortMode.NET:
-        ref = _parse_match_ref(row.team)
+        ref = parse_match_ref(row.team)
         if ref is None:
             return jsonify({"error": "Only match winner/loser tokens can be wired"}), 400
         src_name, _qual = ref
@@ -1157,7 +939,7 @@ def tournament_legacy_bracket_delete_api(tournament_url, index):
     removed = brackets.pop(index)
     image = (removed.get("image") or "").strip() if isinstance(removed, dict) else ""
     if image:
-        _delete_image_file(image)
+        delete_bracket_image_file(image)
 
     tournament.bracket = _serialize_legacy_brackets(brackets)
     db.session.commit()
@@ -1178,7 +960,7 @@ def tournament_legacy_brackets_clear_api(tournament_url):
             continue
         image = (bracket.get("image") or "").strip()
         if image:
-            _delete_image_file(image)
+            delete_bracket_image_file(image)
 
     tournament.bracket = ""
     db.session.commit()
