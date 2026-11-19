@@ -14,6 +14,7 @@ from app.models import (
 from app.models.user import Player, Team, TeamManager
 from app.models.registrable_config import RegistrableConfig
 from app.models.league import League
+from app.models.license import License
 from app.models.tournament import Tournament, TO, Field, Tag, ScriptVariable
 from app.models.registration import TeamRegistration, PlayerRegistration
 from app.models.match import Match, Point, MatchNote
@@ -40,6 +41,7 @@ __all__ = [
     "TeamManager",
     "RegistrableConfig",
     "League",
+    "License",
     "Tournament",
     "TO",
     "Field",

@@ -99,11 +99,12 @@ class OAuthClient(db.Model):
         return uris[0] if len(uris) == 1 else None
 
     def get_allowed_scope(self, scope: str) -> str:
-        from app.utils.oauth_server import SCOPES
+        from app.utils.oauth_server import SCOPES, SILENT_SCOPES
 
         if not scope:
             return ""
-        return " ".join(s for s in scope.split() if s in SCOPES)
+        allowed = set(SCOPES) | SILENT_SCOPES
+        return " ".join(part for part in scope.split() if part in allowed)
 
     def check_redirect_uri(self, redirect_uri: str) -> bool:
         if is_loopback_redirect_uri(redirect_uri):

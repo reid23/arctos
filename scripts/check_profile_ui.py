@@ -869,7 +869,7 @@ async def player_identity(check: SmokeCheck, page: Page) -> None:
     async def compact_metadata(scope: str) -> None:
         header = page.locator(scope)
         icons = header.get_by_role("list", name="Pompfen", exact=True)
-        await expect(icons.locator(".player-pompfen-item")).to_have_count(8)
+        await expect(icons.locator(".player-pompfen-item")).to_have_count(7)
         await expect(icons.locator(".player-pompfen-item.is-selected")).to_have_count(2)
         await expect(icons.locator("button, input, h2, .fa-check")).to_have_count(0)
         await expect(icons.locator('[data-pompfen="CHAIN"]')).to_have_attribute("title", "Chain (selected)")
@@ -924,7 +924,10 @@ async def player_identity(check: SmokeCheck, page: Page) -> None:
         await expect(pronouns).to_have_attribute("maxlength", "64")
         await pronouns.fill("they/them")
         choices = page.locator(".player-pompfen-editor")
-        await expect(choices.get_by_role("checkbox")).to_have_count(8)
+        await expect(choices.get_by_role("checkbox")).to_have_count(7)
+        await expect(choices.get_by_role("checkbox", name="Qwik", exact=True)).to_be_visible()
+        await expect(choices.get_by_role("checkbox", name="Skull", exact=True)).to_have_count(0)
+        await expect(choices.get_by_role("checkbox", name="Unarmed", exact=True)).to_have_count(0)
         for name in ("Chain", "Staff"):
             await choices.get_by_role("checkbox", name=name, exact=True).check()
         long = choices.get_by_role("checkbox", name="Long", exact=True)

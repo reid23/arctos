@@ -213,6 +213,18 @@ class Pompfen(Enum):
             return None
 
 
+# Player-profile pompfen, in display order. QWIK uses the unarmed symbol.
+PROFILE_POMPFEN: tuple[str, ...] = (
+    "CHAIN",
+    "LONG",
+    "QTIP",
+    "STAFF",
+    "BOARD",
+    "FLORENTINE",
+    "QWIK",
+)
+
+
 class WinnerSide(StrEnum):
     """Identifies which team won a completed match.
 

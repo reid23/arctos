@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from app.services.dual_write import get_head_ref_allowlist_ids
+from app.services.license_service import LicenseService
 from app.utils.helpers import get_registrable_config
 from models import BracketPlacement, League, Team
 
@@ -106,6 +107,12 @@ def tournament_to_dict(t) -> dict:
             out["league"] = None
     else:
         out["league"] = None
+    license_status = LicenseService.status_for_tournament(t)
+    out["licensed"] = license_status.licensed
+    out["license_valid"] = license_status.valid
+    out["license_team_allowance"] = license_status.team_allowance
+    out["license_registered_teams"] = license_status.registered_teams
+    out["license_price_cents"] = license_status.price_cents
     return out
 
 

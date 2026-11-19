@@ -99,6 +99,7 @@ def markdown_page(slug):
             "Arctos Schedule Script",
         ),
         "license": ("license.md", "License"),
+        "support": ("support.md", "Support Arctos"),
         "terms": ("terms.md", "Terms and Conditions"),
         "developers": ("developers.md", "For Developers"),
     }

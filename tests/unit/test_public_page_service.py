@@ -283,7 +283,7 @@ def test_directory_query_count_is_independent_of_number_of_cards(test_db, team):
         sqlalchemy_event.remove(db.engine, "before_cursor_execute", record)
     assert len(page.cards) == 24
     assert page.total == 26
-    assert len(statements) <= 7, statements
+    assert len(statements) <= 8, statements
     assert all(
         "tournaments.about" not in statement and "tournaments.bracket AS" not in statement for statement in statements
     )

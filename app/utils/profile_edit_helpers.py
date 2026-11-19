@@ -9,7 +9,7 @@ from uuid import uuid4
 from flask import current_app, request
 from werkzeug.exceptions import BadRequest, RequestEntityTooLarge
 
-from app.domain.enums import Pompfen
+from app.domain.enums import PROFILE_POMPFEN
 from app.utils.profile_banner_helpers import (
     MAX_BANNER_BYTES,
     OUTPUT_BANNER_SIZE,
@@ -98,7 +98,7 @@ def _validate_fields(entity, account_type: str, data: dict) -> dict:
         fields[field] = (value or None) if field == "pronouns" else value
     if account_type == "player" and "pompfen" in data:
         selected = data["pompfen"]
-        allowed = [weapon.name for weapon in Pompfen]
+        allowed = list(PROFILE_POMPFEN)
         if (
             not isinstance(selected, list)
             or len(selected) > len(allowed)

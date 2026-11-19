@@ -241,6 +241,9 @@ enum Route {
     #[route("/license.md")]
     License {},
 
+    #[route("/support.md")]
+    Support {},
+
     #[route("/arctos-schedule-script.md")]
     ArctosScheduleScript {},
 

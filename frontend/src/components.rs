@@ -19,6 +19,7 @@ mod registration_entry;
 mod event_about;
 mod team_registration_help_modal;
 mod event_header;
+mod license_key;
 mod event_teams_list;
 mod league_penalty_types_table;
 mod league_registration_buttons;
@@ -49,7 +50,8 @@ pub use connected_apps_card::ConnectedAppsCard;
 pub use edit_registration_modal::{EditRegistrationContext, EditRegistrationModal};
 pub use registration_entry::{has_existing_registration, ExistingRegistration};
 pub use event_about::EventAbout;
-pub use event_header::{EventBannerPhoto, EventHeader, EventTab, EventTabs};
+pub use event_header::{EventBannerPhoto, EventHeader, EventLicenseStatus, EventTab, EventTabs};
+pub use license_key::LicenseKeySection;
 pub use team_registration_help_modal::TeamRegistrationHelpModal;
 pub use event_teams_list::EventTeamsList;
 pub use league_penalty_types_table::LeaguePenaltyTypesTable;
@@ -63,8 +65,8 @@ pub use organizer_tools::OrganizerTools;
 pub use results_games_table::{ResultsGamesTable, rows_for_team};
 pub use results_sort_header::ResultsSortHeader;
 pub use sidecomp_weapon_modal::{
-    default_allowed_weapons, pompfen_by_id, AllowedWeaponsCheckboxes, PompfenIcon, SideCompRegistrationMode,
-    SideCompWeaponModal, ALL_POMPFEN,
+    default_allowed_weapons, pompfen_by_id, profile_pompfen, AllowedWeaponsCheckboxes, PompfenIcon,
+    SideCompRegistrationMode, SideCompWeaponModal,
 };
 pub use team_label::{TeamLabel, TeamLabelStyle, TeamSlot};
 pub use team_token_input::{all_tokens_known, resolve_value_to_team_ids, TeamSelectionField};

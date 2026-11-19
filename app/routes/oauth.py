@@ -62,7 +62,8 @@ def userinfo():
     """Who the access token acts for.
 
     Always includes the OpenID ``sub`` plus the historical ``id``, ``name``,
-    and ``type`` fields. ``picture`` is added for the profile scope.
+    and ``type`` fields. ``picture`` is added for the profile scope. ``email``
+    is the account id when the token includes that scope.
     """
     user = g.oauth_user
     return jsonify(userinfo_document(user, g.oauth_token.user_type, g.oauth_token.scope or ""))

@@ -34,6 +34,7 @@ from models import (
     PenaltyType,
 )
 from app.services._common import current_user_type
+from app.services.license_service import LicenseService
 from app.models.validators import URL_SLUG_ALLOWED_HINT, is_valid_url_slug
 from app.utils.decorators import require_tournament_organizer
 from app.utils.datetime_helpers import now_utc_naive
@@ -317,6 +318,7 @@ def delete_tournament(tournament_url):
         )
         Team.query.filter(Team.id.in_(placeholder_ids)).delete(synchronize_session=False)
     rc_id = tournament.registrable_config_id if not tournament.league_id else None
+    LicenseService.release_event(tournament_url)
     db.session.delete(tournament)
     if rc_id:
         rc = RegistrableConfig.query.get(rc_id)
