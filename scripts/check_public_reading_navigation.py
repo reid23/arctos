@@ -130,14 +130,16 @@ async def metadata_matches(page, args, path):
         """html => {
           const doc = new DOMParser().parseFromString(html, 'text/html');
           return [doc.title, ...['meta[name="description"]', 'meta[name="robots"]',
-            'link[rel="canonical"]', 'meta[property="og:title"]', 'meta[property="og:url"]']
+            'link[rel="canonical"]', 'meta[property="og:title"]', 'meta[property="og:url"]',
+            'meta[property="og:image"]']
             .map(s => doc.querySelector(s)?.getAttribute(s.startsWith('link') ? 'href' : 'content') || null)];
         }""",
         await response.text(),
     )
     actual = await page.evaluate(
         """() => [document.title, ...['meta[name="description"]', 'meta[name="robots"]',
-          'link[rel="canonical"]', 'meta[property="og:title"]', 'meta[property="og:url"]']
+          'link[rel="canonical"]', 'meta[property="og:title"]', 'meta[property="og:url"]',
+          'meta[property="og:image"]']
           .map(s => document.querySelector(s)?.getAttribute(s.startsWith('link') ? 'href' : 'content') || null)]"""
     )
     assert actual == expected

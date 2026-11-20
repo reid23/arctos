@@ -1,0 +1,6 @@
+{% if preview_image %}
+<meta data-public-meta property="og:image" content="{{ preview_image }}">
+<meta data-public-meta property="og:image:alt" content="{{ preview_image_alt|default('Arctos') }}">
+<meta data-public-meta name="twitter:card" content="summary_large_image">
+<meta data-public-meta name="twitter:image" content="{{ preview_image }}">
+{% endif %}
