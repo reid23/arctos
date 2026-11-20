@@ -1083,7 +1083,7 @@ point where fields wait for each other, same-named rows across fields
 start together), or `STATBREAK` (a break at a fixed time). `set_type` is
 `SETS` (with `nsets`), `STONES` (with `stones_per_set`), or `TIMED`
 (with `nsets`, and `stones_per_set` holding each set's length in
-minutes; a set's clock starts with its first point). Lengths are
+minutes). Lengths are
 in minutes. Exported files also carry each row's `uuid` / `id`; keep
 them to update rows in place, or leave them out to create new ones.
 Names that aren't registered teams become tags, with a warning.
