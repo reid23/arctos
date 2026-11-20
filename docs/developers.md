@@ -1086,14 +1086,18 @@ start together), or `STATBREAK` (a break at a fixed time). `set_type` is
 `SETS` (with `nsets`), `STONES` (with `stones_per_set`), or `TIMED`
 (with `nsets`, and `stones_per_set` holding each set's length in
 minutes). Lengths are
-in minutes. Exported files also carry each row's `uuid` / `id`; keep
-them to update rows in place, or leave them out to create new ones.
+in minutes. Exported files also carry each row's `uuid` / `id`, which
+update that row in place (a match can be renamed this way). A match row
+without a `uuid` updates the match with the same name (and field, for
+breaks and joins) or creates one; tags, fields, and variables are matched
+by name. A file that leaves out a match that has started is rejected.
 Names that aren't registered teams become tags, with a warning.
 
 Returns the counts and warnings:
 
 ```json
 {
+  "dry_run": false,
   "variables_created": 1, "variables_updated": 0,
   "tags_created": 1, "tags_updated": 0,
   "fields_created": 1, "fields_updated": 0,
@@ -1101,6 +1105,14 @@ Returns the counts and warnings:
   "warnings": []
 }
 ```
+
+With `?dry_run=true`, the file gets every check an import runs, including
+tag and variable expressions checked against the file's own matches, tags,
+and variables, and the response reports what the import would do. Nothing
+is saved. `warnings` here only covers names the import turned into tags;
+conflicts in the schedule itself come from
+[`GET .../schedule/warnings`](#get-tournamentstournament_idschedulewarnings)
+after a real import.
 
 #### `POST /tournaments/{tournament_id}/schedule/validate`
 
