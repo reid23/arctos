@@ -293,3 +293,34 @@ def test_signing_in_to_a_different_kind_of_account_explains_why_it_cant_merge(cl
 
     assert response.get_json()["preview"] is None
     assert "player account" in response.get_json()["sign_in_error"]
+
+
+@pytest.mark.integration
+def test_merging_a_password_account_into_a_google_account_keeps_both_sign_ins(client, test_db):
+    old = Player(id="old", name="Old")
+    old.set_password("old-password")
+    db.session.add_all([old, Player(id="new", name="New", google_id="google-new")])
+    db.session.commit()
+
+    assert _merge("old", "new").is_ok()
+
+    new = db.session.get(Player, "new")
+    assert new.google_id == "google-new"
+    assert new.check_password("old-password")
+    signed_in = client.post("/_api/login", json={"username": "new", "password": "old-password"})
+    assert signed_in.status_code == 200
+    assert client.post("/_api/login", json={"username": "old", "password": "old-password"}).status_code == 401
+
+
+@pytest.mark.integration
+def test_merging_a_google_account_into_a_password_account_keeps_both_sign_ins(app, test_db):
+    new = Player(id="new", name="New")
+    new.set_password("new-password")
+    db.session.add_all([new, Player(id="old", name="Old", google_id="google-old")])
+    db.session.commit()
+
+    assert _merge("old", "new").is_ok()
+
+    new = db.session.get(Player, "new")
+    assert new.google_id == "google-old"
+    assert new.check_password("new-password")

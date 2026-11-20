@@ -233,7 +233,7 @@ fn ReviewMerge(
                 if preview.source_has_password && preview.target_has_password {
                     li { "{source}'s password stops working. Keep signing in with {target}'s password." }
                 } else if preview.source_has_password {
-                    li { "{source}'s password becomes {target}'s password." }
+                    li { "{source}'s password moves to {target}. Sign in as {target} with that password; the username {source} won't work anymore." }
                 }
                 if preview.google_sign_in == "moves" {
                     li { "{source}'s Google sign-in moves to {target}." }

@@ -357,8 +357,9 @@ kept.
 
 Before anything changes, Arctos shows what will move: registrations, match
 history, notes, injuries, organizer roles, and so on. Profile details from the
-other account fill in anything your profile leaves blank, and a Google sign-in
-moves over if your account doesn't have one. Apps signed in as the other
+other account fill in anything your profile leaves blank. Its password and its
+Google sign-in each move over if your account doesn't have one; afterwards,
+sign in with your own username, since the other one no longer exists. Apps signed in as the other
 account are signed out. To confirm, type the other account's username.
 The other account is then deleted, and its username can never be used again.
 A merge can't be undone.
