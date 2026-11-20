@@ -305,6 +305,15 @@ fn ProfileEditForm(account_id: String, team: bool, data: ProfileEditData) -> Ele
                 summary { "Account settings" }
                 if data.has_password { ChangePasswordCard {} }
                 ConnectedAppsCard {}
+                div { class: "edit-section mt-3",
+                    div { class: "edit-section-heading",
+                        h3 { class: "h5 mb-0", "Merge with another account" }
+                    }
+                    div { class: "edit-section-body",
+                        p { "Have a second account? Merge it into this one to keep all your history in one place." }
+                        Link { class: "btn btn-outline-primary", to: Route::AccountMerge {}, "Merge with another account" }
+                    }
+                }
             } }
         }
     }

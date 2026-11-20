@@ -161,6 +161,7 @@ fn page_title_for_route(route: &Route) -> String {
         Route::Developers { .. } => "For Developers".into(),
         Route::Agents { .. } => "For AI Agents".into(),
         Route::DeveloperApps { .. } => "Your Apps".into(),
+        Route::AccountMerge { .. } => "Merge accounts".into(),
         Route::OAuthAuthorize { .. } => "Sign in with Arctos".into(),
         Route::SideCompNew { url } => format!("{url} New Side Competition"),
         Route::SideCompDetail { url, .. } => format!("{url} Side Competition"),

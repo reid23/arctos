@@ -90,6 +90,7 @@ pub(super) fn main_section(route: &Route) -> Option<MainSection> {
         | Route::Developers { .. }
         | Route::Agents { .. }
         | Route::DeveloperApps { .. }
+        | Route::AccountMerge { .. }
         | Route::OAuthAuthorize { .. }
         | Route::NotFound { .. } => None,
     }
@@ -281,6 +282,7 @@ mod tests {
             Route::Developers {},
             Route::Agents {},
             Route::DeveloperApps {},
+            Route::AccountMerge {},
             Route::OAuthAuthorize {},
             Route::ScoreboardRender {},
             Route::NotFound {

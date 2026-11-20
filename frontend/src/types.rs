@@ -2425,3 +2425,40 @@ impl User {
             || self.managed_teams.iter().any(|team| team.id == team_id)
     }
 }
+
+/// `GET /_api/account/merge`: the account this session signed in to for merging, if any.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct AccountMergeStatus {
+    pub preview: Option<AccountMergePreview>,
+    /// Why the last attempt to sign in to the other account didn't work.
+    pub sign_in_error: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct AccountMergePreview {
+    /// `player` or `team`.
+    #[serde(rename = "type")]
+    pub account_type: String,
+    /// The account that will be deleted.
+    pub source: AccountMergeAccount,
+    /// The signed-in account, which keeps everything.
+    pub target: AccountMergeAccount,
+    pub moves: Vec<AccountMergeMove>,
+    pub conflicts: Vec<String>,
+    pub source_has_password: bool,
+    pub target_has_password: bool,
+    /// `none` (the other account has no Google sign-in), `moves`, or `removed`.
+    pub google_sign_in: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct AccountMergeAccount {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct AccountMergeMove {
+    pub description: String,
+    pub count: u32,
+}

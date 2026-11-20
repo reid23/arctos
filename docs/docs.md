@@ -32,6 +32,7 @@ Overview
     - [Day-Of Operations](#on-the-day-of)
  - [Stones](#stones)
  - [Account Types](#account-types)
+ - [Merging Accounts](#merging-accounts)
  - [Team Managers](#team-managers)
  - [Penalties](#penalties)
 
@@ -344,6 +345,29 @@ Player accounts, on the other hand, are much less ephemeral - your URL
 is permanent, and your profile is meant to be the thing that ties you
 to you between tournaments. This is why you can change your jersey
 name and jersey number for each tournament.
+
+## Merging Accounts
+
+If you have two player accounts, or two team accounts, you can merge one into
+the other so all of its history is in one place. Edit your profile, open
+**Account settings**, and choose **Merge with another account**. Then sign in
+to the account you want to merge in, with its password or its Google sign-in.
+You stay signed in to the account you started from, which is the one that is
+kept.
+
+Before anything changes, Arctos shows what will move: registrations, match
+history, notes, injuries, organizer roles, and so on. Profile details from the
+other account fill in anything your profile leaves blank, and a Google sign-in
+moves over if your account doesn't have one. Apps signed in as the other
+account are signed out. To confirm, type the other account's username.
+The other account is then deleted, and its username can never be used again.
+A merge can't be undone.
+
+Some things can't be combined automatically: both accounts registered for the
+same event, league, or side competition, both playing in the same match, or
+(for teams) the two teams playing or refereeing each other. Arctos lists each
+one and won't merge until they're resolved, for example by cancelling one of
+the registrations. A player account can't be merged with a team account.
 
 ## Team Managers
 

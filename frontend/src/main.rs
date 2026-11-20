@@ -259,6 +259,9 @@ enum Route {
     #[route("/developers/apps")]
     DeveloperApps {},
 
+    #[route("/account/merge")]
+    AccountMerge {},
+
     #[route("/oauth/authorize")]
     OAuthAuthorize {},
 
