@@ -264,7 +264,7 @@ def test_google_sign_in_proves_the_other_account_without_switching_accounts(app,
     db.session.commit()
     login_as(client, target)
     fake_google = SimpleNamespace(
-        authorize_redirect=lambda redirect_uri: auth.redirect("https://accounts.google.example"),
+        authorize_redirect=lambda redirect_uri, **params: auth.redirect("https://accounts.google.example"),
         authorize_access_token=lambda: {},
         server_metadata={"userinfo_endpoint": "https://google.example/userinfo"},
         get=lambda url: SimpleNamespace(json=lambda: {"sub": "google-old", "email": "old@example.com"}),
