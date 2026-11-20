@@ -764,8 +764,6 @@ The scoreboard displays:
   - Team names and profile photos
   - Current score by set
   - For stones matches: the stones remaining countdown with a progress bar
-  - For timed matches: the time left in the current set. A set's clock
-    starts with its first point and keeps running between points.
   - When no match is active: the previous and next match's teams (with
     winner listed for the previous match). The previous match is the
     field's most recently completed match, and the next match is the one

@@ -1224,7 +1224,7 @@ fn MatchPageContent(url: String, match_id: Option<String>, match_name: Option<St
         use_effect(move || {
             if let Some(Ok(d)) = data.value().read().as_ref() {
                 if d.match_data.status == "IN_PROGRESS"
-                    && matches!(d.match_data.set_type.as_deref(), Some("STONES" | "TIMED"))
+                    && d.match_data.set_type.as_deref() == Some("STONES")
                 {
                     if stones_update_interval.read().is_none() {
                         let handle = Interval::new(100, move || {
@@ -2165,33 +2165,6 @@ fn MatchPageContent(url: String, match_id: Option<String>, match_name: Option<St
                                                 p {
                                                     strong { "Stones Remaining: " }
                                                     span { id: "live-stones-remaining", "{stones_str}" }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            if let (Some("TIMED"), Some(set_minutes), "IN_PROGRESS") = (d.match_data.set_type.as_deref(), d.match_data.stones_per_set, d.match_data.status.as_str()) {
-                                {
-                                    #[cfg(target_arch = "wasm32")]
-                                    let _update_tick = stones_update_tick();
-                                    #[cfg(target_arch = "wasm32")]
-                                    let now_secs = time_sync.server_now_secs();
-                                    #[cfg(not(target_arch = "wasm32"))]
-                                    let now_secs = chrono::Utc::now().timestamp() as f64;
-                                    let points = live_points_signal().clone().unwrap_or_else(|| d.points.clone());
-                                    let point_starts: Vec<(u32, f64)> = points
-                                        .iter()
-                                        .filter_map(|point| Some((point.set_number?, parse_iso_to_secs(point.stamp.as_deref()?)?)))
-                                        .collect();
-                                    let seconds = crate::set_clock::seconds_remaining(&point_starts, set_minutes, now_secs);
-                                    rsx! {
-                                        div { class: "row mb-3",
-                                            div { class: "col-md-6",
-                                                p {
-                                                    strong { "Time left in set: " }
-                                                    span { id: "live-set-clock", "{crate::set_clock::format_clock(seconds)}" }
                                                 }
                                             }
                                         }

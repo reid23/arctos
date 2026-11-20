@@ -21,7 +21,6 @@ pub fn ScoreboardRender() -> Element {
             div { "data-render-sequence": "{sequence}",
                 ScoreboardDisplay {
                     stones_remaining: state.stones_info.as_ref().and_then(|stones| stones.stones_remaining).unwrap_or(0),
-                    set_clock_seconds: state.set_clock.as_ref().map(|clock| clock.seconds_remaining),
                     state,
                 }
             }
