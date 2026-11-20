@@ -536,6 +536,13 @@ Tags let you apply the seeding rules for your event. The Results tab
 also provides calculated standings, described below; it does not set
 tags or advance teams through a bracket.
 
+A tag can also fill itself in. Give it an Arctos Schedule Script expression
+such as `(winner {Semi A})` and it takes that team once the expression can
+be evaluated; a team assigned by hand overrides it. See
+[Tags as Expressions](arctos-schedule-script.md#tags-as-expressions). Script
+variables, defined under **Scripting**, are named expressions that tags,
+skip conditions, and other variables can share.
+
 
 ### Static Scheduling
 
