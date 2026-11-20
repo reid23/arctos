@@ -42,3 +42,10 @@ def is_team(user) -> bool:
     from models import Team
 
     return isinstance(user, Team)
+
+
+def username_taken(username: str) -> bool:
+    """Whether *username* belongs to a player or team, or to an account merged away (those stay reserved)."""
+    from models import AccountMerge, Player, Team, db
+
+    return any(db.session.get(model, username) is not None for model in (Player, Team, AccountMerge))
