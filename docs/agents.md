@@ -189,9 +189,8 @@ it picks a team before the pool is played.
 - **The import's `warnings` aren't the schedule's warnings.** The import
   only warns about names it turned into tags. Always also call
   `GET .../schedule/warnings`, which finds teams booked in two places at
-  once, cycles, and unknown references. It only sees assigned teams, so
-  in a schedule built on tags, also run the
-  [report script](#verifying-a-schedule).
+  once (including tags and `Match::winner` slots not filled yet), cycles,
+  and unknown references.
 - **Times are UTC.** `scheduled_start_time = 2026-07-04T16:00:00` in a
   schedule file is 16:00 UTC; convert from the event's local time.
 - **Every entry needs a `nominal_length`** in minutes, except joins.
@@ -439,9 +438,8 @@ telling the organizer the schedule is ready:
 4. Export the schedule and compare it with the file you meant to import.
 5. Check fairness: the number of games and refereeing assignments per
    team, rest between commitments, and when each team's day ends. The
-   script below prints this. It follows unfilled slots by their
-   placeholder, so it catches a tag booked in two places at once,
-   which the warnings in step 1 can't see until teams are assigned.
+   script below prints this, following unfilled slots by their
+   placeholder.
 
 ```python
 """Summarize a tournament's schedule per team or tag: games, refereeing, and rest.

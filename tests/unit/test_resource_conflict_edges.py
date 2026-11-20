@@ -243,3 +243,49 @@ def test_recompute_is_idempotent_with_cross_field_sharing(app, test_db, tourname
         second = (a.scheduled_start_time, b.scheduled_start_time)
 
         assert first == second  # stable across re-runs
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("placeholder", "other_placeholder", "flagged"),
+    [
+        ("tag::A1", "tag::A1", True),
+        ("Semi 1::winner", "Semi 1::winner", True),
+        ("tag::A1", "tag::A2", False),
+    ],
+)
+def test_unfilled_slots_double_book_by_placeholder(
+    app, test_db, tournament, seeded_teams, placeholder, other_placeholder, flagged
+):
+    """A tag or match reference with no team yet still can't be in two places at once."""
+    from app.services.dual_write import set_match_referees_from_csv
+
+    with app.app_context():
+        url = tournament.url
+        _mk(
+            url,
+            "North game",
+            "F1",
+            datetime(2026, 6, 9, 10, 0),
+            schedule_type=ScheduleType.STATIC,
+            team1_initial=placeholder,
+            team2_initial="tag::B1",
+        )
+        south = _mk(
+            url,
+            "South game",
+            "F2",
+            datetime(2026, 6, 9, 10, 10),
+            schedule_type=ScheduleType.STATIC,
+            team1_initial="tag::C1",
+            team2_initial="tag::C2",
+        )
+        set_match_referees_from_csv(south, "", other_placeholder)
+        db.session.commit()
+
+        double_booked = [w for w in validate_match_warnings(url) if w["kind"] == "double_booked"]
+
+        assert bool(double_booked) == flagged
+        if flagged:
+            assert set(double_booked[0]["matches"]) == {"North game", "South game"}
+            assert placeholder in double_booked[0]["message"]
