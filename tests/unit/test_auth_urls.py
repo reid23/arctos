@@ -82,3 +82,26 @@ def test_redirect_to_frontend_preserves_script_root(app, test_db):
     ):
         response = _redirect_to_frontend("/auth/google/choose-account-type")
         assert response.location == "/arctos/auth/google/choose-account-type"
+
+
+@pytest.mark.unit
+def test_google_sign_in_always_shows_the_account_chooser(app, client, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.routes import auth
+
+    requested = {}
+
+    def authorize_redirect(redirect_uri, **params):
+        requested.update(params)
+        return auth.redirect("https://accounts.google.example")
+
+    monkeypatch.setattr(
+        type(auth.oauth), "google", SimpleNamespace(authorize_redirect=authorize_redirect), raising=False
+    )
+    monkeypatch.setitem(app.config, "GOOGLE_CLIENT_ID", "id")
+    monkeypatch.setitem(app.config, "GOOGLE_CLIENT_SECRET", "secret")
+
+    client.get("/_api/auth/google/login")
+
+    assert requested == {"prompt": "select_account"}
