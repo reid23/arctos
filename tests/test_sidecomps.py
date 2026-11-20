@@ -147,6 +147,10 @@ def test_sidecomp_service_create_to_succeeds(test_db, tournament):
     assert sc.name == "Dueling 1v1"
     assert sc.type == "DUELING"
     assert sc.event == tournament.url
+    assert sc.track_losses
+    assert sc.track_chain_losses
+    assert sc.track_break_losses
+    assert sc.track_matchups
 
 
 def test_sidecomp_service_create_non_to_forbidden(test_db, tournament):
