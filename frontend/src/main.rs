@@ -253,6 +253,9 @@ enum Route {
     #[route("/developers.md")]
     Developers {},
 
+    #[route("/agents.md")]
+    Agents {},
+
     #[route("/developers/apps")]
     DeveloperApps {},
 

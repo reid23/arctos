@@ -20,7 +20,7 @@ from app.utils.oauth_server import require_bearer
 from app.utils.parser import check_expression
 from app.utils.scheduling import recompute_scheduled_and_nominal_times, validate_match_warnings
 
-from . import bp, error, json_object_body, result_response, with_organized_tournament
+from . import bp, error, flag_argument, json_object_body, result_response, with_organized_tournament
 
 
 @bp.get("/tournaments/<tournament_id>/schedule/script")
@@ -40,14 +40,18 @@ def import_schedule(tournament):
     """JSON ``{script}`` replaces the schedule with the file's contents -> counts and warnings.
 
     Everything is validated before anything changes; an invalid file changes nothing.
+    Query ``dry_run=true`` validates and counts without saving.
     """
     body = json_object_body()
     if body is None or not isinstance(body.get("script"), str):
         return error("Expected a JSON object body with a script", 400)
+    dry_run = flag_argument("dry_run")
 
     def import_counts(import_result) -> dict:
-        recompute_scheduled_and_nominal_times(tournament.url)
+        if not dry_run:
+            recompute_scheduled_and_nominal_times(tournament.url)
         return {
+            "dry_run": dry_run,
             "variables_created": import_result.variables_created,
             "variables_updated": import_result.variables_updated,
             "tags_created": import_result.tags_created,
@@ -59,7 +63,9 @@ def import_schedule(tournament):
             "warnings": import_result.warnings,
         }
 
-    return result_response(ScheduleImportExportService.import_schedule(tournament.url, body["script"]), import_counts)
+    return result_response(
+        ScheduleImportExportService.import_schedule(tournament.url, body["script"], dry_run=dry_run), import_counts
+    )
 
 
 @bp.post("/tournaments/<tournament_id>/schedule/validate")

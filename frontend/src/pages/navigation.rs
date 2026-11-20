@@ -88,6 +88,7 @@ pub(super) fn main_section(route: &Route) -> Option<MainSection> {
         | Route::ArctosScheduleScript { .. }
         | Route::DataAccessibilityGuide { .. }
         | Route::Developers { .. }
+        | Route::Agents { .. }
         | Route::DeveloperApps { .. }
         | Route::OAuthAuthorize { .. }
         | Route::NotFound { .. } => None,
@@ -278,6 +279,7 @@ mod tests {
             Route::ArctosScheduleScript {},
             Route::DataAccessibilityGuide {},
             Route::Developers {},
+            Route::Agents {},
             Route::DeveloperApps {},
             Route::OAuthAuthorize {},
             Route::ScoreboardRender {},

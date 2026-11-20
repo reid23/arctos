@@ -5,6 +5,7 @@ and building the schedule.
 """
 
 import textwrap
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -478,3 +479,151 @@ def test_set_up_a_tournament_end_to_end(client, headers, people):
     assert reimported.status_code == 200, reimported.get_json()
     assert reimported.get_json()["matches_updated"] == 3
     assert Match.query.filter_by(event="summer-cup").count() == 3
+
+
+def test_agents_guide_example_schedule_imports_without_warnings(client, headers, organized):
+    guide = (Path(__file__).resolve().parents[1] / "docs" / "agents.md").read_text()
+    blocks = [block.split("```", 1)[0] for block in guide.split("```toml\n")[1:]]
+    example = next(block for block in blocks if "[[fields]]" in block)
+    variables = next(block for block in blocks if "[[variables]]" in block)
+    url = "/api/v1/tournaments/secret-cup/schedule"
+
+    imported = client.put(url, headers=headers, json={"script": example})
+
+    assert imported.status_code == 200, imported.get_json()
+    assert imported.get_json()["warnings"] == []
+    assert client.get(url + "/warnings", headers=headers).get_json()["warnings"] == []
+    matches = client.get("/api/v1/tournaments/secret-cup/matches", headers=headers).get_json()["matches"]
+    assert {match["name"]: match["start_time"] for match in matches if match["field"] == "North"} == {
+        "A: 1 v 2": "2026-07-04T16:00:00Z",
+        "A: 2 v 3": "2026-07-04T16:30:00Z",
+        "A: 3 v 1": "2026-07-04T17:00:00Z",
+        "Pools done": "2026-07-04T17:30:00Z",
+        "Lunch": "2026-07-04T17:30:00Z",
+        "Final": "2026-07-04T18:15:00Z",
+    }
+
+    with_variables = client.put(url + "?dry_run=true", headers=headers, json={"script": variables + example})
+
+    assert with_variables.status_code == 200, with_variables.get_json()
+    assert with_variables.get_json()["variables_created"] == 3
+
+
+def test_schedule_dry_run_checks_the_file_against_itself_and_saves_nothing(client, headers, organized):
+    script = textwrap.dedent(
+        """
+        [[tags]]
+        name = "Team 1"
+
+        [[tags]]
+        name = "Team 2"
+
+        [[tags]]
+        name = "Champion"
+        expression = "(winner {Final})"
+
+        [[fields]]
+        name = "Field 1"
+
+        [[matches]]
+        name = "Final"
+        field = "Field 1"
+        schedule_type = "STATIC"
+        scheduled_start_time = 2026-06-01T16:00:00
+        set_type = "SETS"
+        nsets = 3
+        nominal_length = 40
+        team1_initial = "tag::Team 1"
+        team2_initial = "tag::Team 2"
+        """
+    )
+    url = "/api/v1/tournaments/open-cup/schedule?dry_run=true"
+
+    checked = client.put(url, headers=headers, json={"script": script})
+
+    assert checked.status_code == 200, checked.get_json()
+    assert checked.get_json()["dry_run"] is True
+    assert checked.get_json()["matches_created"] == 1
+    assert checked.get_json()["tags_created"] == 3
+    assert Match.query.filter_by(event="open-cup").count() == 0
+    assert Tag.query.filter_by(event="open-cup").count() == 0
+
+    broken = client.put(url, headers=headers, json={"script": script.replace("{Final}", "{Semifinal}")})
+
+    assert broken.status_code == 400
+    assert "Semifinal" in broken.get_json()["error"]
+
+
+def _schedule_with(*rows: str) -> str:
+    return '[[fields]]\nname = "Field 1"\n\n' + "\n".join(textwrap.dedent(row) for row in rows)
+
+
+OPENER = """
+    [[matches]]
+    name = "Opener"
+    field = "Field 1"
+    schedule_type = "STATIC"
+    scheduled_start_time = 2026-06-01T16:00:00
+    nominal_length = 30
+    team1_initial = "tag::Home"
+    team2_initial = "tag::Away"
+    refs_initial = "tag::Refs"
+    """
+TAGS = '[[tags]]\nname = "Home"\n\n[[tags]]\nname = "Away"\n\n[[tags]]\nname = "Refs"\n'
+
+
+def test_schedule_import_gives_joins_no_length_and_requires_one_elsewhere(client, headers, organized):
+    join = """
+        [[matches]]
+        name = "Sync"
+        field = "Field 1"
+        schedule_type = "JOIN"
+        previous_match = "Opener"
+        """
+    url = "/api/v1/tournaments/open-cup/schedule"
+
+    imported = client.put(url, headers=headers, json={"script": TAGS + _schedule_with(OPENER, join)})
+
+    assert imported.status_code == 200, imported.get_json()
+    assert Match.query.filter_by(event="open-cup", name="Sync").one().nominal_length == 0
+
+    missing = client.put(
+        url, headers=headers, json={"script": TAGS + _schedule_with(OPENER.replace("nominal_length = 30", ""))}
+    )
+
+    assert missing.status_code == 400
+    assert "Opener" in missing.get_json()["error"]
+
+
+def test_schedule_import_replaces_a_schedule_but_keeps_started_matches(client, headers, organized):
+    url = "/api/v1/tournaments/open-cup/schedule"
+    assert client.put(url, headers=headers, json={"script": TAGS + _schedule_with(OPENER)}).status_code == 200
+    replacement = TAGS + _schedule_with(OPENER.replace('"Opener"', '"Kickoff"'))
+
+    replaced = client.put(url, headers=headers, json={"script": replacement})
+
+    assert replaced.status_code == 200, replaced.get_json()
+    assert [match.name for match in Match.query.filter_by(event="open-cup")] == ["Kickoff"]
+
+    kickoff = Match.query.filter_by(event="open-cup", name="Kickoff").one()
+    kickoff.confirmed_start_time = datetime(2026, 6, 1, 16, 2)
+    db.session.commit()
+
+    blocked = client.put(url, headers=headers, json={"script": TAGS + _schedule_with(OPENER)})
+
+    assert blocked.status_code == 400
+    assert "Kickoff" in blocked.get_json()["error"]
+    assert [match.name for match in Match.query.filter_by(event="open-cup")] == ["Kickoff"]
+
+
+def test_schedule_import_updates_same_named_matches_when_the_file_has_no_uuids(client, headers, organized):
+    url = "/api/v1/tournaments/open-cup/schedule"
+    assert client.put(url, headers=headers, json={"script": TAGS + _schedule_with(OPENER)}).status_code == 200
+    opener_id = Match.query.filter_by(event="open-cup", name="Opener").one().uuid
+
+    again = client.put(url, headers=headers, json={"script": TAGS + _schedule_with(OPENER.replace("30", "45"))})
+
+    assert again.status_code == 200, again.get_json()
+    assert (again.get_json()["matches_created"], again.get_json()["matches_updated"]) == (0, 1)
+    opener = Match.query.filter_by(event="open-cup", name="Opener").one()
+    assert (opener.uuid, opener.nominal_length) == (opener_id, 45)

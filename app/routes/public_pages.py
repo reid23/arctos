@@ -48,6 +48,7 @@ _APP_TOP_LEVEL = frozenset(
         "arctos-schedule-script.md",
         "data-accessibility-guide.md",
         "developers.md",
+        "agents.md",
     }
 )
 _APP_NESTED = re.compile(
@@ -197,6 +198,7 @@ _PUBLIC_APP_ROOTS = frozenset(
         "arctos-schedule-script.md",
         "data-accessibility-guide.md",
         "developers.md",
+        "agents.md",
     }
 )
 

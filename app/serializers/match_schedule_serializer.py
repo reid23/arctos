@@ -308,6 +308,13 @@ class MatchScheduleSerializer:
         # Only accept skip_condition for SAFE and FAST; ignore for other types
         skip_condition = skip_condition_raw if schedule_type in ("SAFE", "FAST") else None
 
+        if schedule_type == "JOIN":
+            nominal_length = 0
+        else:
+            nominal_length = data.get("nominal_length")
+            if isinstance(nominal_length, bool) or not isinstance(nominal_length, int) or nominal_length < 0:
+                return Err(ValidationError(f"Match '{name}' needs a nominal_length: a whole number of minutes"))
+
         result = {
             "event": tournament_url,
             "name": name,
@@ -318,7 +325,7 @@ class MatchScheduleSerializer:
             "refs": refs,
             "refs_initial": refs_initial,
             "field": str(data.get("field", "")).strip() or None,
-            "nominal_length": data.get("nominal_length"),
+            "nominal_length": nominal_length,
             "schedule_type": schedule_type,
             "set_type": str(data.get("set_type", "SETS")).strip() or "SETS",
             "ribbon": bool(data.get("ribbon", False)),
