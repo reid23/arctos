@@ -1132,7 +1132,10 @@ Problems in the whole schedule that don't block saving:
 ```
 
 `kind` is `unknown_team`, `missing_team`, `duplicate_team`, `cycle`,
-`unknown_match_ref`, or `double_booked`. Read the schedule itself with
+`unknown_match_ref`, or `double_booked`. `double_booked` means two
+matches that overlap on the planned schedule share a team or referee; a
+slot with no team yet counts by its placeholder (`tag::A1`,
+`Semi 1::winner`). Read the schedule itself with
 [`GET /tournaments/{tournament_id}/matches`](#get-tournamentstournament_idmatches);
 organizers see it before it's published.
 
