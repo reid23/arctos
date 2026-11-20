@@ -162,9 +162,8 @@ class SetType(StrEnum):
     Attributes:
         SETS: Winner is determined by number of sets won.
         STONES: Winner is determined by total stone count (points).
-        TIMED: Each set lasts a fixed number of minutes of wall time, counted
-            from the start of the set's first point. ``stones_per_set``
-            stores the set length in minutes.
+        TIMED: Each set lasts a fixed number of minutes, stored in
+            ``stones_per_set``. Arctos records points as for ``SETS``.
     """
 
     SETS = "SETS"

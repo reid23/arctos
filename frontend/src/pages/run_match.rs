@@ -885,9 +885,6 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
     // Previous live stone count, for detecting a tick-down to the 15-stone warning threshold.
     #[cfg(target_arch = "wasm32")]
     let mut prev_stones_for_beep = use_signal(|| None as Option<u32>);
-    // Last set clock value seen, so the end tone plays once when a TIMED set's clock reaches zero.
-    #[cfg(target_arch = "wasm32")]
-    let mut prev_set_clock_seconds = use_signal(|| None as Option<u32>);
     // Time elapsed (seconds) from match confirmed start (UTC); correct after reload.
     let mut time_elapsed_secs = use_signal(|| 0u64);
 
@@ -943,6 +940,11 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                     .unwrap_or("-");
                 let field_display = m.field.as_deref().unwrap_or("TBA");
                 let length_display = m.nominal_length.map(|n| format!("{} min", n));
+                let set_length_display = match (m.set_type.as_deref(), m.stones_per_set) {
+                    (Some("STONES"), Some(stones)) => Some(format!("{stones} stone sets")),
+                    (Some("TIMED"), Some(minutes)) => Some(format!("{minutes} min. sets")),
+                    _ => None,
+                };
                 // Elapsed since match confirmed start (UTC). Difference with current time is
                 // timezone-independent; correct after page reload.
                 let start_iso = m.confirmed_start_time.as_deref();
@@ -1083,38 +1085,6 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                         }
                     } else if prev.is_some() {
                         prev_stones_for_beep.set(None);
-                    }
-                }
-                let set_clock_seconds: Option<u32> = if m.set_type.as_deref() == Some("TIMED") {
-                    m.stones_per_set.map(|set_minutes| {
-                        let point_starts: Vec<(u32, f64)> = points
-                            .iter()
-                            .filter_map(|pt| {
-                                let set_number = pt.get("set_number").and_then(|n| n.as_u64())?;
-                                let start = parse_iso_epoch(pt.get("stamp").and_then(|s| s.as_str())?)?;
-                                Some((set_number as u32, start as f64))
-                            })
-                            .collect();
-                        #[cfg(target_arch = "wasm32")]
-                        let now_server = time_sync.server_now_secs();
-                        #[cfg(not(target_arch = "wasm32"))]
-                        let now_server = now_epoch_secs();
-                        crate::set_clock::seconds_remaining(&point_starts, set_minutes, now_server)
-                    })
-                } else {
-                    None
-                };
-                #[cfg(target_arch = "wasm32")]
-                {
-                    let prev = prev_set_clock_seconds();
-                    if prev.is_some_and(|seconds| seconds > 0) && set_clock_seconds == Some(0) {
-                        spawn(async move {
-                            gloo_timers::future::TimeoutFuture::new(0).await;
-                            play_timer_end_beeps();
-                        });
-                    }
-                    if prev != set_clock_seconds {
-                        prev_set_clock_seconds.set(set_clock_seconds);
                     }
                 }
                 let stones_input_value = if (stone_save.editing)() || (stone_save.draft)() {
@@ -1960,6 +1930,9 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                     if let Some(len) = length_display {
                                         span { "{len}" }
                                     }
+                                    if let Some(set_length) = set_length_display {
+                                        span { "{set_length}" }
+                                    }
                                     span { "Field: {field_display}" }
                                 }
                             }
@@ -1970,7 +1943,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                 div { class: "card", id: "score-stones-card",
                                     div { class: "card-body",
                                         div { class: "row",
-                                            div { class: if set_type_stones || set_clock_seconds.is_some() { "col-md-6" } else { "col-12" },
+                                            div { class: if set_type_stones { "col-md-6" } else { "col-12" },
                                                 div { id: "score-by-set",
                                                     div { class: "d-flex align-items-center mb-1 gap-2",
                                                         div { class: "flex-grow-1 text-center live-match-team",
@@ -2002,7 +1975,7 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                     }
                                                 }
                                             }
-                                            div { class: if set_type_stones || set_clock_seconds.is_some() { "col-md-6 live-stone-panel" } else { "col-12" },
+                                            div { class: if set_type_stones { "col-md-6 live-stone-panel" } else { "col-12" },
                                                 if set_type_stones {
                                                     div { class: "live-stone-summary",
                                                         div {
@@ -2094,16 +2067,6 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                                                     });
                                                                 }
                                                             }, "Check current count" }
-                                                        }
-                                                    }
-                                                }
-                                                if let Some(seconds) = set_clock_seconds {
-                                                    div { class: "live-stone-summary",
-                                                        div {
-                                                            span { class: "live-match-label", "Set {default_set} time left" }
-                                                            output { id: "set-clock-display", class: "live-stone-count", aria_label: "Time left in set {default_set}",
-                                                                "{crate::set_clock::format_clock(seconds)}"
-                                                            }
                                                         }
                                                     }
                                                 }

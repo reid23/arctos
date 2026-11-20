@@ -135,31 +135,6 @@ def _stones_remaining_at(started_points: list, moment: datetime) -> int | None:
     return None
 
 
-def _set_clock_at(match, started_points: list, moment: datetime) -> dict[str, Any] | None:
-    """Clock of a ``TIMED`` match's current set at *moment*.
-
-    The current set is the highest set number among *started_points*; its
-    clock starts at that set's earliest point stamp and runs on wall time.
-    Before any point, the full set length remains.
-
-    Returns:
-        ``None`` unless the match is ``TIMED`` with a set length, otherwise
-        ``set_minutes``, ``set_started_at`` (ISO or ``None``) and
-        ``seconds_remaining`` (never negative).
-    """
-    if match.set_type != SetType.TIMED or not match.stones_per_set:
-        return None
-    set_seconds = match.stones_per_set * 60
-    current_set = max((p.set_number for p in started_points if p.set_number), default=None)
-    set_started_at = min((p.stamp for p in started_points if p.set_number == current_set), default=None)
-    elapsed = int((moment - set_started_at).total_seconds()) if set_started_at else 0
-    return {
-        "set_minutes": match.stones_per_set,
-        "set_started_at": to_iso_z(set_started_at).unwrap_or(None),
-        "seconds_remaining": max(set_seconds - elapsed, 0),
-    }
-
-
 def _side(tournament, team_id: str | None, initial: str | None) -> ScoreboardSide:
     """Registration pseudonym, else team name, else the slot's initial."""
     from app.services.registration_resolver import team_registration_for_tournament
@@ -290,7 +265,6 @@ class ScoreboardService:
         started_points: list,
         scored_points: list,
         stones_remaining: int | None,
-        moment: datetime,
     ) -> dict[str, Any]:
         """The ``scoreboard-state`` active-match state, without timing fields.
 
@@ -300,13 +274,10 @@ class ScoreboardService:
             scored_points: Points eligible to count toward the score; rerolled
                 points and points without a winner are ignored.
             stones_remaining: Stones-remaining value to show (STONES matches only).
-            moment: Naive UTC time the state describes; sets the clock of
-                ``TIMED`` matches.
 
         Returns:
             Dict with ``has_active_match``, ``match_id``, the team fields,
-            ``sets``, ``scores_by_set`` (keyed by set number), ``stones_info``
-            and ``set_clock`` (see :func:`_set_clock_at`).
+            ``sets``, ``scores_by_set`` (keyed by set number) and ``stones_info``.
         """
         match = scoreboard_match.match
         sets = sorted({p.set_number for p in started_points if p.set_number})
@@ -328,7 +299,6 @@ class ScoreboardService:
             "scores_by_set": scores_by_set,
             "sets": sets,
             "stones_info": stones_info,
-            "set_clock": _set_clock_at(match, started_points, moment),
         }
 
     @staticmethod
@@ -338,9 +308,7 @@ class ScoreboardService:
         At time ``t`` a point's set is shown once ``stamp <= t``; it counts
         toward the score once ``end_stamp <= t`` (rerolled points never count,
         since when the reroll happened isn't recorded). For STONES matches the
-        stones count changes on each beat boundary crossed during a point. For
-        TIMED matches the set clock changes every second until the set's time
-        runs out or the match's last recorded moment, whichever is first.
+        stones count changes on each beat boundary crossed during a point.
 
         The first entry is effective from the match start (``started_at``, or
         the first point's ``stamp`` if that is earlier or ``started_at`` is
@@ -374,13 +342,6 @@ class ScoreboardService:
                     last_beat = min(last_beat, _beat_index(point.end_stamp))
                 change_times.update(UNIX_EPOCH + beat * STONES_BEAT for beat in range(start_beat + 1, last_beat + 1))
 
-        if match.set_type == SetType.TIMED and match.stones_per_set and stamped:
-            last_moment = max(p.end_stamp or p.stamp for p in stamped)
-            for set_number in {p.set_number for p in stamped}:
-                set_start = min(p.stamp for p in stamped if p.set_number == set_number)
-                set_seconds = min(match.stones_per_set * 60, int((last_moment - set_start).total_seconds()))
-                change_times.update(set_start + timedelta(seconds=second) for second in range(1, set_seconds + 1))
-
         stones_before_first_point = next(
             (p.stones_at_start for p in stamped if p.stones_at_start is not None),
             match.stones_per_set or DEFAULT_STONES_PER_SET,
@@ -394,7 +355,7 @@ class ScoreboardService:
                 stones_remaining = _stones_remaining_at(started, moment)
                 if stones_remaining is None:
                     stones_remaining = stones_before_first_point
-            state = ScoreboardService.active_match_state(scoreboard_match, started, scored, stones_remaining, moment)
+            state = ScoreboardService.active_match_state(scoreboard_match, started, scored, stones_remaining)
             if distinct_states and distinct_states[-1][1] == state:
                 continue
             distinct_states.append((moment, state))

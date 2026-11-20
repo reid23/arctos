@@ -73,7 +73,6 @@ def scoreboard_state():
                     started_points=state.points,
                     scored_points=state.points,
                     stones_remaining=match.stones_remaining,
-                    moment=now_utc_naive(),
                 ),
                 "points_for_stones": points_for_stones,
                 "timestamp": datetime.now(timezone.utc).isoformat(),

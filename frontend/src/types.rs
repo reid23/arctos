@@ -1393,8 +1393,6 @@ pub struct ScoreboardStateResponse {
     pub stones_info: Option<StonesInfo>,
     #[serde(default)]
     pub points_for_stones: Option<Vec<ScoreboardPointForStones>>,
-    #[serde(default)]
-    pub set_clock: Option<SetClock>,
     pub prev_match: Option<PrevNextMatch>,
     pub next_match: Option<PrevNextMatch>,
     pub timestamp: String,
@@ -1404,15 +1402,6 @@ pub struct ScoreboardStateResponse {
 pub struct StonesInfo {
     pub stones_per_set: u32,
     pub stones_remaining: Option<u32>,
-}
-
-/// Clock of a TIMED match's current set, as of the response's `timestamp`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct SetClock {
-    pub set_minutes: u32,
-    /// Start of the current set's first point; `None` before any point.
-    pub set_started_at: Option<String>,
-    pub seconds_remaining: u32,
 }
 
 /// Point data for live stones computation on scoreboard (STONES matches).
