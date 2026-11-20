@@ -549,6 +549,32 @@ class TestSymbolicExpressions:
             assert result[0] == "=="
 
     @pytest.mark.unit
+    @pytest.mark.parametrize(
+        "expression",
+        [
+            "(map unbound_matches (lambda (m) (winner m)))",
+            "(map-indexed unbound_matches (lambda (i m) m))",
+            "(filter unbound_matches (lambda (m) (is-skipped m)))",
+            "(reduce unbound_matches 0 (lambda (total m) total))",
+            "(sort-by unbound_matches (lambda (t) (wins t)))",
+            "(len unbound_matches)",
+            "(car unbound_matches)",
+            "(get 0 unbound_matches)",
+            "(member? 1 unbound_matches)",
+            "(max unbound_matches)",
+        ],
+    )
+    def test_unbound_list_argument_is_preserved_not_iterated(self, app, tournament, expression):
+        with app.app_context():
+            parser = get_parser(tournament.url)
+
+            result = parser.parse(expression)
+
+            assert isinstance(result, list)
+            assert result[0] == expression[1:].split(" ", 1)[0]
+            assert "unbound_matches" in result
+
+    @pytest.mark.unit
     def test_unknown_tag_errors(self, app, tournament_with_data):
         with app.app_context():
             parser = get_parser(tournament_with_data["tournament_url"])
