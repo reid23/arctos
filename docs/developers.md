@@ -457,8 +457,8 @@ endpoint. `403` while the schedule is unpublished. Query parameters:
 - `winner` is `TEAM1`, `TEAM2`, or `null`.
 - `schedule_type` says how the start time is planned; `STATBREAK`
   entries are breaks in the schedule rather than games.
-- `set_type` is `SETS` or `STONES`. `sets` counts points won per set,
-  leaving out rerolled points.
+- `set_type` is `SETS`, `STONES`, or `TIMED`. `sets` counts points won
+  per set, leaving out rerolled points.
 
 #### `GET /tournaments/{tournament_id}/matches/{match_id}`
 

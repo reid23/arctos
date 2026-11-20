@@ -14,6 +14,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.error_values import Some
 from app.domain.enums import (
+    SET_TYPES_WITH_SET_LENGTH,
     STRUCTURAL_SCHEDULE_TYPES,
     MatchStatus,
     ScheduleType,
@@ -381,8 +382,7 @@ def update_match_api(tournament_url, match_id):
             else None
         )
 
-    # Clear stones_per_set for non-STONES
-    if match.set_type != SetType.STONES:
+    if match.set_type not in SET_TYPES_WITH_SET_LENGTH:
         match.stones_per_set = None
 
     # BREAK, JOIN, FAST, SAFE require non-empty previous_match on same field
@@ -697,7 +697,7 @@ def create_match_api(tournament_url):
 
     if data.get("nsets") is not None:
         match.nsets = int(data.get("nsets"))
-    if match.set_type == SetType.STONES and data.get("stones_per_set") is not None:
+    if match.set_type in SET_TYPES_WITH_SET_LENGTH and data.get("stones_per_set") is not None:
         match.stones_per_set = int(data.get("stones_per_set"))
 
     if data.get("ribbon") is not None:
