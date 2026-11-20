@@ -940,6 +940,11 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                     .unwrap_or("-");
                 let field_display = m.field.as_deref().unwrap_or("TBA");
                 let length_display = m.nominal_length.map(|n| format!("{} min", n));
+                let set_length_display = match (m.set_type.as_deref(), m.stones_per_set) {
+                    (Some("STONES"), Some(stones)) => Some(format!("{stones} stone sets")),
+                    (Some("TIMED"), Some(minutes)) => Some(format!("{minutes} min. sets")),
+                    _ => None,
+                };
                 // Elapsed since match confirmed start (UTC). Difference with current time is
                 // timezone-independent; correct after page reload.
                 let start_iso = m.confirmed_start_time.as_deref();
@@ -1924,6 +1929,9 @@ pub fn RunMatch(url: String, match_id: String) -> Element {
                                     span { "Refs: {refs_display}" }
                                     if let Some(len) = length_display {
                                         span { "{len}" }
+                                    }
+                                    if let Some(set_length) = set_length_display {
+                                        span { "{set_length}" }
                                     }
                                     span { "Field: {field_display}" }
                                 }

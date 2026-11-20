@@ -247,11 +247,12 @@ def test_non_to_cannot_edit(client, tournament, player):
 
 
 def test_default_port_mode_helper():
-    from app.routes.tournaments.brackets import _default_port_modes, _parse_match_ref
+    from app.routes.tournaments.brackets import _default_port_modes
+    from app.services.bracket_service import parse_match_ref
 
-    assert _parse_match_ref("Semi 1::winner") == ("Semi 1", "winner")
-    assert _parse_match_ref("tag::Seed") is None
-    assert _parse_match_ref(None) is None
+    assert parse_match_ref("Semi 1::winner") == ("Semi 1", "winner")
+    assert parse_match_ref("tag::Seed") is None
+    assert parse_match_ref(None) is None
 
     class Fake:
         def __init__(self, t1, t2):

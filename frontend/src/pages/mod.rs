@@ -1,4 +1,5 @@
 mod about;
+mod agents;
 mod add_injury;
 mod arctos_schedule_script;
 mod bracket;
@@ -68,6 +69,7 @@ mod tournament_settings;
 mod legacy_bracket;
 
 pub use about::About;
+pub use agents::Agents;
 pub use add_injury::AddInjury;
 pub use arctos_schedule_script::ArctosScheduleScript;
 pub use bracket::Bracket;

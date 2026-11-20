@@ -230,7 +230,7 @@ def test_render_markdown_api_returns_sanitized_html_with_existing_contract(app):
     assert 'src="/static/example.png"' in payload["html"]
 
 
-@pytest.mark.parametrize("filename", ["docs.md", "developers.md"])
+@pytest.mark.parametrize("filename", ["docs.md", "developers.md", "agents.md"])
 def test_help_document_fragment_links_resolve_after_sanitization(filename):
     """TOC/task links must target IDs retained by the production renderer."""
     source = (Path(__file__).resolve().parents[2] / "docs" / filename).read_text()

@@ -217,7 +217,9 @@
   function updateMetadata(next) {
     document.title = next.title;
     for (const selector of ['meta[name="description"]', 'meta[name="robots"]', 'link[rel="canonical"]',
-      'meta[property="og:title"]', 'meta[property="og:description"]', 'meta[property="og:type"]', 'meta[property="og:url"]']) {
+      'meta[property="og:title"]', 'meta[property="og:description"]', 'meta[property="og:type"]',
+      'meta[property="og:url"]', 'meta[property="og:site_name"]', 'meta[property="og:image"]',
+      'meta[property="og:image:alt"]', 'meta[name="twitter:card"]', 'meta[name="twitter:image"]']) {
       document.head.querySelector(selector)?.remove();
       const replacement = next.head.querySelector(selector);
       if (replacement) document.head.append(replacement.cloneNode(true));

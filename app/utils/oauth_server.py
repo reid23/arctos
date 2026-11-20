@@ -39,6 +39,7 @@ SCOPES = {
     "profile": "See your profile photo",
     "injuries": "Read all of your injury records, including private ones",
     "footage": "See tournaments you organize, including unpublished ones, and upload match footage to them",
+    "manage": "Create tournaments and manage the tournaments and leagues you organize",
 }
 """Scopes a client may request. Reading public data needs no scope."""
 

@@ -9,6 +9,7 @@ from app.domain.enums import MatchStatus
 from app.error_values import Ok
 from app.serializers.api_v1_serializer import (
     TeamNames,
+    organizers_json,
     scope_of,
     scope_players_json,
     scope_teams_json,
@@ -18,7 +19,6 @@ from app.serializers.api_v1_serializer import (
     standings_json,
     tournament_json,
 )
-from app.services._common import resolve_actor
 from app.services.permission_service import PermissionService
 from app.services.registration_resolver import to_entries_for_tournament
 from app.services.sidecomp_service import SideCompService
@@ -58,10 +58,7 @@ def list_tournaments():
 @require_bearer()
 @with_tournament
 def get_tournament(tournament):
-    organizers = []
-    for entry in to_entries_for_tournament(tournament):
-        user = resolve_actor(entry.user_id, entry.user_type)
-        organizers.append({"id": entry.user_id, "name": user.name if user else entry.user_id, "type": entry.user_type})
+    organizers = organizers_json(to_entries_for_tournament(tournament))
     return jsonify({"tournament": tournament_json(tournament) | {"organizers": organizers}})
 
 

@@ -17,6 +17,37 @@ use std::rc::Rc;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast as _;
 
+/// Initial set length for a match format: stones per set for `STONES`,
+/// minutes per set for `TIMED`. Unused for `SETS`.
+fn default_set_length(set_type: &str) -> u32 {
+    if set_type == "TIMED" {
+        12
+    } else {
+        100
+    }
+}
+
+/// Sets per match and set length to prefill when `STONES` or `TIMED` is chosen:
+/// copied from the latest other match of that format, otherwise 2 sets and the
+/// format's default length. `None` for `SETS`, which keeps the current values.
+fn set_length_format_defaults(
+    matches: &[MatchSetupData],
+    set_type: &str,
+    editing_match_id: Option<&str>,
+) -> Option<(u32, u32)> {
+    if set_type != "STONES" && set_type != "TIMED" {
+        return None;
+    }
+    let latest = matches
+        .iter()
+        .filter(|m| m.set_type.as_deref() == Some(set_type) && Some(m.uuid.as_str()) != editing_match_id)
+        .max_by(|a, b| a.nominal_start_time.cmp(&b.nominal_start_time));
+    Some((
+        latest.and_then(|m| m.nsets).unwrap_or(2),
+        latest.and_then(|m| m.stones_per_set).unwrap_or_else(|| default_set_length(set_type)),
+    ))
+}
+
 #[cfg(target_arch = "wasm32")]
 struct PinchZoomGuard {
     el_id: String,
@@ -2437,8 +2468,37 @@ fn ScheduleHelperDialog(
 
 #[cfg(test)]
 mod schedule_helper_tests {
-    use super::{is_docked_schedule_editor, is_schedule_helper, merge_schedule_drafts};
+    use super::{is_docked_schedule_editor, is_schedule_helper, merge_schedule_drafts, set_length_format_defaults};
+    use crate::types::MatchSetupData;
     use std::collections::HashMap;
+
+    fn setup_match(uuid: &str, set_type: &str, start: &str, nsets: u32, stones_per_set: u32) -> MatchSetupData {
+        serde_json::from_value(serde_json::json!({
+            "uuid": uuid, "name": uuid, "status": "NOT_STARTED", "ribbon": false,
+            "set_type": set_type, "nominal_start_time": start, "nsets": nsets, "stones_per_set": stones_per_set,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn set_length_formats_default_to_two_sets_without_a_match_to_copy() {
+        let matches = [setup_match("a", "SETS", "2026-07-04T16:00:00", 3, 100)];
+        assert_eq!(set_length_format_defaults(&matches, "STONES", None), Some((2, 100)));
+        assert_eq!(set_length_format_defaults(&matches, "TIMED", None), Some((2, 12)));
+        assert_eq!(set_length_format_defaults(&matches, "SETS", None), None);
+    }
+
+    #[test]
+    fn set_length_formats_copy_the_latest_other_match_of_that_format() {
+        let matches = [
+            setup_match("early", "TIMED", "2026-07-04T16:00:00", 3, 10),
+            setup_match("late", "TIMED", "2026-07-04T18:00:00", 2, 15),
+            setup_match("stones", "STONES", "2026-07-04T19:00:00", 1, 80),
+        ];
+        assert_eq!(set_length_format_defaults(&matches, "TIMED", None), Some((2, 15)));
+        assert_eq!(set_length_format_defaults(&matches, "TIMED", Some("late")), Some((3, 10)));
+        assert_eq!(set_length_format_defaults(&matches, "STONES", None), Some((1, 80)));
+    }
 
     #[test]
     fn helper_escape_is_distinct_from_docked_editor_escape() {
@@ -2576,7 +2636,8 @@ fn CreateMatchModal(
     let mut team2 = use_signal(|| "".to_string());
     let set_type = use_signal(|| "SETS".to_string());
     let nsets = use_signal(|| 3u32);
-    let stones_per_set = use_signal(|| 100u32);
+    let stones_per_set = use_signal(|| default_set_length("SETS"));
+    let format_matches = data.matches.clone();
     let ribbon = use_signal(|| false);
     let mut skip_condition = use_signal(|| "".to_string());
     let mut skip_condition_help_open = use_signal(|| false);
@@ -3303,9 +3364,10 @@ fn CreateMatchModal(
                                     div { class: "col-md-4",
                                         div { class: "mb-3",
                                             label { r#for: "schedule-create-format", class: "form-label", "Format" }
-                                            select { id: "schedule-create-format", class: "form-select", value: "{set_type}", onchange: move |e| { let mut set_type = set_type; set_type.set(e.value()); },
+                                            select { id: "schedule-create-format", class: "form-select", value: "{set_type}", onchange: move |e| { let mut set_type = set_type; let mut nsets = nsets; let mut stones_per_set = stones_per_set; if let Some((sets, set_length)) = set_length_format_defaults(&format_matches, &e.value(), None) { nsets.set(sets); stones_per_set.set(set_length); } set_type.set(e.value()); },
                                                 option { value: "SETS", "Sets" }
                                                 option { value: "STONES", "Stones" }
+                                                option { value: "TIMED", "Timed" }
                                             }
                                         }
                                     }
@@ -3315,11 +3377,11 @@ fn CreateMatchModal(
                                             input { id: "schedule-create-sets", class: "form-control", "type": "number", min: "1", value: "{nsets}", oninput: move |e| { let mut nsets = nsets; nsets.set(e.value().parse().unwrap_or(3)); } }
                                         }
                                     }
-                                    if set_type() == "STONES" {
+                                    if set_type() == "STONES" || set_type() == "TIMED" {
                                         div { class: "col-md-4",
                                             div { class: "mb-3",
-                                                label { r#for: "schedule-create-stones", class: "form-label", "Stones per set" }
-                                                input { id: "schedule-create-stones", class: "form-control", "type": "number", min: "1", value: "{stones_per_set}", oninput: move |e| { let mut stones_per_set = stones_per_set; stones_per_set.set(e.value().parse().unwrap_or(100)); } }
+                                                label { r#for: "schedule-create-stones", class: "form-label", if set_type() == "TIMED" { "Minutes per set" } else { "Stones per set" } }
+                                                input { id: "schedule-create-stones", class: "form-control", "type": "number", min: "1", value: "{stones_per_set}", oninput: move |e| { let mut stones_per_set = stones_per_set; stones_per_set.set(e.value().parse().unwrap_or(default_set_length(&set_type()))); } }
                                             }
                                         }
                                     }
@@ -7825,7 +7887,9 @@ fn EditMatchModal(
     });
     let set_type = use_signal(|| m.set_type.clone().unwrap_or("SETS".to_string()));
     let nsets = use_signal(|| m.nsets.unwrap_or(3));
-    let stones_per_set = use_signal(|| m.stones_per_set.unwrap_or(100));
+    let format_matches = data.matches.clone();
+    let edited_match_id = m.uuid.clone();
+    let stones_per_set = use_signal(|| m.stones_per_set.unwrap_or_else(|| default_set_length(&set_type())));
     let ribbon = use_signal(|| m.ribbon);
     let mut skip_condition = use_signal(|| m.skip_condition.clone().unwrap_or_default());
     let mut skip_condition_help_open = use_signal(|| false);
@@ -8238,9 +8302,10 @@ fn EditMatchModal(
                                     div { class: "col-md-4",
                                         div { class: "mb-3",
                                             label { r#for: "schedule-edit-format", class: "form-label", "Format" }
-                                            select { id: "schedule-edit-format", class: "form-select", value: "{set_type}", onchange: move |e| { let mut set_type = set_type; set_type.set(e.value()); },
+                                            select { id: "schedule-edit-format", class: "form-select", value: "{set_type}", onchange: move |e| { let mut set_type = set_type; let mut nsets = nsets; let mut stones_per_set = stones_per_set; if let Some((sets, set_length)) = set_length_format_defaults(&format_matches, &e.value(), Some(edited_match_id.as_str())) { nsets.set(sets); stones_per_set.set(set_length); } set_type.set(e.value()); },
                                                 option { value: "SETS", "Sets" }
                                                 option { value: "STONES", "Stones" }
+                                                option { value: "TIMED", "Timed" }
                                             }
                                         }
                                     }
@@ -8250,11 +8315,11 @@ fn EditMatchModal(
                                             input { id: "schedule-edit-sets", class: "form-control", "type": "number", min: "1", value: "{nsets}", oninput: move |e| { let mut nsets = nsets; nsets.set(e.value().parse().unwrap_or(3)); } }
                                         }
                                     }
-                                    if set_type() == "STONES" {
+                                    if set_type() == "STONES" || set_type() == "TIMED" {
                                         div { class: "col-md-4",
                                             div { class: "mb-3",
-                                                label { r#for: "schedule-edit-stones", class: "form-label", "Stones per set" }
-                                                input { id: "schedule-edit-stones", class: "form-control", "type": "number", min: "1", value: "{stones_per_set}", oninput: move |e| { let mut stones_per_set = stones_per_set; stones_per_set.set(e.value().parse().unwrap_or(100)); } }
+                                                label { r#for: "schedule-edit-stones", class: "form-label", if set_type() == "TIMED" { "Minutes per set" } else { "Stones per set" } }
+                                                input { id: "schedule-edit-stones", class: "form-control", "type": "number", min: "1", value: "{stones_per_set}", oninput: move |e| { let mut stones_per_set = stones_per_set; stones_per_set.set(e.value().parse().unwrap_or(default_set_length(&set_type()))); } }
                                             }
                                         }
                                     }
