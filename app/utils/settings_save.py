@@ -22,6 +22,16 @@ from models import RegistrableConfig, db
 
 DEFAULT_REQUEST_LIMIT = 100 * 1024 * 1024
 CAP_FIELDS = ("n_max_teams", "max_team_size_roster", "max_team_size_field")
+CONFIG_FIELDS = (
+    "team_reg_fee",
+    "player_reg_fee",
+    "team_registration_open",
+    "player_registration_open",
+    "terms_link",
+    "payment_info",
+    *CAP_FIELDS,
+)
+TOURNAMENT_FLAGS = ("head_refs_allow_reffing_teams", "head_refs_allow_anyone", "published", "schedule_published")
 
 
 class SettingsSaveError(Exception):
@@ -136,6 +146,20 @@ def _boolean(data, key):
     return value
 
 
+def _date(value, key):
+    try:
+        return datetime.strptime(value.strip(), "%Y-%m-%d")
+    except ValueError as error:
+        raise SettingsSaveError(f"{key.replace('_', ' ').capitalize()} must be a valid date.") from error
+
+
+def _check_date_order(tournament, values):
+    start = values.get("start_date", tournament.start_date)
+    end = values.get("end_date", tournament.end_date)
+    if start and end and end.date() < start.date():
+        raise SettingsSaveError("End date must be on or after the start date.")
+
+
 def _waiver_changes(config, require, upload, combined):
     if upload is not None and config is None:
         raise SettingsSaveError("Registration is not configured for this event.")
@@ -198,14 +222,21 @@ def persist_settings(entity, values, config, config_values, upload, kind, scope_
         ) from error
 
 
+def _reject_historical(tournament):
+    if tournament.historical:
+        raise SettingsSaveError("Edit historical tournaments from the records editor.")
+
+
 def save_tournament_settings(tournament):
+    """Save the settings form: every field is sent, and a missing checkbox means false."""
+    _reject_historical(tournament)
     data, upload, combined = _read_settings("tournament")
     values = {
         "name": _text(data, "name", required=True, limit=200),
         "location": _text(data, "location", limit=200),
         "about": _text(data, "about"),
     }
-    for key in ("head_refs_allow_reffing_teams", "head_refs_allow_anyone", "published", "schedule_published"):
+    for key in TOURNAMENT_FLAGS:
         values[key] = key in data
     head_refs = _text(data, "head_refs_allowed_list")
     for key in ("start_date", "end_date"):
@@ -214,13 +245,8 @@ def save_tournament_settings(tournament):
             if key == "end_date":
                 raise SettingsSaveError("End date is required.")
             continue
-        try:
-            values[key] = datetime.strptime(value, "%Y-%m-%d")
-        except ValueError as error:
-            raise SettingsSaveError(f"{key.replace('_', ' ').capitalize()} must be a valid date.") from error
-    start = values.get("start_date", tournament.start_date)
-    if start and values["end_date"].date() < start.date():
-        raise SettingsSaveError("End date must be on or after the start date.")
+        values[key] = _date(value, key)
+    _check_date_order(tournament, values)
     config = tournament.registrable_config if not tournament.league_id else None
     if tournament.league_id and upload is not None:
         raise SettingsSaveError("Save the shared waiver in league settings.")
@@ -239,32 +265,72 @@ def save_tournament_settings(tournament):
     )
 
 
+def update_tournament_settings(tournament, data: dict):
+    """Apply a JSON object of changes; settings it leaves out keep their values.
+
+    Uses the settings form's names and limits. Registration settings of a
+    league event belong to the league. A waiver can only be turned off here.
+    """
+    _reject_historical(tournament)
+    values = {}
+    for key in ("name", "location"):
+        if key in data:
+            values[key] = _text(data, key, required=key == "name", limit=200)
+    if "about" in data:
+        values["about"] = None if data["about"] is None else _text(data, "about")
+    for key in TOURNAMENT_FLAGS:
+        if key in data:
+            values[key] = _boolean(data, key)
+    head_refs = _text(data, "head_refs_allowed_list") if "head_refs_allowed_list" in data else None
+    for key in ("start_date", "end_date"):
+        if key in data:
+            values[key] = _date(_text(data, key, required=True), key)
+    _check_date_order(tournament, values)
+    config = tournament.registrable_config if not tournament.league_id else None
+    if tournament.league_id and any(key in data for key in (*CONFIG_FIELDS, "require_waiver_signature")):
+        raise SettingsSaveError("Change a league event's registration settings on its league.")
+    config_values = {}
+    if config is not None:
+        config_values = _config_changes(data, ("terms_link",))
+        if "require_waiver_signature" in data:
+            config_values.update(_waiver_changes(config, _boolean(data, "require_waiver_signature"), None, False))
+    persist_settings(tournament, values, config, config_values, None, "tournament", tournament.url, head_refs=head_refs)
+
+
 def save_league_settings(league):
     data, upload, combined = _read_settings("league")
+    apply_league_settings(league, data, upload, combined)
+
+
+def apply_league_settings(league, data: dict, upload=None, combined=False):
+    """Apply a settings object of changes; settings it leaves out keep their values."""
     values = {}
     if "about" in data:
         values["about"] = None if data["about"] is None else _text(data, "about")
     if "published" in data:
         values["published"] = _boolean(data, "published")
     config = league.registrable_config
-    config_values = {}
-    if config is not None:
-        for key in ("team_reg_fee", "player_reg_fee"):
-            if key in data:
-                config_values[key] = _fee(data[key], key)
-        for key in ("team_registration_open", "player_registration_open"):
-            if key in data:
-                config_values[key] = _boolean(data, key)
-        for key in ("terms_link", "payment_info"):
-            if key in data:
-                config_values[key] = (
-                    None
-                    if data[key] is None
-                    else (_text(data, key, limit=500 if key == "terms_link" else None) or None)
-                )
-        for key in CAP_FIELDS:
-            if key in data:
-                config_values[key] = _cap(data[key], key)
+    config_values = _config_changes(data, ("terms_link", "payment_info")) if config is not None else {}
     require = _boolean(data, "require_waiver_signature") if "require_waiver_signature" in data else None
     config_values.update(_waiver_changes(config, require, upload, combined))
     persist_settings(league, values, config, config_values, upload, "league", league.url)
+
+
+def _config_changes(data, text_keys):
+    """Registration settings present in *data*. Waiver changes are separate."""
+    config_values = {}
+    for key in ("team_reg_fee", "player_reg_fee"):
+        if key in data:
+            config_values[key] = _fee(data[key], key)
+    for key in ("team_registration_open", "player_registration_open"):
+        if key in data:
+            config_values[key] = _boolean(data, key)
+    for key in text_keys:
+        if key in data:
+            config_values[key] = (
+                None if data[key] is None else (_text(data, key, limit=500 if key == "terms_link" else None) or None)
+            )
+    for key in CAP_FIELDS:
+        if key in data:
+            config_values[key] = _cap(data[key], key)
+    return config_values

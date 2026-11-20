@@ -14,6 +14,7 @@ app.utils
    app.utils.dependencies
    app.utils.dsl_dependency_analyzer
    app.utils.helpers
+   app.utils.match_chain
    app.utils.match_ref_resolution
    app.utils.name_validation
    app.utils.parser

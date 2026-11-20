@@ -123,7 +123,7 @@ def provider_metadata() -> dict:
         "userinfo_endpoint": f"{base}/api/oauth/userinfo",
         "jwks_uri": f"{base}/api/oauth/jwks",
         "revocation_endpoint": f"{base}/api/oauth/revoke",
-        "scopes_supported": ["openid", "profile", "email", "injuries", "footage"],
+        "scopes_supported": ["openid", "profile", "email", "injuries", "footage", "manage"],
         "response_types_supported": ["code"],
         "response_modes_supported": ["query"],
         "grant_types_supported": ["authorization_code", "refresh_token", "client_credentials"],

@@ -15,15 +15,13 @@ from flask import Blueprint, g, request, jsonify
 from flask_login import login_required, current_user  # type: ignore[import-untyped]
 from models import (
     Tournament,
-    TeamRegistration,
-    PlayerRegistration,
     db,
 )
 from app.domain.enums import RegistrationStatus
 from app.error_values import Some
 from app.services._common import current_user_type, Scope
 from app.services.permission_service import PermissionService
-from app.services.registration_service import RegistrationService
+from app.services.registration_service import Payment, RegistrationService
 from app.serializers.league_serializer import require_league
 from app.serializers.registration_serializer import player_reg_waiver_api
 from app.utils.decorators import require_json_body, require_tournament_organizer
@@ -35,6 +33,16 @@ from app.utils.result_helpers import json_from_result
 from app.utils.datetime_helpers import now_utc_naive
 
 bp = Blueprint("registration", __name__, url_prefix="/_api")
+
+
+def _payment_from_form() -> Payment:
+    return Payment(
+        paid=request.form.get("paid") == "on",
+        amount_paid=float(request.form.get("amount_paid") or 0),
+        payment_method=request.form.get("payment_method", ""),
+        payment_reference=request.form.get("payment_reference", ""),
+        payment_notes=request.form.get("payment_notes", ""),
+    )
 
 
 @bp.route("/<tournament_url>/register-team", methods=["POST"])
@@ -237,24 +245,10 @@ def mark_team_paid(tournament_url: str):
     Returns:
         JSON ``{"success": true, "message": "..."}`` on success, or 403/404.
     """
-    tournament = Tournament.query.filter_by(url=tournament_url).first_or_404()
-
-    reg_id = request.form.get("registration_id")
-    paid = request.form.get("paid") == "on"
-    amount_paid = float(request.form.get("amount_paid") or 0)
-    payment_method = request.form.get("payment_method", "")
-    payment_reference = request.form.get("payment_reference", "")
-    payment_notes = request.form.get("payment_notes", "")
-
-    reg = TeamRegistration.query.filter_by(id=reg_id, event=tournament_url).first_or_404()
-    reg.paid = paid
-    reg.amount_paid = amount_paid
-    reg.payment_method = payment_method
-    reg.payment_reference = payment_reference
-    reg.payment_notes = payment_notes
-    reg.paid_at = now_utc_naive() if paid else None
-    db.session.commit()
-    return jsonify({"success": True, "message": "Team payment updated"}), 200
+    res = RegistrationService.update_team_payment(
+        Scope.event(tournament_url), request.form.get("registration_id"), _payment_from_form()
+    )
+    return json_from_result(res, ok_to_payload=lambda _: {"message": "Team payment updated"})
 
 
 @bp.route("/<tournament_url>/mark-player-paid", methods=["POST"])
@@ -281,24 +275,10 @@ def mark_player_paid(tournament_url: str):
     Returns:
         JSON ``{"success": true, "message": "..."}`` on success, or 403/404.
     """
-    tournament = Tournament.query.filter_by(url=tournament_url).first_or_404()
-
-    reg_id = request.form.get("registration_id")
-    paid = request.form.get("paid") == "on"
-    amount_paid = float(request.form.get("amount_paid") or 0)
-    payment_method = request.form.get("payment_method", "")
-    payment_reference = request.form.get("payment_reference", "")
-    payment_notes = request.form.get("payment_notes", "")
-
-    reg = PlayerRegistration.query.filter_by(id=reg_id, event=tournament_url).first_or_404()
-    reg.paid = paid
-    reg.amount_paid = amount_paid
-    reg.payment_method = payment_method
-    reg.payment_reference = payment_reference
-    reg.payment_notes = payment_notes
-    reg.paid_at = now_utc_naive() if paid else None
-    db.session.commit()
-    return jsonify({"success": True, "message": "Player payment updated"}), 200
+    res = RegistrationService.update_player_payment(
+        Scope.event(tournament_url), request.form.get("registration_id"), _payment_from_form()
+    )
+    return json_from_result(res, ok_to_payload=lambda _: {"message": "Player payment updated"})
 
 
 @bp.route("/<tournament_url>/deregister-any-team", methods=["POST"])
@@ -320,50 +300,12 @@ def deregister_any_team(tournament_url: str):
     Returns:
         JSON success or error body.
     """
-    tournament = Tournament.query.filter_by(url=tournament_url).first_or_404()
-
     team_id = request.form.get("team_id")
     if not team_id:
         return jsonify({"success": False, "error": "Team ID is required"}), 400
 
-    team_registration = TeamRegistration.query.filter_by(
-        event=tournament_url, team=team_id, status=RegistrationStatus.CONFIRMED
-    ).first()
-
-    if team_registration:
-        team_registration.status = RegistrationStatus.CANCELLED
-        pseudonym = getattr(team_registration, "pseudonym", None)
-
-        affected_player_ids = [
-            r.player for r in PlayerRegistration.query.filter_by(event=tournament_url, team=team_id).all()
-        ]
-
-        PlayerRegistration.query.filter_by(event=tournament_url, team=team_id).update(
-            {"status": RegistrationStatus.CANCELLED}
-        )
-
-        from app.services.sidecomp_service import SideCompService
-
-        SideCompService.cancel_players_in_event(tournament_url, affected_player_ids)
-
-        from app.services.bracket_cleanup_service import scrub_deleted_teams
-
-        scrub_deleted_teams(
-            tournament_url,
-            [team_id],
-            pseudonyms=[pseudonym] if pseudonym else None,
-        )
-
-        db.session.commit()
-        return (
-            jsonify({"success": True, "message": "Team successfully deregistered"}),
-            200,
-        )
-    else:
-        return (
-            jsonify({"success": False, "error": "Team not found or already deregistered"}),
-            404,
-        )
+    res = RegistrationService.deregister_team_as_to(Scope.event(tournament_url), team_id)
+    return json_from_result(res, ok_to_payload=lambda _: {"message": "Team successfully deregistered"})
 
 
 @bp.route("/<tournament_url>/deregister-any-player", methods=["POST"])
@@ -385,35 +327,12 @@ def deregister_any_player(tournament_url: str):
     Returns:
         JSON success or error body.
     """
-    tournament = Tournament.query.filter_by(url=tournament_url).first_or_404()
-
     player_id = request.form.get("player_id")
     if not player_id:
         return jsonify({"success": False, "error": "Player ID is required"}), 400
 
-    player_registration = (
-        PlayerRegistration.query.filter_by(event=tournament_url, player=player_id)
-        .filter(PlayerRegistration.status.in_([RegistrationStatus.PENDING_TEAM_APPROVAL, RegistrationStatus.CONFIRMED]))
-        .first()
-    )
-
-    if player_registration:
-        player_registration.status = RegistrationStatus.CANCELLED
-
-        from app.services.sidecomp_service import SideCompService
-
-        SideCompService.cancel_player_registrations_in_event(tournament_url, player_id)
-
-        db.session.commit()
-        return (
-            jsonify({"success": True, "message": "Player successfully deregistered"}),
-            200,
-        )
-    else:
-        return (
-            jsonify({"success": False, "error": "Player not found or already deregistered"}),
-            404,
-        )
+    res = RegistrationService.deregister_player_as_to(Scope.event(tournament_url), player_id)
+    return json_from_result(res, ok_to_payload=lambda _: {"message": "Player successfully deregistered"})
 
 
 @bp.route("/<tournament_url>/invitation/<int:invitation_id>/accept", methods=["POST"])
@@ -908,22 +827,10 @@ def league_mark_team_paid(league_url):
             403,
         )
 
-    reg_id = request.form.get("registration_id")
-    paid = request.form.get("paid") == "on"
-    amount_paid = float(request.form.get("amount_paid") or 0)
-    payment_method = request.form.get("payment_method", "")
-    payment_reference = request.form.get("payment_reference", "")
-    payment_notes = request.form.get("payment_notes", "")
-
-    reg = TeamRegistration.query.filter_by(id=reg_id, league_id=league_url).first_or_404()
-    reg.paid = paid
-    reg.amount_paid = amount_paid
-    reg.payment_method = payment_method
-    reg.payment_reference = payment_reference
-    reg.payment_notes = payment_notes
-    reg.paid_at = now_utc_naive() if paid else None
-    db.session.commit()
-    return jsonify({"success": True, "message": "Team payment updated"}), 200
+    res = RegistrationService.update_team_payment(
+        Scope.league(league_url), request.form.get("registration_id"), _payment_from_form()
+    )
+    return json_from_result(res, ok_to_payload=lambda _: {"message": "Team payment updated"})
 
 
 @bp.route("/leagues/<league_url>/mark-player-paid", methods=["POST"])
@@ -944,22 +851,10 @@ def league_mark_player_paid(league_url):
             403,
         )
 
-    reg_id = request.form.get("registration_id")
-    paid = request.form.get("paid") == "on"
-    amount_paid = float(request.form.get("amount_paid") or 0)
-    payment_method = request.form.get("payment_method", "")
-    payment_reference = request.form.get("payment_reference", "")
-    payment_notes = request.form.get("payment_notes", "")
-
-    reg = PlayerRegistration.query.filter_by(id=reg_id, league_id=league_url).first_or_404()
-    reg.paid = paid
-    reg.amount_paid = amount_paid
-    reg.payment_method = payment_method
-    reg.payment_reference = payment_reference
-    reg.payment_notes = payment_notes
-    reg.paid_at = now_utc_naive() if paid else None
-    db.session.commit()
-    return jsonify({"success": True, "message": "Player payment updated"}), 200
+    res = RegistrationService.update_player_payment(
+        Scope.league(league_url), request.form.get("registration_id"), _payment_from_form()
+    )
+    return json_from_result(res, ok_to_payload=lambda _: {"message": "Player payment updated"})
 
 
 @bp.route("/leagues/<league_url>/deregister-any-team", methods=["POST"])
@@ -984,32 +879,8 @@ def league_deregister_any_team(league_url):
     if not team_id:
         return jsonify({"success": False, "error": "Team ID is required"}), 400
 
-    team_registration = TeamRegistration.query.filter_by(
-        league_id=league_url, team=team_id, status=RegistrationStatus.CONFIRMED
-    ).first()
-
-    if team_registration:
-        team_registration.status = RegistrationStatus.CANCELLED
-        pseudonym = getattr(team_registration, "pseudonym", None)
-        PlayerRegistration.query.filter_by(league_id=league_url, team=team_id).update(
-            {"status": RegistrationStatus.CANCELLED}
-        )
-        from app.services.bracket_cleanup_service import scrub_deleted_teams_for_league
-
-        scrub_deleted_teams_for_league(
-            league_url,
-            [team_id],
-            pseudonyms=[pseudonym] if pseudonym else None,
-        )
-        db.session.commit()
-        return (
-            jsonify({"success": True, "message": "Team successfully deregistered"}),
-            200,
-        )
-    return (
-        jsonify({"success": False, "error": "Team not found or already deregistered"}),
-        404,
-    )
+    res = RegistrationService.deregister_team_as_to(Scope.league(league_url), team_id)
+    return json_from_result(res, ok_to_payload=lambda _: {"message": "Team successfully deregistered"})
 
 
 @bp.route("/leagues/<league_url>/deregister-any-player", methods=["POST"])
@@ -1034,23 +905,8 @@ def league_deregister_any_player(league_url):
     if not player_id:
         return jsonify({"success": False, "error": "Player ID is required"}), 400
 
-    player_registration = (
-        PlayerRegistration.query.filter_by(league_id=league_url, player=player_id)
-        .filter(PlayerRegistration.status.in_([RegistrationStatus.PENDING_TEAM_APPROVAL, RegistrationStatus.CONFIRMED]))
-        .first()
-    )
-
-    if player_registration:
-        player_registration.status = RegistrationStatus.CANCELLED
-        db.session.commit()
-        return (
-            jsonify({"success": True, "message": "Player successfully deregistered"}),
-            200,
-        )
-    return (
-        jsonify({"success": False, "error": "Player not found or already deregistered"}),
-        404,
-    )
+    res = RegistrationService.deregister_player_as_to(Scope.league(league_url), player_id)
+    return json_from_result(res, ok_to_payload=lambda _: {"message": "Player successfully deregistered"})
 
 
 @bp.route("/leagues/<league_url>/invitation/<int:invitation_id>/accept", methods=["POST"])

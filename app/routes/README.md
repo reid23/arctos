@@ -51,6 +51,11 @@ differ from `/_api/` ones in a few ways:
 - Show only what a signed-out website visitor sees, via the visibility
   helpers in `api_v1/__init__.py` (`with_tournament`,
   `can_view_schedule`, ...), unless a scope grants more.
+- Write routes (the `manage_*` modules and footage) need a scope and a
+  user. Organizer routes resolve the tournament or league with
+  `with_organized_tournament` / `with_organized_league`, then call the
+  same services as the matching `/_api/` routes, so the website and the
+  API share one implementation.
 - Every request is logged on the `arctos.api` logger.
 
 ### Return JSON

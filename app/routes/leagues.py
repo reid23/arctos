@@ -49,6 +49,7 @@ from app.utils.result_helpers import json_from_result
 from app.utils.settings_save import SettingsSaveError, save_league_settings
 from app.serializers.league_serializer import league_to_dict, require_league
 from app.services._common import Scope, current_user_type
+from app.services.league_management_service import LeagueManagementService
 from app.services.license_service import LicenseService
 from app.services.permission_service import PermissionService
 from app.services.registration_resolver import (
@@ -532,44 +533,10 @@ def league_add_to(league_url):
             403,
         )
 
-    user_id = request.form.get("user_id", "").strip()
-    user_type = request.form.get("user_type", "").strip().lower()
-
-    if not user_id or user_type not in ("player", "team"):
-        return jsonify({"success": False, "error": "Invalid user ID or type"}), 400
-
-    if user_type == "player":
-        user = Player.query.get(user_id)
-        if not user:
-            return (
-                jsonify({"success": False, "error": f'Player "{user_id}" not found'}),
-                404,
-            )
-    else:
-        user = Team.query.get(user_id)
-        if not user:
-            return (
-                jsonify({"success": False, "error": f'Team "{user_id}" not found'}),
-                404,
-            )
-
-    existing = TO.query.filter_by(user_id=user_id, user_type=user_type, league_id=league_url).first()
-    if existing:
-        return (
-            jsonify({"success": False, "error": "This user is already a TO for this league"}),
-            400,
-        )
-
-    new_to = TO(
-        user_id=user_id,
-        user_type=user_type,
-        event=None,
-        league_id=league_url,
+    result = LeagueManagementService.add_organizer(
+        league_url, request.form.get("user_id", ""), request.form.get("user_type", "")
     )
-    db.session.add(new_to)
-    db.session.commit()
-    user_name = user.name if user else user_id
-    return jsonify({"success": True, "message": f"Added {user_name} as a TO"}), 200
+    return json_from_result(result, ok_to_payload=lambda name: {"message": f"Added {name} as a TO"})
 
 
 @bp.route("/leagues/<league_url>/remove-to", methods=["POST"])
@@ -589,27 +556,10 @@ def league_remove_to(league_url):
     if not to_id:
         return jsonify({"success": False, "error": "TO ID is required"}), 400
 
-    to_to_remove = TO.query.get_or_404(to_id)
-    if to_to_remove.league_id != league_url:
-        return jsonify({"success": False, "error": "Invalid TO entry"}), 400
-
-    if (to_to_remove.user_id == current_user.id and to_to_remove.user_type == current_user_type()) or (
-        to_to_remove.user_type == "team" and PermissionService.can_manage_team(to_to_remove.user_id, current_user)
-    ):
-        return (
-            jsonify({"success": False, "error": "You cannot remove yourself as a TO"}),
-            400,
-        )
-
-    if to_to_remove.user_type == "player":
-        user = Player.query.get(to_to_remove.user_id)
-    else:
-        user = Team.query.get(to_to_remove.user_id)
-    user_name = user.name if user else to_to_remove.user_id
-
-    db.session.delete(to_to_remove)
-    db.session.commit()
-    return jsonify({"success": True, "message": f"Removed {user_name} as a TO"}), 200
+    result = LeagueManagementService.remove_organizer(
+        league_url, to_id, actor_user_id=current_user.id, actor_user_type=current_user_type()
+    )
+    return json_from_result(result, ok_to_payload=lambda name: {"message": f"Removed {name} as a TO"})
 
 
 @bp.route("/leagues/<league_url>/delete", methods=["POST"])
@@ -643,44 +593,9 @@ def delete_league(league_url):
             400,
         )
 
-    from models import Tournament
-
-    if Tournament.query.filter_by(league_id=league_url).first():
-        return (
-            jsonify(
-                {
-                    "success": False,
-                    "error": "Remove or delete all events (tournaments) in this league first.",
-                }
-            ),
-            400,
-        )
-
-    # Delete in order: registrations, penalty types, TOs, league, registrable_config
-    TeamRegistration.query.filter_by(league_id=league_url).delete(synchronize_session=False)
-    PlayerRegistration.query.filter_by(league_id=league_url).delete(synchronize_session=False)
-    PenaltyType.query.filter_by(league_id=league_url).delete(synchronize_session=False)
-    TO.query.filter_by(league_id=league_url).delete(synchronize_session=False)
-    rc_id = league.registrable_config_id
-    league_name = league.name
-    LicenseService.release_league(league_url)
-    db.session.delete(league)
-    if rc_id:
-        from models import RegistrableConfig
-
-        rc = RegistrableConfig.query.get(rc_id)
-        if rc:
-            db.session.delete(rc)
-    db.session.commit()
-
-    return (
-        jsonify(
-            {
-                "success": True,
-                "message": f'League "{league_name}" has been permanently deleted.',
-            }
-        ),
-        200,
+    return json_from_result(
+        LeagueManagementService.delete_league(league_url),
+        ok_to_payload=lambda name: {"message": f'League "{name}" has been permanently deleted.'},
     )
 
 

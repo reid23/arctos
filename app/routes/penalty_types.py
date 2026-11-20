@@ -9,6 +9,8 @@ share this module:
 - ``/<tournament_url>/players/<player_id>/penalty-history`` (GET) - player's penalty events.
 - ``/leagues/<league_url>/penalty-types`` (GET, POST) - list and create.
 - ``/leagues/<league_url>/penalty-types/<pt_id>`` (PATCH, DELETE) - update and delete.
+
+The writes live in :class:`~app.services.penalty_type_service.PenaltyTypeService`.
 """
 
 from __future__ import annotations
@@ -18,15 +20,28 @@ from flask_login import current_user, login_required
 
 from app.utils.decorators import check_tournament_organizer
 from app.serializers.league_serializer import require_league
+from app.services._common import Scope
+from app.services.penalty_type_service import PenaltyTypeService, penalty_type_payload
 from app.services.permission_service import PermissionService
-from app.utils.helpers import (
-    get_next_penalty_color,
-    get_penalty_types_for_tournament,
-    match_event_urls_for_penalties,
-)
+from app.utils.helpers import match_event_urls_for_penalties
+from app.utils.result_helpers import result_response
 from models import Match, MatchNote, PenaltyType, Point, Tournament, db
 
 bp = Blueprint("penalty_types", __name__, url_prefix="/_api")
+
+
+def _tournament_scope(tournament) -> Scope:
+    return Scope.league(tournament.league_id) if tournament.league_id else Scope.event(tournament.url)
+
+
+def _created_response(result):
+    return result_response(
+        result, lambda penalty_type: {"success": True, "penalty_type": penalty_type_payload(penalty_type)}
+    )
+
+
+def _success_response(result):
+    return result_response(result, lambda _: {"success": True})
 
 
 @bp.route("/leagues/<league_url>/penalty-types", methods=["GET"])
@@ -35,9 +50,12 @@ def get_league_penalty_types(league_url):
     league, err = require_league(league_url)
     if err:
         return jsonify({"error": "Not found" if err == 404 else "Forbidden"}), err
-    types = PenaltyType.query.filter_by(league_id=league_url).all()
     return jsonify(
-        {"penalty_types": [{"id": t.id, "name": t.name, "color": t.color, "desc": (t.desc or "")} for t in types]}
+        {
+            "penalty_types": [
+                penalty_type_payload(t) for t in PenaltyTypeService.list_for_scope(Scope.league(league_url))
+            ]
+        }
     )
 
 
@@ -50,39 +68,7 @@ def create_league_penalty_type(league_url):
         return jsonify({"error": "Not found" if err == 404 else "Forbidden"}), err
     if not PermissionService.is_league_organizer(league_url, current_user):
         return jsonify({"error": "Forbidden"}), 403
-
-    data = request.get_json()
-    name = data.get("name")
-    if not name:
-        return jsonify({"error": "Name required"}), 400
-    if len(name) > 50:
-        return jsonify({"error": "Name too long"}), 400
-
-    desc = data.get("desc", "")
-    color = data.get("color")
-    existing = PenaltyType.query.filter_by(league_id=league_url).all()
-    if not color:
-        existing_colors = {t.color for t in existing}
-        color = get_next_penalty_color(existing_colors)
-    else:
-        color = color.strip().lstrip("#")
-        if len(color) != 6:
-            return jsonify({"error": "Invalid color format"}), 400
-
-    pt = PenaltyType(league_id=league_url, name=name, color=color, desc=desc)
-    db.session.add(pt)
-    db.session.commit()
-    return jsonify(
-        {
-            "success": True,
-            "penalty_type": {
-                "id": pt.id,
-                "name": pt.name,
-                "color": pt.color,
-                "desc": (pt.desc or ""),
-            },
-        }
-    )
+    return _created_response(PenaltyTypeService.create(Scope.league(league_url), request.get_json()))
 
 
 @bp.route("/leagues/<league_url>/penalty-types/<int:pt_id>", methods=["PATCH"])
@@ -94,22 +80,7 @@ def update_league_penalty_type(league_url, pt_id):
         return jsonify({"error": "Not found" if err == 404 else "Forbidden"}), err
     if not PermissionService.is_league_organizer(league_url, current_user):
         return jsonify({"error": "Forbidden"}), 403
-
-    pt = PenaltyType.query.filter_by(id=pt_id, league_id=league_url).first_or_404()
-    data = request.get_json()
-    if "name" in data:
-        name = data["name"]
-        if len(name) > 50:
-            return jsonify({"error": "Name too long"}), 400
-        pt.name = name
-    if "desc" in data:
-        pt.desc = data["desc"]
-    if "color" in data:
-        c = data["color"].strip().lstrip("#")
-        if len(c) == 6:
-            pt.color = c
-    db.session.commit()
-    return jsonify({"success": True})
+    return _success_response(PenaltyTypeService.update(Scope.league(league_url), pt_id, request.get_json()))
 
 
 @bp.route("/leagues/<league_url>/penalty-types/<int:pt_id>", methods=["DELETE"])
@@ -121,31 +92,17 @@ def delete_league_penalty_type(league_url, pt_id):
         return jsonify({"error": "Not found" if err == 404 else "Forbidden"}), err
     if not PermissionService.is_league_organizer(league_url, current_user):
         return jsonify({"error": "Forbidden"}), 403
-
-    pt = PenaltyType.query.filter_by(id=pt_id, league_id=league_url).first_or_404()
-    in_use = MatchNote.query.filter_by(penalty_type_id=pt.id).first()
-    if in_use:
-        return jsonify({"error": "Cannot delete penalty type that is in use."}), 409
-    db.session.delete(pt)
-    db.session.commit()
-    return jsonify({"success": True})
+    return _success_response(PenaltyTypeService.delete(Scope.league(league_url), pt_id))
 
 
 @bp.route("/<tournament_url>/penalty-types", methods=["GET"])
 def get_penalty_types(tournament_url):
     """Get all penalty types for a tournament (league's if league event, else event's)."""
     tournament = Tournament.query.filter_by(url=tournament_url).first_or_404()
-    types = get_penalty_types_for_tournament(tournament)
     return jsonify(
         {
             "penalty_types": [
-                {
-                    "id": t.id,
-                    "name": t.name,
-                    "color": t.color,
-                    "desc": (t.desc or ""),
-                }
-                for t in types
+                penalty_type_payload(t) for t in PenaltyTypeService.list_for_scope(_tournament_scope(tournament))
             ]
         }
     )
@@ -158,45 +115,7 @@ def create_penalty_type(tournament_url):
     tournament = Tournament.query.filter_by(url=tournament_url).first_or_404()
     if not check_tournament_organizer(tournament_url):
         return jsonify({"error": "Forbidden"}), 403
-
-    data = request.get_json()
-    name = data.get("name")
-    if not name:
-        return jsonify({"error": "Name required"}), 400
-
-    if len(name) > 50:
-        return jsonify({"error": "Name too long"}), 400
-
-    desc = data.get("desc", "")
-    color = data.get("color")
-
-    existing = get_penalty_types_for_tournament(tournament)
-    if not color:
-        existing_colors = {t.color for t in existing}
-        color = get_next_penalty_color(existing_colors)
-    else:
-        color = color.strip().lstrip("#")
-        if len(color) != 6:
-            return jsonify({"error": "Invalid color format"}), 400
-
-    if tournament.league_id:
-        pt = PenaltyType(league_id=tournament.league_id, name=name, color=color, desc=desc)
-    else:
-        pt = PenaltyType(event=tournament_url, name=name, color=color, desc=desc)
-    db.session.add(pt)
-    db.session.commit()
-
-    return jsonify(
-        {
-            "success": True,
-            "penalty_type": {
-                "id": pt.id,
-                "name": pt.name,
-                "color": pt.color,
-                "desc": (pt.desc or ""),
-            },
-        }
-    )
+    return _created_response(PenaltyTypeService.create(_tournament_scope(tournament), request.get_json()))
 
 
 @bp.route("/<tournament_url>/penalty-types/<int:pt_id>", methods=["PATCH"])
@@ -206,27 +125,7 @@ def update_penalty_type(tournament_url, pt_id):
     tournament = Tournament.query.filter_by(url=tournament_url).first_or_404()
     if not check_tournament_organizer(tournament_url):
         return jsonify({"error": "Forbidden"}), 403
-
-    if tournament.league_id:
-        pt = PenaltyType.query.filter_by(id=pt_id, league_id=tournament.league_id).first_or_404()
-    else:
-        pt = PenaltyType.query.filter_by(id=pt_id, event=tournament_url).first_or_404()
-
-    data = request.get_json()
-    if "name" in data:
-        name = data["name"]
-        if len(name) > 50:
-            return jsonify({"error": "Name too long"}), 400
-        pt.name = name
-    if "desc" in data:
-        pt.desc = data["desc"]
-    if "color" in data:
-        c = data["color"].strip().lstrip("#")
-        if len(c) == 6:
-            pt.color = c
-
-    db.session.commit()
-    return jsonify({"success": True})
+    return _success_response(PenaltyTypeService.update(_tournament_scope(tournament), pt_id, request.get_json()))
 
 
 @bp.route("/<tournament_url>/penalty-types/<int:pt_id>", methods=["DELETE"])
@@ -236,20 +135,7 @@ def delete_penalty_type(tournament_url, pt_id):
     tournament = Tournament.query.filter_by(url=tournament_url).first_or_404()
     if not check_tournament_organizer(tournament_url):
         return jsonify({"error": "Forbidden"}), 403
-
-    if tournament.league_id:
-        pt = PenaltyType.query.filter_by(id=pt_id, league_id=tournament.league_id).first_or_404()
-    else:
-        pt = PenaltyType.query.filter_by(id=pt_id, event=tournament_url).first_or_404()
-
-    # Check if used
-    in_use = MatchNote.query.filter_by(penalty_type_id=pt.id).first()
-    if in_use:
-        return jsonify({"error": "Cannot delete penalty type that is in use."}), 409
-
-    db.session.delete(pt)
-    db.session.commit()
-    return jsonify({"success": True})
+    return _success_response(PenaltyTypeService.delete(_tournament_scope(tournament), pt_id))
 
 
 @bp.route("/<tournament_url>/players/<player_id>/penalty-history", methods=["GET"])

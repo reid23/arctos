@@ -204,6 +204,7 @@ only for the scopes you need:
 | `email` | Receive the account id in the `email` claim |
 | `injuries` | Read all of the user's injury records, including private ones |
 | `footage` | See tournaments the user organizes, including unpublished ones, and upload match footage to them |
+| `manage` | Create tournaments and leagues, and [manage](#managing-tournaments) the ones the user organizes, including unpublished ones |
 
 Every user grant can see the account's name and username, with or
 without `profile`. `email` is granted whenever a client asks for it.
@@ -224,8 +225,9 @@ tokens without a needed scope get `403` (see [API errors](#api-errors)).
 
 The Arctos API gives apps read access to everything a signed-out visitor
 of the Arctos website can see (tournaments, schedules, live scores,
-rosters, results), plus a few things a user can grant with
-[scopes](#scopes).
+rosters, results), plus what a user can grant with [scopes](#scopes),
+including organizing tournaments: creating them, changing their
+settings, and building their schedules.
 
 ### Quick start
 
@@ -241,8 +243,8 @@ curl -H "Authorization: Bearer $TOKEN" \
   "https://events.californiajugger.org/api/v1/tournaments?when=upcoming"
 ```
 
-To act for a user (to read their private injuries, or upload footage to
-their tournaments), get a token through [Sign in with Arctos](#sign-in-with-arctos)
+To act for a user (to read their private injuries, upload footage, or set
+up and run their tournaments), get a token through [Sign in with Arctos](#sign-in-with-arctos)
 instead, asking for the scopes you need. Public apps (desktop, mobile,
 browser) must do this, since they can't use client credentials.
 
@@ -280,12 +282,13 @@ Errors are JSON with an `error` message and an HTTP status:
 | `401` | Missing, expired, or revoked token: `{"error": "invalid_token", "error_description": "..."}` |
 | `403` | The token lacks a needed scope or user (`{"error": "insufficient_scope", ...}`), or the user isn't allowed (`{"error": "..."}`) |
 | `404` | No such resource, or it isn't visible to you: `{"error": "..."}` |
+| `409` | The change conflicts with the resource's state, such as editing a match that has started: `{"error": "..."}` |
 
 ### Visibility
 
 - Unpublished tournaments and leagues act as if they don't exist (`404`,
-  left out of lists), except for a token with the `footage` scope whose
-  user organizes them.
+  left out of lists), except for a token with the `footage` or `manage`
+  scope whose user organizes them.
 - A tournament's schedule (`/matches`) is `403` until the organizers
   publish it, with the same exception. Single matches, results, and
   scoreboards follow the website and are always available for visible
@@ -873,3 +876,654 @@ All team accounts, by name, 50 to a page, in the same shape as
 
 Each registration's `players` is its confirmed roster, in the same shape
 as a tournament's `/players`.
+
+### Managing tournaments
+
+A token with the `manage` scope can do what an organizer does in a
+tournament's settings and schedule editor. Every route in this and the
+following sections needs that scope and a user (client credentials get
+`403`); all but creation also need the user to organize the tournament
+or league. Other users get `403`, or `404` when the tournament isn't
+published. Changes return `200` with the changed resource, creations
+`201`, and deletions `204` with no body.
+
+To set up a tournament from scratch:
+
+1. `POST /tournaments` to create it.
+2. `PATCH /tournaments/{tournament_id}` with dates, location, and
+   registration settings.
+3. Register teams ([Registrations](#registrations)), or let them register
+   on the website.
+4. `PUT /tournaments/{tournament_id}/schedule` with a schedule file that
+   has the fields, tags, and matches.
+5. Check `GET .../schedule/warnings` and `GET .../matches`, fix problems
+   (in the file or match by match), then publish the tournament and its
+   schedule with `PATCH /tournaments/{tournament_id}`.
+
+#### `POST /tournaments`
+
+```json
+{"id": "fall-open", "name": "Fall Open", "league": "metro-league"}
+```
+
+`id` is the URL slug (letters, digits, `-`, `_`). `league` is optional;
+the user must organize that league. The user becomes the tournament's
+organizer. Returns `201` with `{"tournament": {...}}`, in the shape of
+`GET /tournaments/{tournament_id}`. New tournaments are unpublished and
+start and end today.
+
+#### `GET /tournaments/{tournament_id}/settings`
+
+Every setting, under the keys `PATCH` takes:
+
+```json
+{
+  "settings": {
+    "id": "fall-open",
+    "name": "Fall Open",
+    "location": "Central Park",
+    "about": "Markdown description.",
+    "start_date": "2026-10-03",
+    "end_date": "2026-10-04",
+    "published": false,
+    "schedule_published": false,
+    "bracket_published": false,
+    "historical": false,
+    "league": null,
+    "head_refs_allow_reffing_teams": false,
+    "head_refs_allow_anyone": false,
+    "head_refs_allowed_list": "jsmith,kjones",
+    "registration": {
+      "team_reg_fee": 40.0,
+      "player_reg_fee": 0.0,
+      "team_registration_open": true,
+      "player_registration_open": false,
+      "terms_link": null,
+      "n_max_teams": 12,
+      "max_team_size_roster": null,
+      "max_team_size_field": null,
+      "require_waiver_signature": false
+    },
+    "organizers": [{"id": "jsmith", "name": "Jane Smith", "type": "player"}]
+  }
+}
+```
+
+`head_refs_allowed_list` is comma-separated player ids. `registration` is
+`null` for a tournament in a league, whose registration settings are the
+league's. `bracket_published`, `historical`, `league`, and `organizers`
+are read-only here.
+
+#### `PATCH /tournaments/{tournament_id}`
+
+Send only the settings to change, in the shape above (registration
+settings may be nested under `registration` or not). Dates are
+`YYYY-MM-DD`; the end can't be before the start. Booleans must be JSON
+booleans. Fees are amounts of at least 0, caps are whole numbers or
+`null`. `require_waiver_signature` can only be turned off here; upload
+a waiver on the website. Returns `{"settings": {...}}`. Historical
+tournaments can't be changed.
+
+#### `DELETE /tournaments/{tournament_id}?confirm={tournament_id}`
+
+Permanently deletes the tournament with its matches, results,
+registrations, and side competitions. `confirm` must repeat the id.
+
+#### `POST /tournaments/{tournament_id}/organizers`
+
+`{"user_id": "kjones", "user_type": "player"}` (`player` or `team`)
+adds an organizer and returns `201` with `{"organizers": [...]}`.
+`DELETE /tournaments/{tournament_id}/organizers/{user_type}/{user_id}`
+removes one; users can't remove themselves (or a team they manage).
+Organizers of a tournament in a league are the league's; manage them on
+the league.
+
+#### Fields
+
+- `POST /tournaments/{tournament_id}/fields` with `{"name": "Field 3"}`
+  returns `201` with `{"field": {"id": 14, "name": "Field 3"}}`.
+- `PATCH /tournaments/{tournament_id}/fields/{field_id}` with
+  `{"name": "North"}` renames it; its matches move with it.
+- `DELETE /tournaments/{tournament_id}/fields/{field_id}` deletes a
+  field that has no matches.
+
+#### Tags
+
+Tags are named slots for a team (`tag::Seed 1` in a match), filled by an
+[Arctos Schedule Script](arctos-schedule-script.md) expression that
+evaluates to a team, or set by hand.
+
+- `GET /tournaments/{tournament_id}/tags` returns
+  `{"tags": [{"id": 3, "name": "Seed 1", "expression": "(get 0 standings)", "team": null}]}`.
+- `POST /tournaments/{tournament_id}/tags` with `{"name", "expression"}`
+  (`expression` optional) returns `201` with `{"tag": {...}}`.
+- `PUT /tournaments/{tournament_id}/tags/{tag_id}` with
+  `{"name", "expression"}` renames the tag and, if `expression` is
+  present, replaces it. Tags in use can't be renamed.
+- `PUT /tournaments/{tournament_id}/tags/{tag_id}/team` with
+  `{"team_id": "jsmith-team"}` sets the tag's team by hand (`null` goes
+  back to the expression). Matches that haven't started pick it up.
+- `DELETE /tournaments/{tournament_id}/tags/{tag_id}` deletes a tag
+  nothing refers to.
+
+#### Script variables
+
+Named expressions that tags, skip conditions, and other variables can
+use.
+
+- `GET /tournaments/{tournament_id}/script-variables` returns
+  `{"script_variables": [{"id": 1, "name": "rounds", "expression": "3"}]}`.
+- `POST /tournaments/{tournament_id}/script-variables` with
+  `{"name", "expression"}` returns `201` with `{"script_variable": {...}}`.
+- `PATCH /tournaments/{tournament_id}/script-variables/{variable_id}`
+  changes `name` and/or `expression`.
+- `DELETE /tournaments/{tournament_id}/script-variables/{variable_id}`
+  deletes a variable nothing refers to.
+
+### Building the schedule
+
+The easiest way to build a whole schedule is to write a schedule file
+and `PUT` it; single matches can then be adjusted one at a time. These
+routes need the `manage` scope and an organizer, as above.
+
+#### `GET /tournaments/{tournament_id}/schedule/script`
+
+Returns `{"script": "..."}`: the tournament's schedule file (TOML), with
+its script variables, tags, fields, matches, and schedule items. Export
+one from a tournament set up on the website to see every option.
+
+#### `PUT /tournaments/{tournament_id}/schedule`
+
+`{"script": "..."}` replaces the schedule with the file's contents:
+variables, tags, fields, and matches the file leaves out are deleted
+(schedule items only when the file has `schedule_items`). The whole file
+is checked before anything changes, so an invalid file changes nothing
+(`400` listing the problems). A short file looks like:
+
+```toml
+[[variables]]
+name = "final_length"
+expression = "40"
+
+[[tags]]
+name = "Champion"
+
+[[fields]]
+name = "North"
+
+[[matches]]
+name = "Semi 1"
+field = "North"
+schedule_type = "STATIC"
+set_type = "SETS"
+nsets = 3
+nominal_length = 30
+team1_initial = "bears"
+team2_initial = "wolves"
+refs_initial = "otters"
+scheduled_start_time = 2026-07-04T16:00:00
+
+[[matches]]
+name = "Final"
+field = "North"
+schedule_type = "FAST"
+set_type = "SETS"
+nominal_length = 40
+previous_match = "Semi 1"
+team1_initial = "Semi 1::winner"
+team2_initial = "tag::Champion"
+```
+
+A match's teams and referees (`refs_initial`, comma-separated) are team
+ids, registered team names, `tag::Name`, or `Match Name::winner` /
+`::loser`. `schedule_type` is `STATIC` (starts at
+`scheduled_start_time`, UTC), `FAST` or `SAFE` (follows
+`previous_match` on the same field), `BREAK` or `JOIN` (a pause or a
+point where fields wait for each other, same-named rows across fields
+start together), or `STATBREAK` (a break at a fixed time). `set_type` is
+`SETS` (with `nsets`), `STONES` (with `stones_per_set`), or `TIMED`
+(with `nsets`, and `stones_per_set` holding each set's length in
+minutes). Lengths are
+in minutes. Exported files also carry each row's `uuid` / `id`; keep
+them to update rows in place, or leave them out to create new ones.
+Names that aren't registered teams become tags, with a warning.
+
+Returns the counts and warnings:
+
+```json
+{
+  "variables_created": 1, "variables_updated": 0,
+  "tags_created": 1, "tags_updated": 0,
+  "fields_created": 1, "fields_updated": 0,
+  "matches_created": 2, "matches_updated": 0,
+  "warnings": []
+}
+```
+
+#### `POST /tournaments/{tournament_id}/schedule/validate`
+
+Checks an [Arctos Schedule Script](arctos-schedule-script.md) expression
+(a skip condition, tag, or variable) against the tournament's schedule:
+`{"expression": "(+ 1 2)"}` returns
+`{"valid": true, "value": 3, "simplified": "3", "error": null, "warnings": [], "result_type": ["INT"]}`,
+or `"valid": false` with an `error`. Unknown team and match names make an
+expression invalid.
+
+#### `GET /tournaments/{tournament_id}/schedule/warnings`
+
+Problems in the whole schedule that don't block saving:
+
+```json
+{"warnings": [{"kind": "unknown_team", "message": "...", "matches": ["Semi 1"]}]}
+```
+
+`kind` is `unknown_team`, `missing_team`, `duplicate_team`, `cycle`,
+`unknown_match_ref`, or `double_booked`. Read the schedule itself with
+[`GET /tournaments/{tournament_id}/matches`](#get-tournamentstournament_idmatches);
+organizers see it before it's published.
+
+#### `POST /tournaments/{tournament_id}/matches`
+
+```json
+{
+  "name": "Semi 3",
+  "field": "South",
+  "schedule_type": "FAST",
+  "previous_match_id": "5b1e...",
+  "length": 30,
+  "team1": "bears",
+  "team2": "tag::Seed 4",
+  "refs": ["otters"],
+  "set_type": "SETS",
+  "nsets": 3,
+  "ribbon": false,
+  "skip_condition": null
+}
+```
+
+`STATIC` and `STATBREAK` matches take `start_time` (ISO 8601) instead of
+`previous_match_id`, which `FAST`, `SAFE`, `BREAK`, and `JOIN` need (on
+the same field). Names are unique, except that breaks and joins share a
+name across fields. Breaks and joins have no teams. `set_type`, `nsets`,
+and `stones_per_set` work as in a [schedule file](#put-tournamentstournament_idschedule).
+Returns `201` with `{"match": {...}}`, in the shape of
+`GET /tournaments/{tournament_id}/matches/{match_id}`.
+
+#### `PATCH /tournaments/{tournament_id}/matches/{match_id}`
+
+Send the properties to change, as above. A match's name can't change;
+`previous_match_id` is needed again for matches that follow another, and
+changing a `STATIC` match detaches it from its field's chain. Matches
+that have started can't change (`409`). Allowed type changes are
+`STATIC` to `SAFE`/`FAST`, `SAFE` to `FAST`, `BREAK`/`JOIN` to each
+other (single-field ones only; use break groups otherwise), and
+`STATBREAK` to `BREAK`. Returns `{"match": {...}}`.
+
+#### `DELETE /tournaments/{tournament_id}/matches/{match_id}`
+
+Deletes the match; the matches around it on its field close up.
+
+#### `POST /tournaments/{tournament_id}/matches/bulk-length`
+
+`{"match_ids": [...], "length": 25}` sets many lengths at once and
+returns
+`{"updated": 2, "results": [{"match_id": "5b1e...", "status": "updated"}]}`.
+`status` is `updated`, `not_found`, `skipped_join`, or `skipped_locked`
+(already started). A break stands for its whole group.
+
+#### Break groups
+
+A break or join across several fields, edited as one:
+
+- `POST /tournaments/{tournament_id}/break-groups` with
+  `{"name": "Lunch", "schedule_type": "BREAK", "fields": ["North", "South"], "length": 60}`
+  returns `201` with
+  `{"break_group": {"name": "Lunch", "schedule_type": "BREAK", "match_ids": [...]}}`.
+  Each row goes at the end of its field unless `previous_match` maps a
+  field name to the match it follows. `STATBREAK` groups need
+  `start_time`; `JOIN` groups have no length.
+- `PATCH /tournaments/{tournament_id}/break-groups/{name}` changes
+  `length`, `start_time` (static breaks), `fields`, or `schedule_type`
+  (`BREAK` and `JOIN` only).
+- `DELETE /tournaments/{tournament_id}/break-groups/{name}`.
+
+#### `POST /tournaments/{tournament_id}/schedule/push-back`
+
+`{"minutes": 15, "day": "2026-07-04", "tz_offset_minutes": -420}`
+delays the `STATIC` matches and static breaks that haven't started on
+that local day (`tz_offset_minutes` is added to UTC to get local time).
+Returns `{"moved": 6}`.
+
+#### `POST /tournaments/{tournament_id}/schedule/update-references`
+
+Fills `Match::winner` / `::loser` slots again from every finished
+match, in case they got out of sync.
+
+### Managing leagues
+
+Like tournaments, these need the `manage` scope; all but creation need a
+user who organizes the league.
+
+- `POST /leagues` with `{"id": "metro-league", "name": "Metro League"}`
+  returns `201` with `{"league": {...}}`; the user becomes its organizer.
+  Add rounds with `POST /tournaments` and `"league": "metro-league"`.
+- `GET /leagues/{league_id}/settings` returns
+  `{"settings": {"id", "name", "about", "published", "registration", "organizers"}}`;
+  `registration` has a tournament's keys plus `payment_info`.
+- `PATCH /leagues/{league_id}` changes `about`, `published`, and
+  registration settings, as for tournaments.
+- `DELETE /leagues/{league_id}?confirm={league_id}` deletes a league
+  with no tournaments left.
+- `POST /leagues/{league_id}/organizers` and
+  `DELETE /leagues/{league_id}/organizers/{user_type}/{user_id}` work
+  like a tournament's.
+
+### Registrations
+
+Organizers can see every registration with its payment and waiver
+status, register teams and players, record payments, and cancel
+registrations. These need a token with the `manage` scope whose user
+organizes the tournament or league (otherwise `403`). A tournament in a
+league shares the league's registrations.
+
+#### `GET /tournaments/{tournament_id}/registrations` and `GET /leagues/{league_id}/registrations`
+
+Team registrations that aren't cancelled, and pending, confirmed, and
+rejected player registrations:
+
+```json
+{
+  "teams": [
+    {
+      "id": 31,
+      "team": {"id": "jsmith-team", "name": "Smith Team Account"},
+      "name": "Smith & Co",
+      "shortname": "SMC",
+      "status": "CONFIRMED",
+      "registered_at": "2026-03-02T18:21:00Z",
+      "payment": {
+        "paid": true,
+        "amount_paid": 40.0,
+        "paid_at": "2026-03-03T10:00:00Z",
+        "payment_method": "venmo",
+        "payment_reference": "8812",
+        "payment_notes": null
+      }
+    }
+  ],
+  "players": [
+    {
+      "id": 207,
+      "player": {"id": "jsmith", "name": "Jane Smith"},
+      "team": {"id": "jsmith-team", "name": "Smith & Co", "shortname": "SMC"},
+      "jersey_name": "SMITH",
+      "jersey_number": "7",
+      "status": "PENDING_TEAM_APPROVAL",
+      "registered_at": "2026-03-04T08:00:00Z",
+      "waiver_status": "NOT_SIGNED",
+      "payment": {"paid": false, "...": "..."}
+    }
+  ]
+}
+```
+
+`id` is the registration id. A player's `status` is
+`PENDING_TEAM_APPROVAL` (waiting for their team), `CONFIRMED`, or
+`REJECTED`. `waiver_status` is `VALID`, `NOT_SIGNED`, `OUT_OF_DATE`
+(signed an earlier waiver), or `null` when no waiver is required.
+
+#### `POST /tournaments/{tournament_id}/registrations/teams`
+
+Register a team, confirmed and marked paid:
+
+```json
+{"team_id": "jsmith-team", "name": "Smith & Co", "shortname": "SMC"}
+```
+
+`name` defaults to the team account's name; `shortname` is optional.
+Returns `201` with `{"registration": {...}}` in the shape above. `400` when the
+team is already registered or the tournament is full.
+
+#### `POST /tournaments/{tournament_id}/registrations/players`
+
+Register a player, confirmed and marked paid:
+
+```json
+{
+  "player_id": "jsmith",
+  "team_id": "jsmith-team",
+  "jersey_name": "SMITH",
+  "jersey_number": "7",
+  "waiver_legal_name_signature": "Jane Smith"
+}
+```
+
+Only `player_id` is required. `waiver_legal_name_signature` is required
+when the tournament has a waiver. Returns `201` with `{"registration": {...}}`.
+
+#### `PATCH .../registrations/teams/{registration_id}` and `PATCH .../registrations/players/{registration_id}`
+
+Under `/tournaments/{tournament_id}` or `/leagues/{league_id}`. Replaces
+the registration's payment details:
+
+```json
+{"paid": true, "amount_paid": 40, "payment_method": "venmo", "payment_reference": "8812", "payment_notes": ""}
+```
+
+`paid` is required; the other fields default to `0` and empty. Returns
+`{"registration": {...}}`.
+
+#### `DELETE .../registrations/teams/{team_id}` and `DELETE .../registrations/players/{player_id}`
+
+Under `/tournaments/{tournament_id}` or `/leagues/{league_id}`. Cancels a
+confirmed team registration (with its players' registrations), or a
+pending or confirmed player registration, even when registration is
+closed. In a standalone tournament the players' side competition
+registrations are cancelled too. Returns `204`, or `404` when there is
+nothing to cancel.
+
+### Penalty types
+
+The penalty categories referees attach to match notes. A tournament in
+a league uses the league's penalty types. Listing them needs no scope;
+changes need a token with the `manage` scope whose user organizes the
+tournament or league.
+
+#### `GET /tournaments/{tournament_id}/penalty-types` and `GET /leagues/{league_id}/penalty-types`
+
+```json
+{"penalty_types": [{"id": 4, "name": "Shield foul", "color": "e6194b", "description": "Rule 4.2"}]}
+```
+
+`color` is six hex digits.
+
+#### `POST .../penalty-types`
+
+```json
+{"name": "Shield foul", "description": "Rule 4.2", "color": "#e6194b"}
+```
+
+`name` (up to 50 characters) is required. Without `color`, Arctos picks
+one not yet used. Returns `201` with `{"penalty_type": {...}}`.
+
+#### `PATCH .../penalty-types/{penalty_type_id}` and `DELETE .../penalty-types/{penalty_type_id}`
+
+`PATCH` changes the fields present in the body (an invalid `color` is
+ignored) and returns `{"penalty_type": {...}}`. `DELETE` returns `204`,
+or `409` while a match note uses the penalty type.
+
+### Side competitions (organizers)
+
+Set up side competitions. These need a token with the `manage` scope
+whose user organizes the tournament. Creating returns `201`. Responses are
+`{"side_competition": {...}}` in the shape of
+[`GET .../side-competitions/{side_competition_id}`](#get-tournamentstournament_idside-competitionsside_competition_id),
+which also has `only_show_top_n_results`.
+
+#### `POST /tournaments/{tournament_id}/side-competitions`
+
+```json
+{
+  "name": "Dueling",
+  "type": "DUELING",
+  "description": "Best of three.",
+  "allowed_weapons": ["LONG", "STAFF"],
+  "only_show_top_n_results": 10,
+  "schedule": {"start_time": "2026-05-01T12:00:00Z", "end_time": "2026-05-01T13:00:00Z", "field": "Field 1"}
+}
+```
+
+`name` and `type` (`DUELING`, `CHAIN_BREAKING`, or `OTHER`) are
+required. `allowed_weapons` defaults to every weapon.
+`only_show_top_n_results` limits the public results (`null` shows all).
+`schedule` (optional) also puts the side competition on the schedule,
+with the fields of a [schedule item](#schedule-items) other than `title`
+and `description`.
+
+#### `PATCH /tournaments/{tournament_id}/side-competitions/{side_competition_id}`
+
+Changes the fields present in the body: `name`, `type`, `description`,
+`registration_open`, `active`, `track_losses`, `track_chain_losses`,
+`track_break_losses`, `track_matchups`, `allowed_weapons`, and
+`only_show_top_n_results`. Registrants whose weapon is no longer allowed
+are deregistered.
+
+#### `DELETE /tournaments/{tournament_id}/side-competitions/{side_competition_id}`
+
+Deletes the side competition with its registrations and results.
+Returns `204`.
+
+#### `POST /tournaments/{tournament_id}/side-competitions/{side_competition_id}/finalize`
+
+Permanently finalizes the results.
+
+### Schedule items
+
+Activities on the schedule other than matches (ceremonies, meals,
+clinics). Listing them follows the schedule's visibility, like
+[`/matches`](#get-tournamentstournament_idmatches); changes need a token
+with the `manage` scope whose user organizes the tournament.
+
+#### `GET /tournaments/{tournament_id}/schedule-items`
+
+By start time:
+
+```json
+{
+  "schedule_items": [
+    {
+      "id": 9,
+      "sidecomp_id": null,
+      "title": "Opening ceremony",
+      "description": "All teams on Field 1.",
+      "start_time": "2026-05-01T13:00:00Z",
+      "end_time": "2026-05-01T13:30:00Z",
+      "field": "Field 1",
+      "location": null
+    }
+  ]
+}
+```
+
+An item with a `sidecomp_id` schedules that side competition and shows
+its name and description.
+
+#### `POST /tournaments/{tournament_id}/schedule-items`
+
+```json
+{
+  "title": "Opening ceremony",
+  "description": "All teams on Field 1.",
+  "start_time": "2026-05-01T09:00:00-04:00",
+  "end_time": "2026-05-01T09:30:00-04:00",
+  "field": "Field 1",
+  "location": null,
+  "sidecomp_id": null,
+  "request_id": "6f1c3e1a-8a8c-4a52-9a43-2b1f0b0c7c11"
+}
+```
+
+Times need a timezone, and an item lasts at most 31 days. `title` is
+required unless `sidecomp_id` names one of the tournament's side
+competitions. `field` must be one of the tournament's fields. Returns
+`201` with `{"schedule_item": {...}}`. `request_id` (optional, a UUID)
+makes retries safe: sending the same item again returns `200` with the
+saved one, and different details with a used `request_id` get `409`.
+
+#### `PUT /tournaments/{tournament_id}/schedule-items/{item_id}` and `DELETE /tournaments/{tournament_id}/schedule-items/{item_id}`
+
+`PUT` replaces the item's details (same body; `request_id` is ignored)
+and returns `{"schedule_item": {...}}`. `DELETE` returns `204`.
+
+### Brackets
+
+The bracket diagram: matches placed on a canvas and connected by wires,
+plus text, labeled teams, and images. Reading it needs the bracket to be
+published (otherwise `403`), except for a token with the `footage` or
+`manage` scope whose user organizes the tournament. Changes need the
+`manage` scope and an organizer.
+
+#### `GET /tournaments/{tournament_id}/bracket`
+
+```json
+{
+  "bracket": {
+    "published": true,
+    "placements": [
+      {
+        "match": "5b1e...",
+        "placed": true,
+        "x_pos": 300.0,
+        "y_pos": 40.0,
+        "width": 280.0,
+        "height": 100.0,
+        "team1": "NET",
+        "team2": "LABEL",
+        "inputs_flipped": false
+      }
+    ],
+    "texts": [{"id": "title", "text": "Finals", "x_pos": 10.0, "y_pos": 10.0, "size": 18.0}],
+    "labeled_teams": [
+      {"id": "seed-1", "label": "1st seed", "team": "tag::Seed 1", "kind": "LABEL", "x_pos": 10.0, "y_pos": 80.0}
+    ],
+    "images": [
+      {"id": "logo", "image": "uploads/brackets/...", "x_pos": 0.0, "y_pos": 0.0, "width": 200.0, "height": 120.0}
+    ]
+  }
+}
+```
+
+`match` is a match id. A placement with `placed: false` is off the
+canvas but keeps its settings. `team1` and `team2` are `NET` (a wire
+from the match a `Match::winner` or `Match::loser` slot comes from) or
+`LABEL` (a text label). A labeled team's `team` is a team id, a `tag::`
+reference, or a `Match::winner` reference. `image` is a path on the
+Arctos host under `/static/`.
+
+#### `PATCH /tournaments/{tournament_id}/bracket`
+
+`{"published": true}` shows the bracket to everyone; `false` hides it.
+Returns `{"bracket": {...}}`.
+
+#### `PUT /tournaments/{tournament_id}/bracket/layout`
+
+Saves the canvas, in the shape `GET` returns:
+
+```json
+{
+  "placements": [{"match": "5b1e...", "x_pos": 300, "y_pos": 40, "team1": "NET", "team2": "LABEL"}],
+  "texts": [{"id": "title", "text": "Finals", "x_pos": 10, "y_pos": 10, "size": 18}],
+  "labeled_teams": [],
+  "images": [],
+  "clear_missing": false
+}
+```
+
+`placements` is required; `texts`, `labeled_teams`, and `images` are
+optional. Rows are matched by `match` or `id`, then created or updated;
+choose your own ids for new text and labeled teams. Breaks and joins
+can't be placed. A match without both `x_pos` and `y_pos` is unplaced.
+`NET` on a slot that doesn't come from another match becomes `LABEL`.
+With `clear_missing: true`, rows left out of a list you sent are
+deleted. Images can only refer to files already uploaded on the
+website. Returns `{"bracket": {...}}`.

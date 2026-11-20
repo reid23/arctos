@@ -13,7 +13,7 @@ from datetime import datetime
 import pytest
 
 from app.domain.enums import MatchStatus, ScheduleType
-from app.routes.tournaments import update_match_previous_link
+from app.utils.match_chain import update_match_previous_link
 from app.utils.scheduling import recompute_scheduled_and_nominal_times
 from models import Match, db
 
@@ -136,7 +136,7 @@ class TestHalfLinkedChainSplice:
 
     def test_detach_half_linked_middle_repoints_child(self, app, test_db, tournament):
         """Detaching a half-linked middle node must close the child's back-pointer."""
-        from app.routes.tournaments import detach_match_from_chain
+        from app.utils.match_chain import detach_match_from_chain
 
         url = tournament.url
         with app.app_context():

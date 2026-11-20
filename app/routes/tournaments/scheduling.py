@@ -28,7 +28,6 @@ from models import (
 from app.error_values import Ok, Err, Some
 from app.services.dual_write import (
     clear_match_referees,
-    get_match_referee_rows,
     get_match_refs_csv,
     get_match_refs_initial_csv,
     set_match_referees_from_csv,
@@ -38,7 +37,9 @@ from app.services.match_start_eligibility import (
     get_can_start_and_reasons,
     get_conflicting_match_on_field,
 )
+from app.services.schedule_edit_service import ScheduleEditService
 from app.services.schedule_import_export_service import ScheduleImportExportService
+from app.services.tournament_management_service import TournamentManagementService
 from app.utils.dependencies import apply_match_dependencies
 from app.utils.helpers import (
     can_head_ref_match,
@@ -54,7 +55,6 @@ from app.utils.scheduling import (
     compute_dynamic_match_nominal_start_time,
     validate_match_input,
     validate_match_warnings,
-    recompute_all_match_times,
     recompute_scheduled_and_nominal_times,
     push_back_unstarted_matches,
 )
@@ -62,7 +62,7 @@ from app.utils.datetime_helpers import now_utc_naive, parse_datetime_local_to_ut
 from app.utils.name_validation import match_name_char_error
 from app.utils.decorators import require_tournament_organizer
 from app.utils.responses import json_error
-from app.utils.result_helpers import json_from_result, public_error_message
+from app.utils.result_helpers import json_from_result, public_error_message, result_response
 from app.utils.user_helpers import is_player
 
 
@@ -85,7 +85,9 @@ from app.services.registration_resolver import (
 )
 from app.services.permission_service import PermissionService
 
-from . import bp, detach_match_from_chain, update_match_previous_link
+from app.utils.match_chain import detach_match_from_chain, update_match_previous_link
+
+from . import bp
 
 
 def _check_to(tournament_url):
@@ -817,103 +819,11 @@ def tournament_autocomplete(tournament_url):
 
 @bp.route("/<tournament_url>/validate-dsl", methods=["POST"])
 def validate_dsl(tournament_url):
-    """Validate and simplify a DSL expression.
-    Returns JSON with: valid (bool), value (the full interpreted value), simplified (str representation), error (str or None)
-    """
-    from flask import jsonify
-    from app.utils.parser import (
-        get_parser,
-        DSLValidationError,
-        Team,
-        Match,
-        SymbolicTeam,
-        SymbolicMatch,
-        Lambda,
-        Nil,
-        _format_dsl_value,
-        _infer_types,
-    )
-
-    def serialize_value(value):
-        """Convert the interpreted value to a JSON-serializable format."""
-        if isinstance(value, Nil):
-            return None
-        if isinstance(value, (int, bool)):
-            return value
-        elif isinstance(value, list):
-            return [serialize_value(item) for item in value]
-        elif isinstance(value, Team):
-            # Return team ID
-            return {"type": "team", "id": value.obj.id}
-        elif isinstance(value, Match):
-            # Return match name
-            return {"type": "match", "name": value.obj.name}
-        elif isinstance(value, SymbolicTeam):
-            # Return symbolic representation
-            return {"type": "symbolic_team", "literal": value.literal}
-        elif isinstance(value, SymbolicMatch):
-            # Return symbolic representation
-            return {"type": "symbolic_match", "literal": value.literal}
-        elif isinstance(value, Lambda):
-            # Lambda objects shouldn't appear in final results, but handle gracefully
-            return {"type": "lambda", "params": value.params}
-        else:
-            # Fallback to string representation
-            return str(value)
+    """Validate and simplify a DSL expression; see :func:`app.utils.parser.check_expression`."""
+    from app.utils.parser import check_expression
 
     data = request.get_json()
-    expression = data.get("expression", "").strip()
-
-    if not expression:
-        return jsonify({"valid": True, "value": None, "simplified": None, "error": None})
-
-    try:
-        parser = get_parser(tournament_url)
-        warnings = parser.static_check(expression)
-        result = parser.parse(expression)
-
-        # Serialize the full value for JSON response
-        serialized_value = serialize_value(result)
-
-        # Create string representation. We always send it back so the frontend can render
-        # the simplified form (with chips). Suppressing on equality hid useful previews
-        # for expressions whose literal text already happens to be in canonical form
-        # (e.g. anything containing an unset [tag::Foo] that stays symbolic).
-        simplified = _format_dsl_value(result)
-
-        # Treat unresolvable team/match references as errors so the user notices typos.
-        if warnings:
-            return jsonify(
-                {
-                    "valid": False,
-                    "value": None,
-                    "simplified": None,
-                    "error": "; ".join(warnings),
-                    "warnings": warnings,
-                }
-            )
-
-        return jsonify(
-            {
-                "valid": True,
-                "value": serialized_value,
-                "simplified": simplified,
-                "error": None,
-                "warnings": [],
-                "result_type": sorted(_infer_types(result)),
-            }
-        )
-    except DSLValidationError as e:
-        return jsonify({"valid": False, "value": None, "simplified": None, "error": str(e)})
-    except Exception as e:
-        return jsonify(
-            {
-                "valid": False,
-                "value": None,
-                "simplified": None,
-                "error": f"Parse error: {str(e)}",
-            }
-        )
+    return jsonify(check_expression(tournament_url, data.get("expression", "")))
 
 
 @bp.route("/tournaments/<tournament_url>/start-match", methods=["GET"])
@@ -1268,48 +1178,19 @@ def force_start_match_api(tournament_url, match_id):
 def update_all_references_api(tournament_url):
     if not _check_to(tournament_url):
         return jsonify({"error": "Forbidden"}), 403
-
-    completed = (
-        Match.query.filter_by(event=tournament_url)
-        .filter(Match.status.in_([MatchStatus.COMPLETED, MatchStatus.SKIPPED]))
-        .all()
-    )
-    for m in completed:
-        apply_match_dependencies(tournament_url, m)
-
+    ScheduleEditService.update_all_references(tournament_url)
     return jsonify({"success": True})
 
 
 @bp.route("/tournaments/<tournament_url>/push-back-matches", methods=["POST"])
 @login_required
 def push_back_matches_api(tournament_url):
-    from datetime import date
-
     if not _check_to(tournament_url):
         return jsonify({"error": "Forbidden"}), 403
-
-    data = request.get_json() or {}
-    try:
-        minutes = int(data.get("minutes", 0))
-    except (TypeError, ValueError):
-        return jsonify({"error": "Invalid number of minutes"}), 400
-    if not minutes:
-        return jsonify({"success": True})
-
-    day_str = (data.get("day") or "").strip()
-    if not day_str:
-        return jsonify({"error": "day is required (YYYY-MM-DD)."}), 400
-    try:
-        day = date.fromisoformat(day_str)
-    except ValueError:
-        return jsonify({"error": "day must be YYYY-MM-DD."}), 400
-    try:
-        tz_offset_minutes = int(data.get("tz_offset_minutes", 0))
-    except (TypeError, ValueError):
-        return jsonify({"error": "Invalid tz_offset_minutes"}), 400
-
-    push_back_unstarted_matches(tournament_url, minutes, day, tz_offset_minutes=tz_offset_minutes)
-    return jsonify({"success": True})
+    return result_response(
+        ScheduleEditService.push_back_matches(tournament_url, request.get_json() or {}),
+        lambda _count: {"success": True},
+    )
 
 
 @bp.route("/tournaments/<tournament_url>/update-tags", methods=["POST"])
@@ -1320,49 +1201,11 @@ def update_tags_api(tournament_url):
 
     data = request.get_json()
     tag_id = data.get("tag_id")
-
     if not tag_id:
         return jsonify({"error": "Tag required"}), 400
-
-    tag = Tag.query.filter_by(id=tag_id, event=tournament_url).first_or_404()
-    if "expression" in data:
-        from app.routes.tournaments.matches_admin import validate_tag_expression
-
-        expression, err = validate_tag_expression(tournament_url, data.get("expression"))
-        if err:
-            return jsonify({"error": err}), 400
-        tag.expression = expression
-    if "team_id" in data:
-        team_id = data.get("team_id")
-        tag.team = team_id if team_id else None
-    db.session.commit()
-
-    # Effective resolution: manual override if set, else the tag's expression.
-    effective_team = resolve_tag_to_team(f"tag::{tag.name}", tournament_url)
-
-    # Update matches
-    matches = Match.query.filter_by(event=tournament_url).all()
-    tag_ref = f"tag::{tag.name}"
-
-    for m in matches:
-        if m.status in (
-            MatchStatus.COMPLETED,
-            MatchStatus.SKIPPED,
-            MatchStatus.IN_PROGRESS,
-        ):
-            continue
-        if m.team1_initial == tag_ref:
-            m.team1 = effective_team
-        if m.team2_initial == tag_ref:
-            m.team2 = effective_team
-
-        for row in get_match_referee_rows(m):
-            if (row.initial or "").strip() == tag_ref:
-                row.team_id = effective_team
-
-    db.session.commit()
-    recompute_all_match_times(tournament_url)
-    return jsonify({"success": True})
+    return result_response(
+        TournamentManagementService.assign_tag(tournament_url, tag_id, data), lambda _tag: {"success": True}
+    )
 
 
 @bp.route("/tournaments/<tournament_url>/export-schedule", methods=["GET"])
