@@ -11,7 +11,7 @@ from app.models import validators  # noqa: F401 - registers length validators be
 from app.models import (
     constants,
 )  # noqa: F401 — re-export for ``from app.models import constants``
-from app.models.user import Player, Team, TeamManager
+from app.models.user import AccountMerge, Player, Team, TeamManager
 from app.models.registrable_config import RegistrableConfig
 from app.models.league import League
 from app.models.license import License
@@ -36,6 +36,7 @@ from app.models.normalised import (
 __all__ = [
     "db",
     "init_db",
+    "AccountMerge",
     "Player",
     "Team",
     "TeamManager",

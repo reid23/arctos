@@ -9,6 +9,7 @@ app.services
    :maxdepth: 1
 
    app.services._common
+   app.services.account_merge_service
    app.services.bracket_service
    app.services.dual_write
    app.services.frontend_shell

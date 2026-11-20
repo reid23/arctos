@@ -4220,3 +4220,44 @@ pub async fn team_management_write(path: &str, method: &str, body: &serde_json::
         .send().await.map_err(|error| error.to_string())?;
     response_json(response).await
 }
+
+pub async fn account_merge_status() -> Result<crate::types::AccountMergeStatus, String> {
+    let r = with_credentials(client().get(format!("{}/_api/account/merge", base())))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
+/// Prove the session can sign in to the account to merge into the signed-in one.
+pub async fn verify_account_merge(username: &str, password: &str) -> Result<crate::types::AccountMergeStatus, String> {
+    let body = serde_json::json!({"username": username, "password": password});
+    let r = with_credentials(client().post(format!("{}/_api/account/merge/verify", base())).json(&body))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    response_json(r).await
+}
+
+/// Merge the verified account into the signed-in one. `confirm_username` must be the other account's username.
+pub async fn merge_account(confirm_username: &str) -> Result<(), String> {
+    let body = serde_json::json!({"confirm_username": confirm_username});
+    let r = with_credentials(client().post(format!("{}/_api/account/merge", base())).json(&body))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    response_json::<Value>(r).await.map(|_| ())
+}
+
+pub async fn cancel_account_merge() -> Result<(), String> {
+    let r = with_credentials(client().delete(format!("{}/_api/account/merge", base())))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    response_json::<Value>(r).await.map(|_| ())
+}
+
+/// Starts Google sign-in that proves ownership of an account to merge, without switching accounts.
+pub fn google_account_merge_url() -> String {
+    format!("{}/_api/auth/google/login?purpose=merge", base())
+}

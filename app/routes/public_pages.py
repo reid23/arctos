@@ -55,7 +55,7 @@ _APP_NESTED = re.compile(
     r"^(?:register/(?:player|team)|auth/google/(?:choose-account-type|complete-profile)|"
     r"leagues/(?:new|[^/]+(?:/(?:register|results|settings|new-tournament|manage|invitations))?)|"
     r"players/[^/]+(?:/(?:edit|injuries/new|injuries/[0-9]+/edit))?|"
-    r"teams/[^/]+(?:/edit)?|developers/apps|oauth/authorize)$"
+    r"teams/[^/]+(?:/edit)?|developers/apps|oauth/authorize|account/merge)$"
 )
 _EVENT_WORKFLOW = re.compile(
     r"^(?P<slug>[^/]+)/(?P<workflow>schedule(?:/edit)?|results|bracket|legacy-bracket|settings|register|"
@@ -64,7 +64,7 @@ _EVENT_WORKFLOW = re.compile(
     r"match(?:/[^/]+)?|sidecomps/(?:new|[0-9]+(?:/(?:edit|register-player-as-to|enter-results|results|"
     r"manage-results))?))$"
 )
-_RESERVED_PREFIXES = frozenset({"_api", "api", "static", "assets", "auth", "oauth", "developers"})
+_RESERVED_PREFIXES = frozenset({"_api", "api", "static", "assets", "auth", "oauth", "developers", "account"})
 
 
 def _common_context(*, anonymous: bool = False) -> dict:

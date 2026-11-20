@@ -18,10 +18,12 @@ from app.models.constants import (
     AUTH_STRING_LEN,
     LONG_NAME_LEN,
     PHONE_LEN,
+    SHORT_CODE_LEN,
     SHORT_NAME_LEN,
     URL_SLUG_LEN,
     USER_ID_LEN,
 )
+from app.utils.datetime_helpers import now_utc_naive
 
 
 class Player(UserMixin, db.Model):
@@ -173,3 +175,18 @@ class TeamManager(db.Model):
     team_id = db.Column(db.String(USER_ID_LEN), db.ForeignKey("teams.id", ondelete="CASCADE"), primary_key=True)
     player_id = db.Column(db.String(USER_ID_LEN), db.ForeignKey("players.id", ondelete="CASCADE"), primary_key=True)
     __table_args__ = (db.Index("ix_team_managers_player_id", "player_id"),)
+
+
+class AccountMerge(db.Model):
+    """A player or team account merged into another account and then deleted.
+
+    A merged-away id stays reserved: nobody can register it again, so links to
+    it never show someone else, and sign-in apps that remember it (it is the
+    OpenID ``sub``) never see it reused.
+    """
+
+    __tablename__ = "account_merges"
+    source_id = db.Column(db.String(USER_ID_LEN), primary_key=True)
+    source_type = db.Column(db.String(SHORT_CODE_LEN), nullable=False)
+    target_id = db.Column(db.String(USER_ID_LEN), nullable=False, index=True)
+    merged_at = db.Column(db.DateTime, nullable=False, default=now_utc_naive)

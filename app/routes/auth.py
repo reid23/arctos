@@ -3,6 +3,8 @@ Authentication routes: logout, check-username, Google OAuth (login + callback on
 Login and register are handled by the SPA and _api.
 """
 
+import logging
+from datetime import datetime, timedelta
 from urllib.parse import urlsplit
 
 from flask import (
@@ -20,10 +22,21 @@ from flask_login import current_user, login_user, logout_user, login_required
 from models import Player, Team, db
 from app.serializers.user_serializer import user_json
 from app.utils.decorators import require_json_body
+from app.error_values import Err, Ok
+from app.exceptions import NotFoundError
+from app.services.account_merge_service import AccountMergeService
+from app.utils.datetime_helpers import now_utc_naive
 from app.utils.helpers import is_valid_url_username
+from app.utils.result_helpers import public_error_message
+from app.utils.user_helpers import is_team, username_taken
 from authlib.integrations.flask_client import OAuth
 
 bp = Blueprint("auth", __name__, url_prefix="/_api")
+
+logger = logging.getLogger(__name__)
+
+# How long proof of signing in to the other account lasts before merging.
+MERGE_VERIFICATION_LIFETIME = timedelta(minutes=15)
 
 # Initialize OAuth (will be configured in app factory)
 oauth = OAuth()
@@ -125,10 +138,7 @@ def check_username():
             }
         )
 
-    existing_player = Player.query.filter_by(id=username).first()
-    existing_team = Team.query.filter_by(id=username).first()
-
-    if existing_player or existing_team:
+    if username_taken(username):
         return jsonify({"available": False, "message": "Username already exists"})
 
     return jsonify({"available": True, "message": "Username is available"})
@@ -179,6 +189,10 @@ def google_login():
         session["login_next"] = next_path
     else:
         session.pop("login_next", None)
+    if request.args.get("purpose") == "merge" and current_user.is_authenticated:
+        session["google_merge"] = True
+    else:
+        session.pop("google_merge", None)
     redirect_uri = _google_callback_uri()
     google = oauth.google
     return google.authorize_redirect(redirect_uri, prompt="select_account")
@@ -228,6 +242,13 @@ def google_callback():
         user = Player.query.filter_by(google_id=google_id).first()
         if not user:
             user = Team.query.filter_by(google_id=google_id).first()
+
+        if session.pop("google_merge", False):
+            if user is None:
+                session["merge_sign_in_error"] = "No Arctos account uses that Google account."
+            else:
+                _remember_merge_source(user)
+            return _redirect_to_frontend(MERGE_PAGE)
 
         if user:
             _login_persistent(user)
@@ -336,7 +357,7 @@ def register():
             ),
             400,
         )
-    if Player.query.filter_by(id=username).first() or Team.query.filter_by(id=username).first():
+    if username_taken(username):
         return jsonify({"error": "Username already exists"}), 409
     if user_type == "player":
         user = Player(id=username, name=name)
@@ -436,9 +457,7 @@ def google_complete_profile_api():
                 ),
                 400,
             )
-        existing_player = Player.query.filter_by(id=username).first()
-        existing_team = Team.query.filter_by(id=username).first()
-        if existing_player or existing_team:
+        if username_taken(username):
             return jsonify({"error": "Username already exists"}), 409
         if not display_name:
             return jsonify({"error": "Display name is required"}), 400
@@ -473,3 +492,135 @@ def google_complete_profile_api():
             "suggested_name": suggested_name,
         }
     )
+
+
+MERGE_PAGE = "/account/merge"
+
+
+def _current_user_type() -> str:
+    return "team" if is_team(current_user) else "player"
+
+
+def _remember_merge_source(account) -> None:
+    """Record that this session proved it can sign in to *account*, for merging into the current user."""
+    session["merge_source"] = {
+        "id": account.id,
+        "type": "team" if isinstance(account, Team) else "player",
+        "target_id": current_user.id,
+        "verified_at": now_utc_naive().isoformat(),
+    }
+
+
+def _merge_accounts_from_session():
+    """``Ok((source, target))`` for a recent, matching sign-in to another account; ``Err`` otherwise."""
+    proof = session.get("merge_source")
+    if (
+        not proof
+        or proof.get("target_id") != current_user.id
+        or now_utc_naive() - datetime.fromisoformat(proof["verified_at"]) > MERGE_VERIFICATION_LIFETIME
+    ):
+        return Err(NotFoundError("Sign in to the account you want to merge first."))
+    source = AccountMergeService.load_account(proof["id"], proof["type"])
+    if isinstance(source, Err):
+        return source
+    target = AccountMergeService.load_account(current_user.id, _current_user_type())
+    if isinstance(target, Err):
+        return target
+    return Ok((source.val, target.val))
+
+
+def _preview_json(preview) -> dict:
+    source, target = preview.source, preview.target
+
+    def account_json(account) -> dict:
+        return {"id": account.id, "name": account.name}
+
+    if source.google_id is None:
+        google_sign_in = "none"
+    elif target.google_id is None:
+        google_sign_in = "moves"
+    else:
+        google_sign_in = "removed"
+    return {
+        "type": "team" if isinstance(source, Team) else "player",
+        "source": account_json(source),
+        "target": account_json(target),
+        "moves": [{"description": description, "count": count} for description, count in preview.moves],
+        "conflicts": preview.conflicts,
+        "source_has_password": source.pw_hash is not None,
+        "target_has_password": target.pw_hash is not None,
+        "google_sign_in": google_sign_in,
+    }
+
+
+@bp.route("/account/merge/verify", methods=["POST"])
+@login_required
+@require_json_body()
+def verify_merge_source():
+    """JSON ``{username, password}``: prove you can sign in to the account to merge -> the merge preview.
+
+    The signed-in account stays signed in; the other account is remembered in
+    the session for a few minutes.
+    """
+    username = (g.json_body.get("username") or "").strip()
+    password = g.json_body.get("password") or ""
+    account = Player.query.filter_by(id=username).first() or Team.query.filter_by(id=username).first()
+    if account is None or not account.check_password(password):
+        return jsonify({"error": "Invalid username or password"}), 401
+    _remember_merge_source(account)
+    return merge_preview()
+
+
+@bp.route("/account/merge", methods=["GET"])
+@login_required
+def merge_preview():
+    """``{"preview", "sign_in_error"}``: what merging the account this session signed in to would do.
+
+    ``preview`` is ``null`` until the user signs in to another account (or
+    after that proof expires); ``sign_in_error`` explains a failed attempt.
+    """
+    sign_in_error = session.pop("merge_sign_in_error", None)
+    preview = None
+    match _merge_accounts_from_session():
+        case Ok((source, target)):
+            match AccountMergeService.preview(source, target):
+                case Ok(merge_preview):
+                    preview = _preview_json(merge_preview)
+                case Err(err):
+                    session.pop("merge_source", None)
+                    sign_in_error = public_error_message(err)
+    return jsonify({"preview": preview, "sign_in_error": sign_in_error})
+
+
+@bp.route("/account/merge", methods=["POST"])
+@login_required
+@require_json_body()
+def merge_account():
+    """JSON ``{confirm_username}`` (the other account's username): merge it into the signed-in account."""
+    match _merge_accounts_from_session():
+        case Ok((source, target)):
+            if g.json_body.get("confirm_username") != source.id:
+                return jsonify({"error": f"Type {source.id} to confirm."}), 400
+            source_id = source.id
+            match AccountMergeService.merge(source, target):
+                case Ok(_):
+                    session.pop("merge_source", None)
+                    logger.info(
+                        "account_merged source=%s target=%s",
+                        source_id,
+                        target.id,
+                        extra={"account_merge": {"source_id": source_id, "target_id": target.id}},
+                    )
+                    return jsonify({"ok": True})
+                case Err(err):
+                    return jsonify({"error": public_error_message(err)}), err.status_code
+        case Err(err):
+            return jsonify({"error": public_error_message(err)}), err.status_code
+
+
+@bp.route("/account/merge", methods=["DELETE"])
+@login_required
+def cancel_merge():
+    """Forget the other account this session signed in to."""
+    session.pop("merge_source", None)
+    return jsonify({"ok": True})

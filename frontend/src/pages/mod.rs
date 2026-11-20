@@ -1,4 +1,5 @@
 mod about;
+mod account_merge;
 mod agents;
 mod add_injury;
 mod arctos_schedule_script;
@@ -69,6 +70,7 @@ mod tournament_settings;
 mod legacy_bracket;
 
 pub use about::About;
+pub use account_merge::AccountMerge;
 pub use agents::Agents;
 pub use add_injury::AddInjury;
 pub use arctos_schedule_script::ArctosScheduleScript;
