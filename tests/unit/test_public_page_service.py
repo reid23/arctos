@@ -10,7 +10,7 @@ from sqlalchemy import event as sqlalchemy_event
 from app.error_values import Err, Ok
 from app.services.public_page_service import PublicPageService, safe_terms_url
 from models import League, PlayerRegistration, TeamRegistration, TO, Tournament, db
-from tests.utils import make_registrable_config
+from tests.utils import make_registrable_config, mark_paid
 
 
 def make_event(slug, *, start=None, end=None, published=True, league=None, **kwargs):
@@ -82,10 +82,9 @@ def test_private_league_title_is_not_searchable_but_published_event_remains_visi
     assert detail.roster_action is None
     assert not detail.card.registration_open
     assert "/leagues/league" not in str(asdict(detail))
-    db.session.add(
-        TeamRegistration(league_id=league.url, team=team.id, pseudonym="Team", status="CONFIRMED", paid=True)
-    )
-    db.session.commit()
+    team_registration = TeamRegistration(league_id=league.url, team=team.id, pseudonym="Team", status="CONFIRMED")
+    db.session.add(team_registration)
+    mark_paid(team_registration)
     participant = event_page("public-round", team)
     assert participant.account_status.status == "CONFIRMED"
     assert participant.registration_action is None
@@ -162,20 +161,15 @@ def test_league_count_and_own_registration_are_scoped_and_batched(test_db, team,
     league = make_league(team_registration_open=True, player_registration_open=True, team_reg_fee=Decimal("12.50"))
     make_event("round-one", league=league)
     make_event("round-two", league=league)
-    db.session.add(
-        TeamRegistration(
-            league_id=league.url,
-            team=team.id,
-            pseudonym="Private nickname",
-            status="CONFIRMED",
-            paid=True,
-            amount_paid=Decimal("12.50"),
-        )
+    team_registration = TeamRegistration(
+        league_id=league.url,
+        team=team.id,
+        pseudonym="Private nickname",
+        status="CONFIRMED",
     )
-    db.session.add(
-        PlayerRegistration(league_id=league.url, player=player.id, status="PENDING_TEAM_APPROVAL", paid=False)
-    )
-    db.session.commit()
+    db.session.add(team_registration)
+    db.session.add(PlayerRegistration(league_id=league.url, player=player.id, status="PENDING_TEAM_APPROVAL"))
+    mark_paid(team_registration, 1250)
     page = event_page("round-one", team)
     assert page.card.team_count == 1
     assert page.registration_action.url == "/leagues/league/register"
@@ -200,13 +194,11 @@ def test_player_waiver_state_does_not_expose_signature_or_amount(test_db, tourna
         event=tournament.url,
         player=player.id,
         status="CONFIRMED",
-        paid=True,
-        amount_paid=Decimal("42.00"),
         waiver_legal_name_signature="Confidential legal name",
         waiver_legal_name_signature_sha256="old",
     )
     db.session.add(reg)
-    db.session.commit()
+    mark_paid(reg, 4200)
     page = event_page(tournament.url, player)
     assert page.account_status.waiver_status == "Needs updating"
     assert "Confidential legal name" not in str(asdict(page))

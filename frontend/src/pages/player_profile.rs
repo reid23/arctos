@@ -297,7 +297,11 @@ pub fn PlayerProfile(id: Signal<String>, tab: String) -> Element {
                                                         RegistrationStatusBadge { status: r.status.clone() }
                                                     }
                                                     td { class: "table-nowrap", "data-label": "Payment",
-                                                        PaymentStatusBadge { paid: r.paid }
+                                                        if r.historical {
+                                                            span { class: "text-muted", "-" }
+                                                        } else {
+                                                            PaymentStatusBadge { paid: r.paid }
+                                                        }
                                                     }
                                                     td { class: "table-nowrap", "data-label": "Waiver",
                                                         WaiverStatusBadge { required: r.waiver_required, status: r.waiver_status.clone(), show_not_required: true }

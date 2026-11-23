@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import event, text
 
+from app.services import paid_entry_service
 from models import League, Player, PlayerRegistration, Team, TeamRegistration, TO, Tournament, db
 from tests.utils import login_as, make_registrable_config
 
@@ -253,8 +254,10 @@ def test_listing_retains_user_registration_payment_waiver_and_team_counts(client
     league = add_league("registered-season", player_registration_open=True, waiver_filepath="waiver.pdf")
     db.session.add(TeamRegistration(league_id=league.url, team=team.id, pseudonym="Team", status="CONFIRMED"))
     if kind == "player":
-        db.session.add(
-            PlayerRegistration(league_id=league.url, player=player.id, status="PENDING_TEAM_APPROVAL", amount_paid=12.5)
+        registration = PlayerRegistration(league_id=league.url, player=player.id, status="PENDING_TEAM_APPROVAL")
+        db.session.add(registration)
+        paid_entry_service.record_manual_payment(
+            registration, paid=False, amount_cents=1250, method="", reference="", notes=""
         )
     db.session.commit()
     login_as(client, player if kind == "player" else team)

@@ -13,7 +13,8 @@ from dataclasses import dataclass
 from app.error_values import Err, Ok, Result
 from app.exceptions import ArctosError, NotFoundError, UnauthorizedError, ValidationError
 from app.models.validators import URL_SLUG_ALLOWED_HINT, is_valid_url_slug
-from app.services._common import resolve_actor
+from app.services import paid_entry_service
+from app.services._common import Scope, resolve_actor
 from app.services.dual_write import get_match_ref_initials, get_match_referee_rows
 from app.services.license_service import LicenseService
 from app.services.permission_service import PermissionService
@@ -287,6 +288,7 @@ class TournamentManagementService:
         if not tournament.league_id:
             PenaltyType.query.filter_by(event=tournament_url).delete(synchronize_session=False)
         HeadRef.query.filter_by(event=tournament_url).delete(synchronize_session=False)
+        paid_entry_service.delete_for_scope(Scope.event(tournament_url))
         PlayerRegistration.query.filter_by(event=tournament_url).delete(synchronize_session=False)
         TeamRegistration.query.filter_by(event=tournament_url).delete(synchronize_session=False)
         Field.query.filter_by(event=tournament_url).delete(synchronize_session=False)

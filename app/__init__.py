@@ -138,6 +138,10 @@ def create_app(config: dict | None = None) -> Flask:
     app.config["GOOGLE_CLIENT_SECRET"] = os.environ.get("GOOGLE_CLIENT_SECRET", "")
     app.config["GOOGLE_REDIRECT_URI"] = os.environ.get("GOOGLE_REDIRECT_URI", "")
 
+    app.config["STRIPE_SECRET_KEY"] = os.environ.get("STRIPE_SECRET_KEY", "")
+    app.config["STRIPE_ACCOUNT_WEBHOOK_SECRET"] = os.environ.get("STRIPE_ACCOUNT_WEBHOOK_SECRET", "")
+    app.config["STRIPE_CHECKOUT_WEBHOOK_SECRET"] = os.environ.get("STRIPE_CHECKOUT_WEBHOOK_SECRET", "")
+
     # Handle subpath deployment
     if "SCRIPT_NAME" in os.environ:
         app.config["APPLICATION_ROOT"] = os.environ["SCRIPT_NAME"]
@@ -171,6 +175,15 @@ def create_app(config: dict | None = None) -> Flask:
         ):
             raise ValueError("PUBLIC_CANONICAL_ORIGIN must be an HTTP(S) origin without path or credentials")
         app.config["PUBLIC_CANONICAL_ORIGIN"] = origin.rstrip("/")
+
+    if app.config["STRIPE_SECRET_KEY"]:
+        from app.utils.stripe_gateway import EXTENSION_KEY, StripeGateway
+
+        app.extensions[EXTENSION_KEY] = StripeGateway(
+            app.config["STRIPE_SECRET_KEY"],
+            app.config["STRIPE_ACCOUNT_WEBHOOK_SECRET"],
+            app.config["STRIPE_CHECKOUT_WEBHOOK_SECRET"],
+        )
 
     # SQLite: increase busy timeout; finalize workers and HTTP handlers share one file.
     # The same timeout is also re-asserted via PRAGMA in `set_sqlite_pragmas` below so
@@ -295,6 +308,8 @@ def create_app(config: dict | None = None) -> Flask:
     from app.routes.players import bp as players_bp
     from app.routes.teams import bp as teams_bp
     from app.routes.team_management import bp as team_management_bp
+    from app.routes.paid_entries import bp as paid_entries_bp
+    from app.routes.payments import bp as payments_bp
     from app.routes.oauth import bp as oauth_bp
     from app.routes.api_v1 import bp as api_v1_bp
 
@@ -311,6 +326,8 @@ def create_app(config: dict | None = None) -> Flask:
     app.register_blueprint(players_bp)
     app.register_blueprint(teams_bp)
     app.register_blueprint(team_management_bp)
+    app.register_blueprint(paid_entries_bp)
+    app.register_blueprint(payments_bp)
     app.register_blueprint(oauth_bp)
     app.register_blueprint(api_v1_bp)
 

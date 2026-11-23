@@ -8,7 +8,7 @@ SPA's session routes.
 
 from __future__ import annotations
 
-from flask import jsonify
+from flask import g, jsonify
 
 from app.serializers.api_v1_serializer import (
     TeamNames,
@@ -17,6 +17,8 @@ from app.serializers.api_v1_serializer import (
     scope_registrations_json,
     team_registration_json,
 )
+from app.error_values import Err, Ok
+from app.services import paid_entry_service
 from app.services._common import Scope
 from app.services.registration_service import Payment, RegistrationService
 from app.utils.helpers import get_registrable_config
@@ -48,12 +50,17 @@ def _payment_from_body() -> Payment | str:
     amount_paid = body.get("amount_paid", 0)
     if isinstance(amount_paid, bool) or not isinstance(amount_paid, (int, float)) or amount_paid < 0:
         return "amount_paid must be a nonnegative number"
+    match paid_entry_service.parse_amount_cents(str(amount_paid)):
+        case Err(_):
+            return "amount_paid must be a nonnegative number"
+        case Ok(amount_cents):
+            pass
     for key in PAYMENT_TEXT_KEYS:
         if not isinstance(body.get(key, ""), str):
             return f"{key} must be text"
     return Payment(
         paid=body["paid"],
-        amount_paid=float(amount_paid),
+        amount_cents=amount_cents,
         payment_method=body.get("payment_method", ""),
         payment_reference=body.get("payment_reference", ""),
         payment_notes=body.get("payment_notes", ""),
@@ -65,7 +72,7 @@ def _update_team_payment(scope: Scope, registration_id: int):
     if isinstance(payment, str):
         return error(payment, 400)
     return result_response(
-        RegistrationService.update_team_payment(scope, registration_id, payment),
+        RegistrationService.update_team_payment(scope, registration_id, payment, actor=g.oauth_user),
         lambda registration: {"registration": team_registration_json(registration, Team.query.get(registration.team))},
     )
 
@@ -75,7 +82,7 @@ def _update_player_payment(scope: Scope, registration_id: int, config):
     if isinstance(payment, str):
         return error(payment, 400)
     return result_response(
-        RegistrationService.update_player_payment(scope, registration_id, payment),
+        RegistrationService.update_player_payment(scope, registration_id, payment, actor=g.oauth_user),
         lambda registration: {
             "registration": player_registration_json(
                 registration, Player.query.get(registration.player), TeamNames(scope), config
@@ -167,7 +174,9 @@ def update_tournament_player_payment(tournament, registration_id: int):
 @with_organized_tournament
 def deregister_tournament_team(tournament, team_id: str):
     return result_response(
-        RegistrationService.deregister_team_as_to(scope_of(tournament), team_id), lambda _: {}, ok_status_code=204
+        RegistrationService.deregister_team_as_to(scope_of(tournament), team_id, void_entry=False, actor=g.oauth_user),
+        lambda _: {},
+        ok_status_code=204,
     )
 
 
@@ -176,7 +185,11 @@ def deregister_tournament_team(tournament, team_id: str):
 @with_organized_tournament
 def deregister_tournament_player(tournament, player_id: str):
     return result_response(
-        RegistrationService.deregister_player_as_to(scope_of(tournament), player_id), lambda _: {}, ok_status_code=204
+        RegistrationService.deregister_player_as_to(
+            scope_of(tournament), player_id, void_entry=False, actor=g.oauth_user
+        ),
+        lambda _: {},
+        ok_status_code=204,
     )
 
 
@@ -206,7 +219,11 @@ def update_league_player_payment(league, registration_id: int):
 @with_organized_league
 def deregister_league_team(league, team_id: str):
     return result_response(
-        RegistrationService.deregister_team_as_to(Scope.league(league.url), team_id), lambda _: {}, ok_status_code=204
+        RegistrationService.deregister_team_as_to(
+            Scope.league(league.url), team_id, void_entry=False, actor=g.oauth_user
+        ),
+        lambda _: {},
+        ok_status_code=204,
     )
 
 
@@ -215,7 +232,9 @@ def deregister_league_team(league, team_id: str):
 @with_organized_league
 def deregister_league_player(league, player_id: str):
     return result_response(
-        RegistrationService.deregister_player_as_to(Scope.league(league.url), player_id),
+        RegistrationService.deregister_player_as_to(
+            Scope.league(league.url), player_id, void_entry=False, actor=g.oauth_user
+        ),
         lambda _: {},
         ok_status_code=204,
     )

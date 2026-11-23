@@ -36,6 +36,7 @@ from models import (
     TeamRegistration,
     db,
 )
+from tests.utils import mark_paid
 
 
 # ---------------------------------------------------------------------------
@@ -226,16 +227,15 @@ def test_to_rejects_neither_event_nor_league(test_db, player):
 
 @pytest.mark.unit
 def test_amount_paid_is_decimal(test_db, tournament, team):
-    """TeamRegistration.amount_paid round-trips as Decimal, not float."""
+    """TeamRegistration.amount_paid totals payment cents as an exact Decimal, not float."""
     reg = TeamRegistration(
         event=tournament.url,
         team=team.id,
         pseudonym="X",
         status=TeamRegistrationStatus.CONFIRMED,
-        amount_paid=Decimal("12.34"),
     )
     db.session.add(reg)
-    db.session.commit()
+    mark_paid(reg, 1234)
 
     fetched = TeamRegistration.query.get(reg.id)
     assert fetched.amount_paid == Decimal("12.34")

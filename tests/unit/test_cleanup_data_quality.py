@@ -24,6 +24,7 @@ import cleanup_data_quality as cleanup  # noqa: E402
 
 from app.domain.enums import TeamRegistrationStatus  # noqa: E402
 from models import (  # noqa: E402
+    Payment,
     Player,
     Team,
     TeamRegistration,
@@ -290,6 +291,29 @@ def test_dedupe_apply_keeps_lowest_id_per_group(test_db, tournament, team):
     assert len(remaining) == 1
     assert remaining[0].id == kept_id
     assert remaining[0].pseudonym == "first_to_keep"
+
+
+@pytest.mark.unit
+def test_dedupe_apply_skips_leaf_rule_when_a_duplicate_has_child_rows(test_db, tournament, team):
+    """A duplicate referenced by another table is kept rather than orphaning its children."""
+    rows = [
+        TeamRegistration(
+            event=tournament.url,
+            team=team.id,
+            pseudonym=label,
+            status=TeamRegistrationStatus.CONFIRMED,
+        )
+        for label in ("first_to_keep", "paid_duplicate")
+    ]
+    db.session.add_all(rows)
+    db.session.commit()
+    db.session.add(Payment(team_registration_id=rows[1].id, amount_cents=2500))
+    db.session.commit()
+
+    counts = cleanup.delete_duplicate_rows(db.engine, apply=True)
+
+    assert counts["team_registrations(team, event)"] == 0
+    assert TeamRegistration.query.filter_by(event=tournament.url, team=team.id).count() == 2
 
 
 @pytest.mark.unit

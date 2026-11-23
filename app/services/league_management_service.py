@@ -12,7 +12,8 @@ from dataclasses import dataclass
 from app.error_values import Err, Ok, Result
 from app.exceptions import ArctosError, NotFoundError, ValidationError
 from app.models.validators import URL_SLUG_ALLOWED_HINT, is_valid_url_slug
-from app.services._common import resolve_actor
+from app.services import paid_entry_service
+from app.services._common import Scope, resolve_actor
 from app.services.license_service import LicenseService
 from app.services.permission_service import PermissionService
 from models import (
@@ -64,7 +65,8 @@ class LeagueManagementService:
         if Tournament.query.filter_by(league_id=league_url).first():
             return Err(ValidationError("Remove or delete all events (tournaments) in this league first."))
 
-        # Delete in order: registrations, penalty types, TOs, league, registrable_config
+        # Delete in order: paid entries, registrations, penalty types, TOs, league, registrable_config
+        paid_entry_service.delete_for_scope(Scope.league(league_url))
         TeamRegistration.query.filter_by(league_id=league_url).delete(synchronize_session=False)
         PlayerRegistration.query.filter_by(league_id=league_url).delete(synchronize_session=False)
         PenaltyType.query.filter_by(league_id=league_url).delete(synchronize_session=False)

@@ -5,7 +5,7 @@ from datetime import datetime
 import pytest
 
 from models import Injury, League, Player, PlayerRegistration, Team, TeamRegistration, Tournament, db
-from tests.utils import make_registrable_config
+from tests.utils import make_registrable_config, mark_paid
 
 pytestmark = pytest.mark.integration
 
@@ -66,20 +66,17 @@ def test_team_roster_matches_scope_counts_and_omits_private_registration_fields(
             )
         )
         db.session.flush()
-        db.session.add(
-            PlayerRegistration(
-                **registration_scope,
-                player=player_id,
-                team=team_id,
-                status=status,
-                jersey_name="Jersey Name",
-                jersey_number="00",
-                paid=True,
-                amount_paid=25,
-                payment_notes="Private payment note",
-                waiver_legal_name_signature="Private Legal Name",
-            )
+        registration = PlayerRegistration(
+            **registration_scope,
+            player=player_id,
+            team=team_id,
+            status=status,
+            jersey_name="Jersey Name",
+            jersey_number="00",
+            waiver_legal_name_signature="Private Legal Name",
         )
+        db.session.add(registration)
+        mark_paid(registration, 2500, notes="Private payment note")
     db.session.add(Injury(player="confirmed", message="Private injury", active=True, show=False))
     db.session.commit()
 

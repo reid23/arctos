@@ -16,6 +16,17 @@ mod change_password_card;
 mod connected_apps_card;
 mod edit_registration_modal;
 mod registration_entry;
+mod paid_entries;
+pub use paid_entries::{
+    use_scope_paid_entries, OrganizerWithdrawDialog, OrganizerWithdrawal, PaidEntryScope, PrepaidEntryNotice,
+    ScopePaidEntries, WithdrawEntryChoice,
+};
+mod payout_account;
+pub use payout_account::{OnlinePaymentsCard, PayoutAccountCard};
+mod checkout;
+pub use checkout::{
+    continue_to_checkout, registrant_kind, use_checkout_options, CheckoutFeeNotice, PayNowNotice,
+};
 mod event_about;
 mod team_registration_help_modal;
 mod event_header;

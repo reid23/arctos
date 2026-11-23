@@ -310,8 +310,6 @@ class HistoricalClaimsService:
         registration.jersey_name = (jersey_name or "").strip() or player.name
         registration.jersey_number = (jersey_number or "").strip() or None
         registration.registered_at = now_utc_naive()
-        registration.paid = True
-        registration.amount_paid = 0
         db.session.commit()
         return Ok(registration)
 
@@ -610,8 +608,6 @@ class HistoricalClaimsService:
         registration.status = RegistrationStatus.REQUESTED
         _apply_jersey(registration, player, jersey_name, jersey_number, fill_blanks=True)
         registration.registered_at = now_utc_naive()
-        registration.paid = True
-        registration.amount_paid = 0
         db.session.commit()
         return Ok(None)
 

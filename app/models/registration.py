@@ -11,6 +11,9 @@ transparently.
 
 from __future__ import annotations
 
+from datetime import datetime
+from decimal import Decimal
+
 import sqlalchemy as sa
 
 from app.models.base import db
@@ -18,7 +21,6 @@ from app.utils.datetime_helpers import now_utc_naive
 from app.models.constants import (
     SHA256_HEX_LEN,
     SHORT_CODE_LEN,
-    SHORT_LABEL_LEN,
     SHORT_NAME_LEN,
     SHORTNAME_LEN,
     URL_SLUG_LEN,
@@ -26,13 +28,44 @@ from app.models.constants import (
 )
 from app.domain.enums import RegistrationStatus, TeamRegistrationStatus
 
+CENTS_PER_UNIT = Decimal(100)
+CURRENCY_QUANTUM = Decimal("0.01")
 
-class TeamRegistration(db.Model):  # type: ignore[misc]
+
+class PaidStateMixin:
+    """Payment state derived from a registration's entry and payments.
+
+    ``applied_entry`` and ``payments`` are view-only relationships, so after
+    changing entries or payments in an open transaction, expire them on the
+    registration before reading these properties.
+    """
+
+    @property
+    def paid(self) -> bool:
+        """Whether an applied :class:`~app.models.payments.PaidEntry` covers this registration."""
+        return self.applied_entry is not None
+
+    @property
+    def amount_paid(self) -> Decimal:
+        """Manual payments plus Stripe payments for the covering entry, in currency units."""
+        entry_payments = self.applied_entry.payments if self.applied_entry is not None else []
+        total_cents = sum(payment.amount_cents for payment in self.payments) + sum(
+            payment.amount_cents for payment in entry_payments if payment.stripe_checkout_session_id is not None
+        )
+        return (Decimal(total_cents) / CENTS_PER_UNIT).quantize(CURRENCY_QUANTUM)
+
+    @property
+    def paid_at(self) -> datetime | None:
+        """When the covering entry was applied, or ``None`` while unpaid."""
+        return self.applied_entry.applied_at if self.applied_entry is not None else None
+
+
+class TeamRegistration(PaidStateMixin, db.Model):  # type: ignore[misc]
     """A team's registration in a tournament or league.
 
-    Tracks the team's pseudonym (display name for this event), confirmation
-    status, and payment details.  Either ``event`` or ``league_id`` is set,
-    never both.
+    Tracks the team's pseudonym (display name for this event) and
+    confirmation status. Payment state comes from :class:`PaidStateMixin`.
+    Either ``event`` or ``league_id`` is set, never both.
 
     Attributes:
         id: Auto-increment primary key.
@@ -46,15 +79,8 @@ class TeamRegistration(db.Model):  # type: ignore[misc]
         status: Registration status
             (:class:`~app.domain.enums.TeamRegistrationStatus`).
         registered_at: Timestamp of initial registration.
-        paid: Whether the team registration fee has been paid.
-        amount_paid: Amount paid so far (may be partial). Stored as an
-            exact ``DECIMAL(10, 2)`` value — never as a binary float —
-            so reconciliation across many partial payments matches
-            penny-for-penny.
-        paid_at: Timestamp of the most recent payment, or ``None``.
-        payment_method: How payment was made (e.g. ``"cash"``, ``"stripe"``).
-        payment_reference: Transaction ID, cheque number, etc.
-        payment_notes: Free-text payment notes.
+        applied_entry: The applied entry covering this registration.
+        payments: Payments recorded against this registration.
     """
 
     __tablename__ = "team_registrations"
@@ -69,13 +95,20 @@ class TeamRegistration(db.Model):  # type: ignore[misc]
         db.Enum(TeamRegistrationStatus), default=TeamRegistrationStatus.CONFIRMED
     )  # CONFIRMED, CANCELLED
     registered_at = db.Column(db.DateTime, default=now_utc_naive)
-    # Payment fields
-    paid = db.Column(db.Boolean, default=False)
-    amount_paid = db.Column(db.Numeric(10, 2), default=0)
-    paid_at = db.Column(db.DateTime, nullable=True)
-    payment_method = db.Column(db.String(SHORT_LABEL_LEN))  # e.g., cash, check, venmo, stripe
-    payment_reference = db.Column(db.String(SHORT_NAME_LEN))  # txn id, check #, etc
-    payment_notes = db.Column(db.Text)
+    applied_entry = db.relationship(
+        "PaidEntry",
+        primaryjoin="and_(PaidEntry.team_registration_id == TeamRegistration.id, PaidEntry.status == 'APPLIED')",
+        foreign_keys="PaidEntry.team_registration_id",
+        viewonly=True,
+        uselist=False,
+        lazy="joined",
+    )
+    payments = db.relationship(
+        "Payment",
+        primaryjoin="Payment.team_registration_id == TeamRegistration.id",
+        foreign_keys="Payment.team_registration_id",
+        viewonly=True,
+    )
 
     __table_args__ = (
         # Exactly one of (event, league_id) must be set. Mirrors the same
@@ -90,12 +123,12 @@ class TeamRegistration(db.Model):  # type: ignore[misc]
     )
 
 
-class PlayerRegistration(db.Model):  # type: ignore[misc]
+class PlayerRegistration(PaidStateMixin, db.Model):  # type: ignore[misc]
     """An individual player's registration in a tournament or league.
 
     Links a :class:`~app.models.user.Player` to an event (optionally via a
-    :class:`~app.models.user.Team`), tracking jersey details, payment, and
-    waiver signature.
+    :class:`~app.models.user.Team`), tracking jersey details and waiver
+    signature. Payment state comes from :class:`PaidStateMixin`.
 
     Attributes:
         id: Auto-increment primary key.
@@ -109,15 +142,8 @@ class PlayerRegistration(db.Model):  # type: ignore[misc]
         status: Registration lifecycle status
             (:class:`~app.domain.enums.RegistrationStatus`).
         registered_at: Timestamp of initial registration.
-        paid: Whether the player registration fee has been paid.
-        amount_paid: Amount paid so far. Stored as an exact
-            ``DECIMAL(10, 2)`` value — never as a binary float — so
-            reconciliation across many partial payments matches
-            penny-for-penny.
-        paid_at: Timestamp of the most recent payment, or ``None``.
-        payment_method: How payment was made.
-        payment_reference: Transaction ID or other reference.
-        payment_notes: Free-text payment notes.
+        applied_entry: The applied entry covering this registration.
+        payments: Payments recorded against this registration.
         waiver_legal_name_signature: The player's legal name as typed in the
             waiver signature field.  Never expose outside player/TO contexts.
         waiver_legal_name_signature_sha256: SHA-256 hex digest of the waiver
@@ -136,13 +162,20 @@ class PlayerRegistration(db.Model):  # type: ignore[misc]
     jersey_name = db.Column(db.String(SHORT_NAME_LEN))  # Player name for this tournament
     status = db.Column(db.Enum(RegistrationStatus), default=RegistrationStatus.PENDING_TEAM_APPROVAL)
     registered_at = db.Column(db.DateTime, default=now_utc_naive)
-    # Payment fields
-    paid = db.Column(db.Boolean, default=False)
-    amount_paid = db.Column(db.Numeric(10, 2), default=0)
-    paid_at = db.Column(db.DateTime, nullable=True)
-    payment_method = db.Column(db.String(SHORT_LABEL_LEN))
-    payment_reference = db.Column(db.String(SHORT_NAME_LEN))
-    payment_notes = db.Column(db.Text)
+    applied_entry = db.relationship(
+        "PaidEntry",
+        primaryjoin="and_(PaidEntry.player_registration_id == PlayerRegistration.id, PaidEntry.status == 'APPLIED')",
+        foreign_keys="PaidEntry.player_registration_id",
+        viewonly=True,
+        uselist=False,
+        lazy="joined",
+    )
+    payments = db.relationship(
+        "Payment",
+        primaryjoin="Payment.player_registration_id == PlayerRegistration.id",
+        foreign_keys="Payment.player_registration_id",
+        viewonly=True,
+    )
 
     # signature of the current waiver.
     # Never send this field to non-player/non-TO contexts.

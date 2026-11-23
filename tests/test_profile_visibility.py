@@ -5,7 +5,7 @@ from flask import g
 
 from app.domain.enums import MatchStatus
 from models import Injury, Match, Player, PlayerRegistration, Team, db
-from tests.utils import login_as
+from tests.utils import login_as, mark_paid
 
 pytestmark = pytest.mark.integration
 
@@ -68,9 +68,9 @@ def test_new_injuries_are_private_and_existing_visibility_survives_edit(client, 
 def test_active_private_injury_remains_available_in_authorized_match_setup(
     client, player, tournament, head_ref_player, seeded_teams
 ):
-    db.session.add(
-        PlayerRegistration(player=player.id, event=tournament.url, team="team1", status="CONFIRMED", paid=True)
-    )
+    registration = PlayerRegistration(player=player.id, event=tournament.url, team="team1", status="CONFIRMED")
+    db.session.add(registration)
+    mark_paid(registration)
     db.session.add_all(
         [
             Injury(player=player.id, message="Active private fixture", active=True, show=False),

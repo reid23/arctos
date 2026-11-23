@@ -1327,17 +1327,22 @@ the registration's payment details:
 {"paid": true, "amount_paid": 40, "payment_method": "venmo", "payment_reference": "8812", "payment_notes": ""}
 ```
 
-`paid` is required; the other fields default to `0` and empty. Returns
+`paid` is required; the other fields default to `0` and empty. Marking a
+registration unpaid also voids its paid entry, including one bought
+online. `amount_paid` in responses adds online payments to the recorded
+amount, and the `payment_*` fields are only the recorded ones. Returns
 `{"registration": {...}}`.
 
 #### `DELETE .../registrations/teams/{team_id}` and `DELETE .../registrations/players/{player_id}`
 
 Under `/tournaments/{tournament_id}` or `/leagues/{league_id}`. Cancels a
-confirmed team registration (with its players' registrations), or a
-pending or confirmed player registration, even when registration is
-closed. In a standalone tournament the players' side competition
-registrations are cancelled too. Returns `204`, or `404` when there is
-nothing to cancel.
+confirmed team registration, or a pending or confirmed player
+registration, even when registration is closed. A cancelled team's
+players stay registered without a team. A cancelled player's side
+competition registrations in a standalone tournament are cancelled too.
+The team or player keeps their paid entry, so they can register again
+without paying. Returns `204`, or `404` when there is nothing to
+cancel.
 
 ### Penalty types
 

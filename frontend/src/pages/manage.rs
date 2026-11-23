@@ -1,5 +1,5 @@
 use crate::api;
-use crate::components::{RequestEpoch, ToolPageHeader};
+use crate::components::{OrganizerWithdrawDialog, OrganizerWithdrawal, RequestEpoch, ToolPageHeader};
 use crate::components::{PaymentStatusBadge, RegistrationStatusBadge, WaiverStatusBadge};
 use crate::types::{
     PlayerListItem, RegisterPlayerAsToResponse, RegisterTeamAsToResponse, TeamListItem,
@@ -50,7 +50,9 @@ pub fn Manage(url: String) -> Element {
     let mut submitted_search = use_signal(|| String::new());
     let mut submitted_type = use_signal(|| "both".to_string());
     let mut refresh = use_signal(|| 0u32);
-    let deregister_error = use_signal(|| None::<String>);
+    let mut deregister_error = use_signal(|| None::<String>);
+    let mut withdrawal = use_signal(|| None::<OrganizerWithdrawal>);
+    let mut withdrawing = use_signal(|| false);
     let mut payment_error = use_signal(|| None::<String>);
     let mut payment_saved = use_signal(|| false);
     let mut payment_saving = use_signal(|| None::<(bool, u32)>);
@@ -170,9 +172,6 @@ pub fn Manage(url: String) -> Element {
             if active_tab() == ManageTab::Registrations {
                 div { class: "row mb-3",
                     div { class: "col-12",
-                        if let Some(ref err) = deregister_error() {
-                            div { class: "alert alert-danger small py-2 mb-0", "{err}" }
-                        }
                         if let Some(error) = payment_error() {
                             div { class: "alert alert-danger", role: "alert", "{error}" }
                         }
@@ -231,7 +230,7 @@ pub fn Manage(url: String) -> Element {
                                             }
                                         }
                                         tbody {
-                                            for (url_dereg, url_save, team_id_dereg, reg_id_save, team_data) in d.team_registrations.iter().map(|t| (url.clone(), url.clone(), t.registration.team.clone(), t.registration.id, t)) {
+                                            for (url_save, reg_id_save, team_data) in d.team_registrations.iter().map(|t| (url.clone(), t.registration.id, t)) {
                                                 tr { key: "{team_data.registration.id}",
                                                     td { class: "table-copy", "data-label": "Team",
                                                         a { href: "/teams/{team_data.registration.team}", class: "text-decoration-none",
@@ -248,17 +247,10 @@ pub fn Manage(url: String) -> Element {
                                                             button {
                                                                 r#type: "button",
                                                                 class: "btn btn-sm btn-outline-danger",
-                                                                onclick: move |_| {
-                                                                    let u = url_dereg.clone();
-                                                                    let tid = team_id_dereg.clone();
-                                                                    let mut deregister_error = deregister_error.clone();
-                                                                    spawn(async move {
-                                                                        deregister_error.set(None);
-                                                                        match api::deregister_any_team(&u, &tid).await {
-                                                                            Ok(_) => refresh.set(refresh() + 1),
-                                                                            Err(e) => deregister_error.set(Some(e)),
-                                                                        }
-                                                                    });
+                                                                aria_haspopup: "dialog",
+                                                                onclick: {
+                                                                    let target = OrganizerWithdrawal { is_team: true, account_id: team_data.registration.team.clone(), name: team_data.registration.pseudonym.clone(), paid: team_data.registration.paid };
+                                                                    move |_| { deregister_error.set(None); withdrawal.set(Some(target.clone())); }
                                                                 },
                                                                 "Deregister"
                                                             }
@@ -378,7 +370,7 @@ pub fn Manage(url: String) -> Element {
                                             }
                                         }
                                         tbody {
-                                            for (url_dereg, url_save, player_id_dereg, reg_id_save, player_data) in d.player_registrations.iter().map(|p| (url.clone(), url.clone(), p.registration.player.clone(), p.registration.id, p)) {
+                                            for (url_save, reg_id_save, player_data) in d.player_registrations.iter().map(|p| (url.clone(), p.registration.id, p)) {
                                                 tr { key: "{player_data.registration.id}",
                                                     td { class: "table-copy", "data-label": "Player",
                                                         a { href: "/players/{player_data.registration.player}", class: "text-decoration-none",
@@ -430,17 +422,10 @@ pub fn Manage(url: String) -> Element {
                                                             button {
                                                                 r#type: "button",
                                                                 class: "btn btn-sm btn-outline-danger",
-                                                                onclick: move |_| {
-                                                                    let u = url_dereg.clone();
-                                                                    let pid = player_id_dereg.clone();
-                                                                    let mut deregister_error = deregister_error.clone();
-                                                                    spawn(async move {
-                                                                        deregister_error.set(None);
-                                                                        match api::deregister_any_player(&u, &pid).await {
-                                                                            Ok(_) => refresh.set(refresh() + 1),
-                                                                            Err(e) => deregister_error.set(Some(e)),
-                                                                        }
-                                                                    });
+                                                                aria_haspopup: "dialog",
+                                                                onclick: {
+                                                                    let target = OrganizerWithdrawal { is_team: false, account_id: player_data.registration.player.clone(), name: player_data.player.name.clone(), paid: player_data.registration.paid };
+                                                                    move |_| { deregister_error.set(None); withdrawal.set(Some(target.clone())); }
                                                                 },
                                                                 "Deregister"
                                                             }
@@ -536,6 +521,34 @@ pub fn Manage(url: String) -> Element {
                             }
                         }
                     }
+                }
+            }
+
+            if let Some(target) = withdrawal() {
+                OrganizerWithdrawDialog { withdrawal: target.clone(), busy: withdrawing(), error: deregister_error(),
+                    on_cancel: move |_| { if !withdrawing() { withdrawal.set(None); } },
+                    on_confirm: {
+                        let tournament_url = url.clone();
+                        move |void_entry: bool| {
+                            if withdrawing() { return; }
+                            withdrawing.set(true);
+                            deregister_error.set(None);
+                            let tournament_url = tournament_url.clone();
+                            let target = target.clone();
+                            spawn(async move {
+                                let result = if target.is_team {
+                                    api::deregister_any_team(&tournament_url, &target.account_id, void_entry).await
+                                } else {
+                                    api::deregister_any_player(&tournament_url, &target.account_id, void_entry).await
+                                };
+                                match result {
+                                    Ok(_) => { withdrawal.set(None); refresh.set(refresh() + 1); }
+                                    Err(message) => deregister_error.set(Some(message)),
+                                }
+                                withdrawing.set(false);
+                            });
+                        }
+                    },
                 }
             }
 

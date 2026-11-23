@@ -44,7 +44,7 @@ SHORT_NAME_LEN: Final[int] = 100
 
 SHORT_LABEL_LEN: Final[int] = 50
 """Short labels and enumerated strings: ``PenaltyType.name``,
-``TeamRegistration.payment_method``, ``Camera.source_type``,
+``Payment.method``, ``Camera.source_type``,
 ``Camera.status``, ``SideComp.type``."""
 
 TAG_NAME_LEN: Final[int] = 50
@@ -62,8 +62,8 @@ SHORTNAME_LEN: Final[int] = 8
 
 AUTH_STRING_LEN: Final[int] = 255
 """Werkzeug password hashes, Google OAuth subject IDs, email addresses,
-and profile photo server paths — all originate from external systems
-and may be long."""
+Stripe object ids, and profile photo server paths — all originate from
+external systems and may be long."""
 
 PHONE_LEN: Final[int] = 20
 """Phone number strings (E.164 is at most 15 digits; allows headroom
@@ -77,7 +77,7 @@ SHORT_CODE_LEN: Final[int] = 10
 """Very short codes: ``PlayerRegistration.jersey_number``,
 ``TO.user_type`` (``"player"`` / ``"team"``),
 ``Camera.uploaded_by_user_type``,
-``Point.winner`` (``"TEAM1"`` / ``"TEAM2"``)."""
+``Point.winner`` (``"TEAM1"`` / ``"TEAM2"``), ISO currency codes."""
 
 # ---------------------------------------------------------------------------
 # URLs and file paths

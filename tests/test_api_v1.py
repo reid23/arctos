@@ -26,7 +26,7 @@ from models import (
     Tournament,
     db,
 )
-from tests.utils import issue_access_token, login_as, make_registrable_config
+from tests.utils import issue_access_token, login_as, make_registrable_config, mark_paid
 
 pytestmark = pytest.mark.integration
 
@@ -48,18 +48,16 @@ def world(test_db, tournament, team, team_registration, player):
         )
     )
     player.email = "player@example.com"
-    db.session.add(
-        PlayerRegistration(
-            event=tournament.url,
-            player=player.id,
-            team=team.id,
-            jersey_name="Testy",
-            jersey_number="7",
-            status="CONFIRMED",
-            paid=True,
-            amount_paid=25,
-        )
+    paid_registration = PlayerRegistration(
+        event=tournament.url,
+        player=player.id,
+        team=team.id,
+        jersey_name="Testy",
+        jersey_number="7",
+        status="CONFIRMED",
     )
+    db.session.add(paid_registration)
+    mark_paid(paid_registration, 2500)
 
     organizer = Player(id="organizer", name="Organizer", pw_hash="x")
     db.session.add(organizer)

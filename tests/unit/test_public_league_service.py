@@ -10,6 +10,7 @@ from app.error_values import Err, Ok
 from app.services.public_league_service import PublicLeagueService
 from models import TO, PlayerRegistration, TeamRegistration, db
 from tests.unit.test_public_page_service import make_event, make_league
+from tests.utils import mark_paid
 
 
 def league_page(slug, user=None, prefix=""):
@@ -94,22 +95,22 @@ def test_league_details_expose_only_own_status_and_public_registration_facts(tes
     )
     league.about = "## Season\n\nBring water. <script>unsafe()</script>"
     league.banner_photo = "uploads/league-banners/season.jpg"
+    team_registration = TeamRegistration(
+        league_id=league.url, team=team.id, pseudonym="Private nickname", status="CONFIRMED"
+    )
     db.session.add_all(
         [
-            TeamRegistration(
-                league_id=league.url, team=team.id, pseudonym="Private nickname", status="CONFIRMED", paid=True
-            ),
+            team_registration,
             PlayerRegistration(
                 league_id=league.url,
                 player=player.id,
                 status="CONFIRMED",
-                paid=False,
                 waiver_legal_name_signature="Private Signature",
                 waiver_legal_name_signature_sha256="old-hash",
             ),
         ]
     )
-    db.session.commit()
+    mark_paid(team_registration)
     anonymous = league_page(league.url, prefix="/arctos")
     assert anonymous.card.team_count == 1 and anonymous.card.max_teams == 8
     assert anonymous.registration_action.label == "Log in to register"

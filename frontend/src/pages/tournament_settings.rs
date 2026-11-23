@@ -1,5 +1,5 @@
 use crate::api;
-use crate::components::{BannerAccountKind, BannerUpload, EventBannerPhoto, LicenseKeySection, SettingsSaveActions, SettingsSaveJump, ToolPageHeader};
+use crate::components::{BannerAccountKind, BannerUpload, EventBannerPhoto, LicenseKeySection, OnlinePaymentsCard, SettingsSaveActions, SettingsSaveJump, ToolPageHeader};
 use crate::types::Tournament;
 use crate::Route;
 use dioxus::prelude::*;
@@ -1168,6 +1168,9 @@ pub fn TournamentSettings(url: String) -> Element {
                         team_allowance: d.tournament.license_team_allowance,
                         registered_teams: d.tournament.license_registered_teams,
                         inherited_league_url: d.tournament.league.as_ref().map(|league| league.league_url.clone()),
+                    }
+                    if d.tournament.league.is_none() {
+                        OnlinePaymentsCard { scope_kind: "events".to_string(), slug: url.clone() }
                     }
                     if d.tournament.league.is_none() {
                     section { class: "edit-section penalty-types-section",

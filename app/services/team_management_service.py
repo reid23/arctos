@@ -24,7 +24,7 @@ def change_roster(scope, team_id: str, registration_id: int, action: str):
             locked = db.session.execute(
                 update(TeamRegistration)
                 .filter_by(**filters, team=team_id, status=TeamRegistrationStatus.CONFIRMED)
-                .values(paid=TeamRegistration.paid)
+                .values(registered_at=TeamRegistration.registered_at)
             ).rowcount
             if not locked:
                 raise ArctosError("The team must be registered first.", status_code=409, public=True)

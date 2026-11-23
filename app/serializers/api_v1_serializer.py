@@ -603,13 +603,15 @@ def penalty_type_json(penalty_type) -> dict:
 
 
 def _payment_json(registration) -> dict:
+    """Payment state, with the details an organizer recorded on a manual payment."""
+    manual = next(iter(registration.payments), None)
     return {
-        "paid": bool(registration.paid),
-        "amount_paid": float(registration.amount_paid or 0),
+        "paid": registration.paid,
+        "amount_paid": float(registration.amount_paid),
         "paid_at": iso(registration.paid_at),
-        "payment_method": registration.payment_method or None,
-        "payment_reference": registration.payment_reference or None,
-        "payment_notes": registration.payment_notes or None,
+        "payment_method": (manual.method or None) if manual is not None else None,
+        "payment_reference": (manual.reference or None) if manual is not None else None,
+        "payment_notes": (manual.notes or None) if manual is not None else None,
     }
 
 

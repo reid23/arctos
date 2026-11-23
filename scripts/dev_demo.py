@@ -33,6 +33,7 @@ from sqlalchemy import event
 
 from app import create_app
 from app.domain.enums import MatchStatus, RegistrationStatus, ScheduleType, SetType, WinnerSide
+from app.services import paid_entry_service
 from app.services._common import Scope
 from app.services.dual_write import set_head_ref_allowlist_ids, set_match_players, set_match_referees
 from app.services.registration_service import RegistrationService
@@ -109,6 +110,17 @@ def _config() -> RegistrableConfig:
     )
 
 
+def _demo_payment(registration, *, paid: bool, amount_cents: int) -> None:
+    paid_entry_service.record_manual_payment(
+        registration,
+        paid=paid,
+        amount_cents=amount_cents if paid else 0,
+        method="Demo payment" if paid else "",
+        reference="",
+        notes="",
+    )
+
+
 def _seed(now: datetime) -> None:
     """Add fictional records; callers guarantee every reserved demo ID is free."""
     players = [
@@ -182,10 +194,7 @@ def _seed(now: datetime) -> None:
     for scope in scopes:
         for team_id, name, _location, shortname in teams:
             registration = RegistrationService.register_team(scope, team_id, name, shortname).unwrap()
-            registration.paid = team_id != "demo-owls" or scope.url == PAST_EVENT
-            registration.amount_paid = Decimal("40.00") if registration.paid else Decimal("0.00")
-            registration.paid_at = now - timedelta(days=2) if registration.paid else None
-            registration.payment_method = "Demo payment" if registration.paid else None
+            _demo_payment(registration, paid=team_id != "demo-owls" or scope.url == PAST_EVENT, amount_cents=4000)
         for index, (player_id, name, _location) in enumerate(players):
             team_id = None if player_id == ORGANIZER_ID else (TEAM_ID if index < 4 else "demo-foxes")
             registration = RegistrationService.register_player(
@@ -193,10 +202,7 @@ def _seed(now: datetime) -> None:
             ).unwrap()
             pending = player_id == PLAYER_ID and scope.url in (LIVE_EVENT, UPCOMING_EVENT)
             registration.status = RegistrationStatus.PENDING_TEAM_APPROVAL if pending else RegistrationStatus.CONFIRMED
-            registration.paid = not pending
-            registration.amount_paid = Decimal("10.00") if registration.paid else Decimal("0.00")
-            registration.paid_at = now - timedelta(days=2) if registration.paid else None
-            registration.payment_method = "Demo payment" if registration.paid else None
+            _demo_payment(registration, paid=not pending, amount_cents=1000)
         db.session.commit()
 
     _match(LIVE_EVENT, "Opening match", now - timedelta(minutes=60), MatchStatus.COMPLETED)

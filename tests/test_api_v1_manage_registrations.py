@@ -80,7 +80,7 @@ def test_tournament_registration_lifecycle(client, world):
     assert client.delete(f"{base}/teams/bears", headers=headers).status_code == 204
     listing = client.get(base, headers=headers).get_json()
     assert listing["teams"] == []
-    assert listing["players"] == []
+    assert [(player["player"]["id"], player["team"]) for player in listing["players"]] == [("jsmith", None)]
     assert client.delete(f"{base}/teams/bears", headers=headers).status_code == 404
 
 

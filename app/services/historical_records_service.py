@@ -312,8 +312,6 @@ class HistoricalRecordsService:
                 pseudonym=team.name,
                 shortname=shortname,
                 status=TeamRegistrationStatus.CONFIRMED,
-                paid=True,
-                amount_paid=0,
             )
             for team, (_name, shortname) in zip(rows, teams, strict=True)
         ]

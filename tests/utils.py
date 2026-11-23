@@ -19,6 +19,20 @@ def make_registrable_config(**kwargs) -> RegistrableConfig:
     return cfg
 
 
+def mark_paid(registration, amount_cents: int = 0, *, notes: str = ""):
+    """Record an organizer's manual payment covering *registration* and commit.
+
+    The registration must already be added to the session.
+    """
+    from app.services import paid_entry_service
+
+    paid_entry_service.record_manual_payment(
+        registration, paid=True, amount_cents=amount_cents, method="", reference="", notes=notes
+    )
+    db.session.commit()
+    return registration
+
+
 def login_as(client, user):
     """
     Log in a user for tests using Flask-Login's session keys.

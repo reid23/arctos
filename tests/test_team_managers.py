@@ -8,7 +8,7 @@ from app.services.dual_write import get_match_player_ids, set_match_players
 from app.services.permission_service import PermissionService
 from app.services.registration_resolver import player_registration_for_tournament
 from models import League, Match, Player, PlayerRegistration, Team, TeamManager, TeamRegistration, TO, Tournament, db
-from tests.utils import login_as as set_session_user, make_registrable_config
+from tests.utils import login_as as set_session_user, make_registrable_config, mark_paid
 
 
 def login_as(client, user):
@@ -52,15 +52,13 @@ def scope(request, managed):
         player=member.id,
         team=None,
         status="CONFIRMED",
-        paid=True,
-        amount_paid=25,
         jersey_name="Member",
         jersey_number="12",
         waiver_legal_name_signature="Private legal name",
         **filters,
     )
     db.session.add(registration)
-    db.session.commit()
+    mark_paid(registration, 2500)
     return kind, parent, filters, registration
 
 
@@ -201,11 +199,9 @@ def test_roster_add_remove_preserves_registration_and_private_fields(client, man
     detail = client.get(f"{base}/registration").get_json()
     assert detail["roster"][0]["player"]["id"] == member.id
     assert "private" not in str(detail).lower()
-    former = PlayerRegistration(
-        player=managed[3].id, team=team.id, status="CANCELLED", paid=True, amount_paid=10, **filters
-    )
+    former = PlayerRegistration(player=managed[3].id, team=team.id, status="CANCELLED", **filters)
     db.session.add(former)
-    db.session.commit()
+    mark_paid(former, 1000)
     former_rows = client.get(f"{base}/registration").get_json()["roster"]
     assert former_rows[-1]["status"] == "CANCELLED"
     assert former_rows[-1]["amount_paid"] == 10
