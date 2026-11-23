@@ -206,10 +206,18 @@ class SetType(StrEnum):
     Attributes:
         SETS: Winner is determined by number of sets won.
         STONES: Winner is determined by total stone count (points).
+        TIMED: Each set lasts a fixed number of minutes, stored in
+            ``stones_per_set``. Arctos records points as for ``SETS``.
     """
 
     SETS = "SETS"
     STONES = "STONES"
+    TIMED = "TIMED"
+
+
+#: Set types that store a per-set length in ``Match.stones_per_set``:
+#: stones for ``STONES``, minutes for ``TIMED``.
+SET_TYPES_WITH_SET_LENGTH: tuple[SetType, ...] = (SetType.STONES, SetType.TIMED)
 
 
 class SideCompType(StrEnum):
@@ -255,6 +263,18 @@ class Pompfen(Enum):
             return cls(int(value))
         except (TypeError, ValueError):
             return None
+
+
+# Player-profile pompfen, in display order. QWIK uses the unarmed symbol.
+PROFILE_POMPFEN: tuple[str, ...] = (
+    "CHAIN",
+    "LONG",
+    "QTIP",
+    "STAFF",
+    "BOARD",
+    "FLORENTINE",
+    "QWIK",
+)
 
 
 class WinnerSide(StrEnum):

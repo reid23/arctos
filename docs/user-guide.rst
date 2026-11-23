@@ -8,6 +8,8 @@ Arctos.
    :maxdepth: 2
 
    docs
+   support
    arctos-schedule-script
    data-accessibility-guide
    developers
+   agents

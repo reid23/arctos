@@ -37,9 +37,14 @@ and fill only the values you need.
 `ARCTOS_PUBLIC_ORIGIN`
 : Trusted canonical origin, such as `https://arctos.example.org`. Accepts an
   HTTP(S) origin with a host; credentials, paths, queries, and fragments are
-  rejected. Canonical and Open Graph URLs are generated when configured.
-  Stripe onboarding also returns players to this origin; without it, Arctos
-  uses the request's host, which is Flask's address behind `dx serve`.
+  rejected. When configured, it is the origin of canonical links, Open Graph
+  URLs and link-preview images, and the OpenID Connect issuer (the `iss` of
+  ID tokens). Without it, canonical links and preview images are omitted and
+  the issuer is the request's origin. A site served under several domains
+  sets it to the one domain that is canonical; changing it later changes the
+  issuer that sign-in clients expect. Stripe onboarding also returns players
+  to this origin; without it, Arctos uses the request's host, which is
+  Flask's address behind `dx serve`.
 
 `ARCTOS_PUBLIC_CALENDAR_TIMEZONE`
 : (default `UTC`) IANA timezone for Upcoming/Past filtering when the request
@@ -54,10 +59,6 @@ and fill only the values you need.
 `SCRIPT_NAME`
 : URL path prefix for subpath deployments. Format: leading slash, no
   trailing slash; e.g. `/arctos`.
-
-`EXTERNAL_BASE_URL`
-: Public URL where this Arctos instance is reachable. Format: absolute
-  URL without a trailing slash; e.g. `https://arctos.example.org`.
 
 `ARCTOS_LOG_LEVEL`
 : (default `INFO`) Python logging level; e.g. `DEBUG`, `INFO`,

@@ -155,10 +155,12 @@ fn page_title_for_route(route: &Route) -> String {
         Route::Terms { .. } => "Terms".into(),
         Route::Thanks { .. } => "Thanks".into(),
         Route::CheckoutReturn { .. } => "Registration payment".into(),
+        Route::Support { .. } => "Support Arctos".into(),
         Route::License { .. } => "License".into(),
         Route::ArctosScheduleScript { .. } => "Arctos Schedule Script".into(),
         Route::DataAccessibilityGuide { .. } => "Data Accessibility Guide".into(),
         Route::Developers { .. } => "For Developers".into(),
+        Route::Agents { .. } => "For AI Agents".into(),
         Route::DeveloperApps { .. } => "Your Apps".into(),
         Route::OAuthAuthorize { .. } => "Sign in with Arctos".into(),
         Route::SideCompNew { url } => format!("{url} New Side Competition"),
@@ -466,6 +468,7 @@ pub fn Layout() -> Element {
                             Link { to: Route::Docs {}, "Documentation" }
                             Link { to: Route::Developers {}, "Developers" }
                             Link { to: Route::Thanks {}, "Thanks" }
+                            Link { to: Route::Support {}, "Support" }
                             Link { to: Route::Privacy {}, "Privacy" }
                             Link { to: Route::Terms {}, "Terms" }
                             Link { to: Route::License {}, "License" }

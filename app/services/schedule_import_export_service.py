@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
+from app.domain.enums import STRUCTURAL_SCHEDULE_TYPES
 from app.error_values import Err, Ok, Result, allow_Q
 from app.exceptions import ArctosError, ValidationError
 from app.serializers.match_schedule_serializer import MatchScheduleSerializer
@@ -618,6 +619,8 @@ class ScheduleImportExportService:
     def import_schedule(
         tournament_url: str,
         toml_content: str,
+        *,
+        dry_run: bool = False,
     ) -> Result[ImportResult, ArctosError]:
         """
         Import schedule from TOML string.
@@ -629,11 +632,14 @@ class ScheduleImportExportService:
         Args:
             tournament_url: Target tournament URL
             toml_content: TOML schedule content
+            dry_run: Run every check, including expressions against the file's
+                own matches, and report the counts, then roll back instead of
+                saving.
 
         Returns:
             Result containing ImportResult with counts and errors
         """
-        from models import Field, Match, ScheduleItem, ScriptVariable, Tag, db
+        from models import BracketPlacement, Field, Match, MatchReferee, ScheduleItem, ScriptVariable, Tag, db
 
         # Parse TOML
         parsed = parse_toml_schedule(toml_content).Q()
@@ -887,6 +893,16 @@ class ScheduleImportExportService:
 
                 match_name = match_dict["name"]
 
+                # A row without a uuid updates the existing match of the same
+                # name (and field, for breaks and joins, which share names).
+                if is_same_tournament and "uuid" not in match_dict:
+                    same_name = Match.query.filter_by(event=tournament_url, name=match_name)
+                    if match_dict["schedule_type"] in STRUCTURAL_SCHEDULE_TYPES:
+                        same_name = same_name.filter_by(field=match_dict["field"])
+                    existing = same_name.first()
+                    if existing is not None:
+                        match_dict = {**match_dict, "uuid": existing.uuid}
+
                 if is_same_tournament and "uuid" in match_dict:
                     # Same tournament: update by UUID
                     match = Match.query.filter_by(uuid=match_dict["uuid"], event=tournament_url).first()
@@ -1086,14 +1102,33 @@ class ScheduleImportExportService:
                 # No fields in file -> delete all fields for this event
                 Field.query.filter_by(event=tournament_url).delete(synchronize_session=False)
 
-            # Matches: match by UUID within this tournament.
-            if kept_match_uuids:
-                Match.query.filter_by(event=tournament_url).filter(~Match.uuid.in_(kept_match_uuids)).delete(
+            # Matches: match by UUID within this tournament. Matches that have
+            # started keep their results, so the file must not leave them out.
+            omitted_matches = (
+                Match.query.filter_by(event=tournament_url).filter(~Match.uuid.in_(kept_match_uuids)).all()
+            )
+            started_names = sorted(m.name for m in omitted_matches if m.confirmed_start_time is not None)
+            if started_names:
+                db.session.rollback()
+                return Err(
+                    ValidationError(
+                        "Validation failed: the file leaves out matches that have already started: "
+                        + ", ".join(started_names)
+                    )
+                )
+            omitted_uuids = [m.uuid for m in omitted_matches]
+            if omitted_uuids:
+                MatchReferee.query.filter(MatchReferee.match_uuid.in_(omitted_uuids)).delete(synchronize_session=False)
+                BracketPlacement.query.filter(BracketPlacement.match.in_(omitted_uuids)).delete(
                     synchronize_session=False
                 )
-            else:
-                # No matches in file -> delete all matches for this event
-                Match.query.filter_by(event=tournament_url).delete(synchronize_session=False)
+                Match.query.filter(Match.previous_match.in_(omitted_uuids)).update(
+                    {"previous_match": None}, synchronize_session=False
+                )
+                Match.query.filter(Match.next_match.in_(omitted_uuids)).update(
+                    {"next_match": None}, synchronize_session=False
+                )
+                Match.query.filter(Match.uuid.in_(omitted_uuids)).delete(synchronize_session=False)
 
             db.session.flush()
 
@@ -1113,7 +1148,10 @@ class ScheduleImportExportService:
                     error_message = f"Validation failed with {len(expression_errors)} errors:\n{error_list}"
                 return Err(ValidationError(error_message))
 
-            db.session.commit()
+            if dry_run:
+                db.session.rollback()
+            else:
+                db.session.commit()
 
             result = ImportResult(
                 tags_created=tags_created,

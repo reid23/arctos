@@ -5,21 +5,35 @@ fields may be added, but never renamed, retyped, or removed. Keys are
 snake_case, timestamps are ISO-8601 UTC ending in ``Z``, and ids are the
 ones the database uses (tournament and league URL slugs, player and team
 ids, match uuids). Nothing here may expose contact details, payments,
-waivers, or private injuries; callers decide which rows are visible.
+waivers, or private injuries; callers decide which rows are visible. The
+organizer-only registration shapes are the exception: they include payment
+details and waiver status, and their routes serve them only to the scope's
+organizers.
 """
 
 from __future__ import annotations
 
 import collections
 
-from app.domain.enums import RegistrationStatus, SetType, TeamRegistrationStatus
-from app.services._common import Scope
-from app.services.dual_write import get_camera_timepoint_arrays, get_match_ref_initials, get_match_ref_team_ids
-from app.services.registration_resolver import player_registrations_for_scope, team_registrations_for_scope
+from app.domain.enums import BracketPortMode, RegistrationStatus, SetType, TeamRegistrationStatus
+from app.models.bracket import BracketImage, BracketLabeledTeam, BracketPlacement, BracketText
+from app.serializers.registration_serializer import player_reg_waiver_api
+from app.services._common import Scope, resolve_actor
+from app.services.dual_write import (
+    get_camera_timepoint_arrays,
+    get_head_ref_allowlist_ids,
+    get_match_ref_initials,
+    get_match_ref_team_ids,
+)
+from app.services.registration_resolver import (
+    player_registrations_for_scope,
+    team_registrations_for_scope,
+    to_entries_for_tournament,
+)
 from app.services.scoreboard_service import set_scores
 from app.utils.datetime_helpers import to_iso_z
 from app.utils.helpers import get_registrable_config
-from models import Camera, League, Player, PlayerRegistration, Team, TeamRegistration, Tournament
+from models import TO, Camera, League, Player, PlayerRegistration, Team, TeamRegistration, Tournament
 
 STONES_PER_SET_DEFAULT = 100
 
@@ -379,6 +393,7 @@ def side_competition_json(side_competition, registrant_count: int) -> dict:
         "track_break_losses": bool(side_competition.track_break_losses),
         "track_matchups": bool(side_competition.track_matchups),
         "results_available": side_competition.results_page_enabled(),
+        "only_show_top_n_results": side_competition.only_show_top_n_results,
         "registrant_count": registrant_count,
         "created_at": iso(side_competition.created_at),
     }
@@ -493,3 +508,211 @@ def team_registrations_json(team_id: str) -> list[dict]:
             }
         )
     return rows
+
+
+def organizers_json(organizer_entries) -> list[dict]:
+    """``{"id", "name", "type"}`` of the users in *organizer_entries* (``TO`` rows)."""
+    organizers = []
+    for entry in organizer_entries:
+        user = resolve_actor(entry.user_id, entry.user_type)
+        organizers.append({"id": entry.user_id, "name": user.name if user else entry.user_id, "type": entry.user_type})
+    return organizers
+
+
+def _registration_config_json(config, text_keys: tuple[str, ...]) -> dict:
+    """Editable registration settings, keyed like the settings ``PATCH`` body."""
+    return {
+        "team_reg_fee": config.team_reg_fee,
+        "player_reg_fee": config.player_reg_fee,
+        "team_registration_open": bool(config.team_registration_open),
+        "player_registration_open": bool(config.player_registration_open),
+        **{key: getattr(config, key) for key in text_keys},
+        "n_max_teams": config.n_max_teams,
+        "max_team_size_roster": config.max_team_size_roster,
+        "max_team_size_field": config.max_team_size_field,
+        "require_waiver_signature": bool(config.waiver_filepath),
+    }
+
+
+def _date_only(dt) -> str | None:
+    return dt.strftime("%Y-%m-%d") if dt else None
+
+
+def tournament_settings_json(tournament) -> dict:
+    """Organizer-only: every setting the tournament ``PATCH`` accepts, under the same keys.
+
+    ``registration`` is ``null`` for league events, whose registration settings are the league's.
+    """
+    config = tournament.registrable_config if not tournament.league_id else None
+    return {
+        "id": tournament.url,
+        "name": tournament.name,
+        "location": tournament.location,
+        "about": tournament.about,
+        "start_date": _date_only(tournament.start_date),
+        "end_date": _date_only(tournament.end_date),
+        "published": bool(tournament.published),
+        "schedule_published": bool(tournament.schedule_published),
+        "bracket_published": bool(tournament.bracket_published),
+        "historical": bool(tournament.historical),
+        "league": tournament.league_id,
+        "head_refs_allow_reffing_teams": bool(tournament.head_refs_allow_reffing_teams),
+        "head_refs_allow_anyone": bool(tournament.head_refs_allow_anyone),
+        "head_refs_allowed_list": ",".join(get_head_ref_allowlist_ids(tournament)),
+        "registration": _registration_config_json(config, ("terms_link",)) if config is not None else None,
+        "organizers": organizers_json(to_entries_for_tournament(tournament)),
+    }
+
+
+def league_settings_json(league) -> dict:
+    """Organizer-only: every setting the league ``PATCH`` accepts, under the same keys."""
+    return {
+        "id": league.url,
+        "name": league.name,
+        "about": league.about,
+        "published": bool(league.published),
+        "registration": _registration_config_json(league.registrable_config, ("terms_link", "payment_info")),
+        "organizers": league_organizers_json(league),
+    }
+
+
+def league_organizers_json(league) -> list[dict]:
+    return organizers_json(TO.query.filter_by(league_id=league.url).order_by(TO.id).all())
+
+
+def field_json(field) -> dict:
+    return {"id": field.id, "name": field.name}
+
+
+def tag_json(tag) -> dict:
+    """Organizer-only: a tag with its expression and manual team override."""
+    return {"id": tag.id, "name": tag.name, "expression": tag.expression, "team": tag.team}
+
+
+def script_variable_json(variable) -> dict:
+    return {"id": variable.id, "name": variable.name, "expression": variable.expression}
+
+
+def penalty_type_json(penalty_type) -> dict:
+    return {
+        "id": penalty_type.id,
+        "name": penalty_type.name,
+        "color": penalty_type.color,
+        "description": penalty_type.desc or "",
+    }
+
+
+def _payment_json(registration) -> dict:
+    """Payment state, with the details an organizer recorded on a manual payment."""
+    manual = next(iter(registration.payments), None)
+    return {
+        "paid": registration.paid,
+        "amount_paid": float(registration.amount_paid),
+        "paid_at": iso(registration.paid_at),
+        "payment_method": (manual.method or None) if manual is not None else None,
+        "payment_reference": (manual.reference or None) if manual is not None else None,
+        "payment_notes": (manual.notes or None) if manual is not None else None,
+    }
+
+
+def team_registration_json(registration, team) -> dict:
+    """Organizer view of one team registration."""
+    return {
+        "id": registration.id,
+        "team": {"id": registration.team, "name": team.name if team else registration.team},
+        "name": registration.pseudonym,
+        "shortname": registration.shortname or None,
+        "status": _enum_value(registration.status),
+        "registered_at": iso(registration.registered_at),
+        "payment": _payment_json(registration),
+    }
+
+
+def player_registration_json(registration, player, teams: TeamNames, config) -> dict:
+    """Organizer view of one player registration; ``waiver_status`` is null when no waiver is required."""
+    return {
+        "id": registration.id,
+        "player": {"id": registration.player, "name": player.name if player else registration.player},
+        "team": teams.reference(registration.team) if registration.team else None,
+        "jersey_name": registration.jersey_name,
+        "jersey_number": registration.jersey_number,
+        "status": _enum_value(registration.status),
+        "registered_at": iso(registration.registered_at),
+        "waiver_status": player_reg_waiver_api(registration, config)["waiver_status"],
+        "payment": _payment_json(registration),
+    }
+
+
+def scope_registrations_json(scope: Scope, config) -> dict:
+    """Every team registration that isn't cancelled and every pending, confirmed, or rejected player registration."""
+    team_registrations = team_registrations_for_scope(scope, exclude_cancelled=True)
+    player_registrations = player_registrations_for_scope(
+        scope,
+        statuses=[RegistrationStatus.PENDING_TEAM_APPROVAL, RegistrationStatus.CONFIRMED, RegistrationStatus.REJECTED],
+    )
+    team_ids = [r.team for r in team_registrations]
+    teams = {t.id: t for t in Team.query.filter(Team.id.in_(team_ids)).all()} if team_ids else {}
+    player_ids = [r.player for r in player_registrations]
+    players = {p.id: p for p in Player.query.filter(Player.id.in_(player_ids)).all()} if player_ids else {}
+    team_names = TeamNames(scope)
+    return {
+        "teams": [team_registration_json(r, teams.get(r.team)) for r in team_registrations],
+        "players": [
+            player_registration_json(r, players.get(r.player), team_names, config) for r in player_registrations
+        ],
+    }
+
+
+def _port_json(port) -> str:
+    return port.value if isinstance(port, BracketPortMode) else str(port)
+
+
+def bracket_layout_json(tournament) -> dict:
+    """The bracket diagram's canvas, in the shape ``PUT .../bracket/layout`` accepts."""
+    placements = BracketPlacement.query.filter_by(event=tournament.url).order_by(BracketPlacement.match).all()
+    texts = BracketText.query.filter_by(event=tournament.url).order_by(BracketText.id).all()
+    labeled_teams = BracketLabeledTeam.query.filter_by(event=tournament.url).order_by(BracketLabeledTeam.id).all()
+    images = BracketImage.query.filter_by(event=tournament.url).order_by(BracketImage.id).all()
+    return {
+        "published": bool(tournament.bracket_published),
+        "placements": [
+            {
+                "match": placement.match,
+                "placed": placement.is_placed,
+                "x_pos": placement.x_pos,
+                "y_pos": placement.y_pos,
+                "width": placement.width,
+                "height": placement.height,
+                "team1": _port_json(placement.team1),
+                "team2": _port_json(placement.team2),
+                "inputs_flipped": bool(placement.inputs_flipped),
+            }
+            for placement in placements
+        ],
+        "texts": [
+            {"id": text.id, "text": text.text or "", "x_pos": text.x_pos, "y_pos": text.y_pos, "size": text.size}
+            for text in texts
+        ],
+        "labeled_teams": [
+            {
+                "id": labeled_team.id,
+                "label": labeled_team.label or "",
+                "team": labeled_team.team,
+                "kind": _port_json(labeled_team.kind),
+                "x_pos": labeled_team.x_pos,
+                "y_pos": labeled_team.y_pos,
+            }
+            for labeled_team in labeled_teams
+        ],
+        "images": [
+            {
+                "id": image.id,
+                "image": image.image or None,
+                "x_pos": image.x_pos,
+                "y_pos": image.y_pos,
+                "width": image.width,
+                "height": image.height,
+            }
+            for image in images
+        ],
+    }

@@ -2,22 +2,16 @@
 
 from flask import jsonify, request
 from flask_login import current_user
-from sqlalchemy.exc import IntegrityError
 
+from app.error_values import Err, Ok
+from app.services import schedule_item_service
 from app.services.permission_service import PermissionService
-from app.services.schedule_item_service import schedule_item_payload, validate_schedule_item, schedule_item_matches
+from app.services.schedule_item_service import schedule_item_payload
 from app.utils.decorators import require_tournament_organizer
-from models import ScheduleItem, db
+from app.utils.result_helpers import result_response
+from models import ScheduleItem
 from . import bp
 from .read import _require_tournament
-
-
-def _creation_replay(item, values):
-    if not schedule_item_matches(item, values):
-        return jsonify(
-            {"error": "This activity was already saved. Close this form and edit it from the schedule."}
-        ), 409
-    return jsonify(schedule_item_payload(item))
 
 
 @bp.route("/tournaments/<tournament_url>/schedule-items/<int:item_id>", methods=["GET"])
@@ -34,49 +28,22 @@ def schedule_item_detail(tournament_url, item_id):
 @bp.route("/tournaments/<tournament_url>/schedule-items", methods=["POST"])
 @require_tournament_organizer()
 def create_schedule_item(tournament_url):
-    try:
-        values = validate_schedule_item(tournament_url, request.get_json(silent=True))
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    request_id = values["request_id"]
-    existing = ScheduleItem.query.filter_by(event=tournament_url, request_id=request_id).first() if request_id else None
-    if existing:
-        return _creation_replay(existing, values)
-    item = ScheduleItem(event=tournament_url, **values)
-    db.session.add(item)
-    try:
-        db.session.commit()
-    except IntegrityError:
-        db.session.rollback()
-        existing = (
-            ScheduleItem.query.filter_by(event=tournament_url, request_id=request_id).first() if request_id else None
-        )
-        if existing:
-            return _creation_replay(existing, values)
-        raise
-    return jsonify(schedule_item_payload(item)), 201
+    match schedule_item_service.create_schedule_item(tournament_url, request.get_json(silent=True)):
+        case Ok((item, created)):
+            return jsonify(schedule_item_payload(item)), 201 if created else 200
+        case Err(error):
+            return jsonify({"error": error.message}), error.status_code
 
 
 @bp.route("/tournaments/<tournament_url>/schedule-items/<int:item_id>", methods=["PUT"])
 @require_tournament_organizer()
 def update_schedule_item(tournament_url, item_id):
-    item = ScheduleItem.query.filter_by(id=item_id, event=tournament_url).first_or_404()
-    try:
-        values = validate_schedule_item(tournament_url, request.get_json(silent=True))
-    except ValueError as error:
-        return jsonify({"error": str(error)}), 400
-    values.pop("request_id", None)
-    for key, value in values.items():
-        setattr(item, key, value)
-    db.session.commit()
-    db.session.expire(item)
-    return jsonify(schedule_item_payload(item))
+    result = schedule_item_service.update_schedule_item(tournament_url, item_id, request.get_json(silent=True))
+    return result_response(result, schedule_item_payload)
 
 
 @bp.route("/tournaments/<tournament_url>/schedule-items/<int:item_id>", methods=["DELETE"])
 @require_tournament_organizer()
 def delete_schedule_item(tournament_url, item_id):
-    item = ScheduleItem.query.filter_by(id=item_id, event=tournament_url).first_or_404()
-    db.session.delete(item)
-    db.session.commit()
-    return jsonify({"success": True})
+    result = schedule_item_service.delete_schedule_item(tournament_url, item_id)
+    return result_response(result, lambda _: {"success": True})

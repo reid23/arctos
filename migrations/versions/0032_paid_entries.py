@@ -1,7 +1,7 @@
 """Prepaid registration entries replace the payment columns on registrations.
 
 Revision ID: 0032_paid_entries
-Revises: 0031_oidc
+Revises: 0032_licenses
 
 Backfill, per team or player registration outside historical tournaments:
 
@@ -27,7 +27,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = "0032_paid_entries"
-down_revision = "0031_oidc"
+down_revision = "0032_licenses"
 branch_labels = None
 depends_on = None
 

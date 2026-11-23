@@ -1,4 +1,4 @@
-use super::{ALL_POMPFEN, PompfenIcon};
+use super::{profile_pompfen, PompfenIcon};
 use dioxus::prelude::*;
 
 #[component]
@@ -17,7 +17,7 @@ pub fn PlayerPompfen(
                 legend { "Pompfen" }
                 p { id: "player-pompfen-help", class: "form-text", "Choose the pompfen and roles you play. Shown on your profile." }
                 div { class: "player-pompfen-options",
-                    for option in ALL_POMPFEN {
+                    for option in profile_pompfen() {
                         {
                             let id = option.id.to_string();
                             let current = selected.clone();
@@ -31,7 +31,9 @@ pub fn PlayerPompfen(
                                             let mut next = current.clone();
                                             if event.checked() { if !next.contains(&id) { next.push(id.clone()); } }
                                             else { next.retain(|value| value != &id); }
-                                            next.sort_by_key(|value| ALL_POMPFEN.iter().position(|option| option.id == value).unwrap_or(usize::MAX));
+                                            next.sort_by_key(|value| {
+                                                profile_pompfen().iter().position(|option| option.id == value).unwrap_or(usize::MAX)
+                                            });
                                             onchange.call(next);
                                         }
                                     }
@@ -45,7 +47,7 @@ pub fn PlayerPompfen(
             }
         } else {
             ul { class: "player-pompfen player-pompfen-list", aria_label: "Pompfen",
-                    for option in ALL_POMPFEN {
+                    for option in profile_pompfen() {
                         {
                             let chosen = selected.iter().any(|value| value == option.id);
                             rsx! {

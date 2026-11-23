@@ -15,8 +15,6 @@ from flask import Blueprint, g, request, jsonify
 from flask_login import login_required, current_user  # type: ignore[import-untyped]
 from models import (
     Tournament,
-    TeamRegistration,
-    PlayerRegistration,
     db,
 )
 from app.domain.enums import RegistrationStatus
@@ -24,7 +22,7 @@ from app.error_values import Err, Ok, Some
 from app.services import paid_entry_service
 from app.services._common import current_user_type, Scope
 from app.services.permission_service import PermissionService
-from app.services.registration_service import RegistrationService
+from app.services.registration_service import Payment, RegistrationService
 from app.serializers.league_serializer import require_league
 from app.serializers.registration_serializer import player_reg_waiver_api
 from app.utils.decorators import require_json_body, require_tournament_organizer
@@ -36,6 +34,23 @@ from app.utils.result_helpers import json_from_result
 from app.utils.datetime_helpers import now_utc_naive
 
 bp = Blueprint("registration", __name__, url_prefix="/_api")
+
+
+def _save_payment(update_payment, scope: Scope, message: str):
+    """Apply the organizer's mark-paid form through *update_payment*."""
+    match paid_entry_service.parse_amount_cents(request.form.get("amount_paid")):
+        case Err(error):
+            return jsonify({"success": False, "error": error.message}), 400
+        case Ok(amount_cents):
+            payment = Payment(
+                paid=request.form.get("paid") == "on",
+                amount_cents=amount_cents,
+                payment_method=request.form.get("payment_method", ""),
+                payment_reference=request.form.get("payment_reference", ""),
+                payment_notes=request.form.get("payment_notes", ""),
+            )
+            res = update_payment(scope, request.form.get("registration_id"), payment, actor=current_user)
+            return json_from_result(res, ok_to_payload=lambda _: {"message": message})
 
 
 @bp.route("/<tournament_url>/register-team", methods=["POST"])
@@ -248,28 +263,7 @@ def mark_team_paid(tournament_url: str):
     Returns:
         JSON ``{"success": true, "message": "..."}`` on success, or 403/404.
     """
-    Tournament.query.filter_by(url=tournament_url).first_or_404()
-    reg = TeamRegistration.query.filter_by(id=request.form.get("registration_id"), event=tournament_url).first_or_404()
-    return _save_manual_payment(reg, "Team payment updated")
-
-
-def _save_manual_payment(registration, message: str):
-    """Apply the organizer's mark-paid form to *registration* and commit."""
-    match paid_entry_service.parse_amount_cents(request.form.get("amount_paid")):
-        case Ok(amount_cents):
-            paid_entry_service.record_manual_payment(
-                registration,
-                paid=request.form.get("paid") == "on",
-                amount_cents=amount_cents,
-                method=request.form.get("payment_method", ""),
-                reference=request.form.get("payment_reference", ""),
-                notes=request.form.get("payment_notes", ""),
-                actor=current_user,
-            )
-            db.session.commit()
-            return jsonify({"success": True, "message": message}), 200
-        case Err(error):
-            return jsonify({"success": False, "error": error.message}), 400
+    return _save_payment(RegistrationService.update_team_payment, Scope.event(tournament_url), "Team payment updated")
 
 
 @bp.route("/<tournament_url>/mark-player-paid", methods=["POST"])
@@ -296,11 +290,9 @@ def mark_player_paid(tournament_url: str):
     Returns:
         JSON ``{"success": true, "message": "..."}`` on success, or 403/404.
     """
-    Tournament.query.filter_by(url=tournament_url).first_or_404()
-    reg = PlayerRegistration.query.filter_by(
-        id=request.form.get("registration_id"), event=tournament_url
-    ).first_or_404()
-    return _save_manual_payment(reg, "Player payment updated")
+    return _save_payment(
+        RegistrationService.update_player_payment, Scope.event(tournament_url), "Player payment updated"
+    )
 
 
 @bp.route("/<tournament_url>/deregister-any-team", methods=["POST"])
@@ -324,21 +316,14 @@ def deregister_any_team(tournament_url: str):
     Returns:
         JSON success or error body.
     """
-    Tournament.query.filter_by(url=tournament_url).first_or_404()
-
     team_id = request.form.get("team_id")
     if not team_id:
         return jsonify({"success": False, "error": "Team ID is required"}), 400
 
-    return json_from_result(
-        RegistrationService.deregister_team_as_organizer(
-            Scope.event(tournament_url),
-            team_id,
-            void_entry=request.form.get("void_entry") == "on",
-            actor=current_user,
-        ),
-        ok_to_payload=lambda _: {"message": "Team successfully deregistered"},
+    res = RegistrationService.deregister_team_as_to(
+        Scope.event(tournament_url), team_id, void_entry=request.form.get("void_entry") == "on", actor=current_user
     )
+    return json_from_result(res, ok_to_payload=lambda _: {"message": "Team successfully deregistered"})
 
 
 @bp.route("/<tournament_url>/deregister-any-player", methods=["POST"])
@@ -362,21 +347,14 @@ def deregister_any_player(tournament_url: str):
     Returns:
         JSON success or error body.
     """
-    Tournament.query.filter_by(url=tournament_url).first_or_404()
-
     player_id = request.form.get("player_id")
     if not player_id:
         return jsonify({"success": False, "error": "Player ID is required"}), 400
 
-    return json_from_result(
-        RegistrationService.deregister_player_as_organizer(
-            Scope.event(tournament_url),
-            player_id,
-            void_entry=request.form.get("void_entry") == "on",
-            actor=current_user,
-        ),
-        ok_to_payload=lambda _: {"message": "Player successfully deregistered"},
+    res = RegistrationService.deregister_player_as_to(
+        Scope.event(tournament_url), player_id, void_entry=request.form.get("void_entry") == "on", actor=current_user
     )
+    return json_from_result(res, ok_to_payload=lambda _: {"message": "Player successfully deregistered"})
 
 
 @bp.route("/<tournament_url>/invitation/<int:invitation_id>/accept", methods=["POST"])
@@ -881,8 +859,7 @@ def league_mark_team_paid(league_url):
             403,
         )
 
-    reg = TeamRegistration.query.filter_by(id=request.form.get("registration_id"), league_id=league_url).first_or_404()
-    return _save_manual_payment(reg, "Team payment updated")
+    return _save_payment(RegistrationService.update_team_payment, Scope.league(league_url), "Team payment updated")
 
 
 @bp.route("/leagues/<league_url>/mark-player-paid", methods=["POST"])
@@ -903,10 +880,7 @@ def league_mark_player_paid(league_url):
             403,
         )
 
-    reg = PlayerRegistration.query.filter_by(
-        id=request.form.get("registration_id"), league_id=league_url
-    ).first_or_404()
-    return _save_manual_payment(reg, "Player payment updated")
+    return _save_payment(RegistrationService.update_player_payment, Scope.league(league_url), "Player payment updated")
 
 
 @bp.route("/leagues/<league_url>/deregister-any-team", methods=["POST"])
@@ -931,15 +905,10 @@ def league_deregister_any_team(league_url):
     if not team_id:
         return jsonify({"success": False, "error": "Team ID is required"}), 400
 
-    return json_from_result(
-        RegistrationService.deregister_team_as_organizer(
-            Scope.league(league_url),
-            team_id,
-            void_entry=request.form.get("void_entry") == "on",
-            actor=current_user,
-        ),
-        ok_to_payload=lambda _: {"message": "Team successfully deregistered"},
+    res = RegistrationService.deregister_team_as_to(
+        Scope.league(league_url), team_id, void_entry=request.form.get("void_entry") == "on", actor=current_user
     )
+    return json_from_result(res, ok_to_payload=lambda _: {"message": "Team successfully deregistered"})
 
 
 @bp.route("/leagues/<league_url>/deregister-any-player", methods=["POST"])
@@ -964,15 +933,10 @@ def league_deregister_any_player(league_url):
     if not player_id:
         return jsonify({"success": False, "error": "Player ID is required"}), 400
 
-    return json_from_result(
-        RegistrationService.deregister_player_as_organizer(
-            Scope.league(league_url),
-            player_id,
-            void_entry=request.form.get("void_entry") == "on",
-            actor=current_user,
-        ),
-        ok_to_payload=lambda _: {"message": "Player successfully deregistered"},
+    res = RegistrationService.deregister_player_as_to(
+        Scope.league(league_url), player_id, void_entry=request.form.get("void_entry") == "on", actor=current_user
     )
+    return json_from_result(res, ok_to_payload=lambda _: {"message": "Player successfully deregistered"})
 
 
 @bp.route("/leagues/<league_url>/invitation/<int:invitation_id>/accept", methods=["POST"])

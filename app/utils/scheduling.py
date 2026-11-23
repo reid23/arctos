@@ -57,31 +57,6 @@ def _now_utc() -> datetime:
     return now_utc_naive()
 
 
-def _matches_share_any_team(
-    match_a: object,
-    match_b: object,
-    ref_team_ids_by_uuid: Optional[Dict[str, set]] = None,
-) -> bool:
-    """Return ``True`` if *match_a* and *match_b* share at least one team/ref.
-
-    Participant sets come from :func:`app.utils.MatchGraph._match_participant_team_ids`,
-    which reads referee assignments from the ``match_referees`` table (optionally
-    via a pre-fetched *ref_team_ids_by_uuid* map).
-
-    Args:
-        match_a: First match object.
-        match_b: Second match object.
-        ref_team_ids_by_uuid: Optional pre-fetched uuid → referee-team-ids map.
-
-    Returns:
-        ``True`` if the participant team-ID sets intersect.
-    """
-    return bool(
-        _match_participant_team_ids(match_a, ref_team_ids_by_uuid)
-        & _match_participant_team_ids(match_b, ref_team_ids_by_uuid)
-    )
-
-
 def _intervals_overlap(
     start_a: Optional[datetime],
     length_a: Optional[int],
@@ -777,8 +752,10 @@ def validate_match_warnings(tournament_url: str) -> List[dict]:
       raises ``ValueError``).
     * ``unknown_match_ref``: a ``Match::winner`` / ``::loser`` / ``previous_match``
       / skip-condition reference names a match that doesn't exist.
-    * ``double_booked``: two matches share a team (or ref) and overlap in time
-      (FAST/SAFE matches at the same nominal start; STATIC overlapping intervals).
+    * ``double_booked``: two matches share a team or ref and overlap on the
+      planned timeline. A slot with no team yet counts by its placeholder
+      (``tag::A1``, ``Semi 1::winner``), so an unassigned tag booked twice
+      is caught too.
     """
     from app.models import Team, Tournament
     from app.models.match import Match
@@ -954,10 +931,19 @@ def validate_match_warnings(tournament_url: str) -> List[dict]:
     # means the conflict only shows up on the planned timeline — that's the timeline
     # we check here. Two matches sharing a team whose scheduled intervals overlap are
     # double-booked, regardless of field or schedule type.
+    def unfilled_slot_placeholders(m) -> set[str]:
+        slots = [(m.team1, m.team1_initial), (m.team2, m.team2_initial)]
+        slots += [(row.team_id, row.initial) for row in get_match_referee_rows(m)]
+        return {initial.strip() for team_id, initial in slots if not team_id and initial and initial.strip()}
+
     ref_ids_by_uuid = referee_team_ids_by_match_uuid(matches)
+    participants_by_uuid = {
+        m.uuid: _match_participant_team_ids(m, ref_ids_by_uuid) | unfilled_slot_placeholders(m) for m in matches
+    }
     for i, m in enumerate(matches):
         for other in matches[i + 1 :]:
-            if not _matches_share_any_team(m, other, ref_ids_by_uuid):
+            shared = participants_by_uuid[m.uuid] & participants_by_uuid[other.uuid]
+            if not shared:
                 continue
             if _intervals_overlap(
                 m.scheduled_start_time,
@@ -967,7 +953,8 @@ def validate_match_warnings(tournament_url: str) -> List[dict]:
             ):
                 add(
                     "double_booked",
-                    f"Matches '{m.name}' and '{other.name}' share a team and overlap on the planned schedule.",
+                    f"Matches '{m.name}' and '{other.name}' both use {', '.join(sorted(shared))} "
+                    "and overlap on the planned schedule.",
                     [m.name, other.name],
                 )
 

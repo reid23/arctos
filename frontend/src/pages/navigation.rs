@@ -81,6 +81,7 @@ pub(super) fn main_section(route: &Route) -> Option<MainSection> {
         | Route::About { .. }
         | Route::Thanks { .. }
         | Route::CheckoutReturn { .. }
+        | Route::Support { .. }
         | Route::Docs { .. }
         | Route::Privacy { .. }
         | Route::Terms { .. }
@@ -88,6 +89,7 @@ pub(super) fn main_section(route: &Route) -> Option<MainSection> {
         | Route::ArctosScheduleScript { .. }
         | Route::DataAccessibilityGuide { .. }
         | Route::Developers { .. }
+        | Route::Agents { .. }
         | Route::DeveloperApps { .. }
         | Route::OAuthAuthorize { .. }
         | Route::NotFound { .. } => None,
@@ -270,6 +272,7 @@ mod tests {
             Route::GoogleCompleteProfile {},
             Route::About {},
             Route::Thanks {},
+            Route::Support {},
             Route::Docs {},
             Route::Privacy {},
             Route::Terms {},
@@ -277,6 +280,7 @@ mod tests {
             Route::ArctosScheduleScript {},
             Route::DataAccessibilityGuide {},
             Route::Developers {},
+            Route::Agents {},
             Route::DeveloperApps {},
             Route::OAuthAuthorize {},
             Route::ScoreboardRender {},

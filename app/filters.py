@@ -5,6 +5,7 @@ Jinja2 template filters for the tournament site.
 import json
 import re
 from datetime import timezone, timedelta
+from html import unescape
 from flask import Blueprint
 from markupsafe import Markup
 from models import TeamRegistration
@@ -178,6 +179,18 @@ def from_json(json_string: str | None) -> dict:
         return {}
 
 
+# skip_tags keeps URLs inside code from becoming links, but linkify still
+# re-escapes entities there (&lt; becomes the text &amp;lt;). One unescape
+# restores them. Cutting those tags out and linkifying the pieces separately
+# makes the parser close an open table before the cell's code.
+_CODE_REGION = re.compile(r"(<pre\b[^>]*>.*?</pre>|<code\b[^>]*>.*?</code>)", re.IGNORECASE | re.DOTALL)
+
+
+def _linkify_markdown_html(html: str) -> str:
+    linked = bleach.linkify(html, callbacks=[_markdown_link_attributes], skip_tags=["pre", "code"])
+    return _CODE_REGION.sub(lambda match: unescape(match.group(0)), linked)
+
+
 @bp.app_template_filter("markdown")
 def render_markdown(text: str | None) -> str:
     """Render Markdown to sanitised HTML.
@@ -213,7 +226,7 @@ def render_markdown(text: str | None) -> str:
 
     # Linkification alone does not sanitize raw HTML, attributes, or URLs.
     # Clean last so both Markdown and linkify output follow the same policy.
-    html = bleach.linkify(html, callbacks=[_markdown_link_attributes], skip_tags=["pre", "code"])
+    html = _linkify_markdown_html(html)
     # A Cleaner owns mutable parser state, so use one per render/request.
     html = bleach.Cleaner(
         tags=_MARKDOWN_TAGS,

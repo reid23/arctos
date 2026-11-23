@@ -378,7 +378,7 @@ def create_app(config: dict | None = None) -> Flask:
 
     def _add_public_api_cors_headers(headers):
         headers["Access-Control-Allow-Origin"] = "*"
-        headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+        headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
         headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
 
     @app.after_request

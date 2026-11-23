@@ -100,6 +100,9 @@ Top-level files:
   `migrations/env.py`.
 - `init_db.py`, `reset_password.py` - small CLI utilities (legacy;
   prefer the factory-based flow for new code).
+- `generate_license.py` - issue a voluntary license key after a manual
+  payment, list licenses by id, or change the team allowance and the
+  amount paid. Prints a new key once; the database stores only its hash.
 
 ## Running the app locally
 

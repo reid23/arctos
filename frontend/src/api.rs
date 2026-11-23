@@ -132,6 +132,45 @@ pub struct StatusResponse {
 }
 
 #[derive(serde::Deserialize)]
+struct LicenseRedeemResponse {
+    team_allowance: u32,
+}
+
+fn license_url(kind: &str, target_url: &str) -> String {
+    if kind == "league" {
+        format!("{}/_api/leagues/{}/license", base(), target_url)
+    } else {
+        format!("{}/_api/{}/license", base(), target_url)
+    }
+}
+
+pub async fn redeem_license(kind: &str, target_url: &str, key: &str) -> Result<u32, String> {
+    let response = with_credentials(
+        client()
+            .post(license_url(kind, target_url))
+            .json(&serde_json::json!({ "key": key })),
+    )
+    .send()
+    .await
+    .map_err(|error| error.to_string())?;
+    let body: LicenseRedeemResponse = response_json(response).await?;
+    Ok(body.team_allowance)
+}
+
+pub async fn clear_license(kind: &str, target_url: &str) -> Result<(), String> {
+    let response = with_credentials(client().delete(license_url(kind, target_url)))
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+    let body: StatusResponse = response_json(response).await?;
+    if body.success {
+        Ok(())
+    } else {
+        Err(body.error.unwrap_or_else(|| "Could not remove the license.".into()))
+    }
+}
+
+#[derive(serde::Deserialize)]
 pub struct CreateTournamentResponse {
     pub success: bool,
     #[allow(dead_code)]

@@ -227,8 +227,8 @@ def test_organizer_deregistration_keeps_or_voids_entry(paid_scope, team, player,
     _register_paid_team(paid_scope, team.id)
     _register_paid_player(paid_scope, player.id)
 
-    RegistrationService.deregister_team_as_organizer(paid_scope, team.id, void_entry=void_entry, actor=player).unwrap()
-    RegistrationService.deregister_player_as_organizer(
+    RegistrationService.deregister_team_as_to(paid_scope, team.id, void_entry=void_entry, actor=player).unwrap()
+    RegistrationService.deregister_player_as_to(
         paid_scope, player.id, void_entry=void_entry, actor=player
     ).unwrap()
 

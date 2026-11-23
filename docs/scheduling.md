@@ -52,6 +52,7 @@ mode has an option to display times exactly as they happened.
 |-------|------|
 | Match start / end / finalize | Live only → `recompute_all_match_times` (= `run_scheduling(scheduled_pass=False)`) |
 | Match create / edit / delete | Both → `recompute_scheduled_and_nominal_times` |
+| Tag edit / tag team assignment / script variable create, edit, delete | Live only |
 | Push-back / TOML import / app boot | Both |
 | Force-start convert to STATIC | Both (after writing the new STATIC anchor into **both** start fields) |
 
@@ -76,13 +77,19 @@ with relations as actual references like a graph. References are:
   skip-condition dependencies; both should be used for the topological
   sort, but later, when getting the end time of dependencies, non
   direct dependencies should return an end time that is actually the
-  start time of the match referenced in the `(skip-condition MATCH)`
-  command.
+  start time of the match referenced in the `(is-skipped MATCH)`
+  call.
 - cross-field **resource-conflict** edges (live pass only): a
   SAFE/FAST match depends on the latest earlier (by
   `scheduled_start_time`) match on another field that shares a
   participating team. The planned pass **omits** these edges so the
   plan cannot depend on itself through a shifting conflict edge.
+
+A tag's expression never adds an edge. A slot such as `tag::Seed 1`
+resolves to whatever team the tag holds (assigned by hand or computed from
+its expression), but the match does not wait on the matches that expression
+reads. Use
+`Match::winner` / `Match::loser` slots when a match must follow another.
 
 JOIN matches with the same name are stored as a single node, not
 multiple. They have the union of each one's dependencies.

@@ -16,6 +16,7 @@ from app.domain.enums import MatchStatus, PaidEntrySource, RegistrationStatus, T
 from app.error_values import Err, Ok, Result, Some, allow_Q
 from app.exceptions import (
     ArctosError,
+    NotFoundError,
     RegistrationClosedError,
     UnauthorizedError,
     ValidationError,
@@ -36,6 +37,17 @@ class ScopeContext:
     scope: Scope
     parent: object  # Tournament or League
     cfg: object  # registrable_config
+
+
+@dataclass(frozen=True)
+class Payment:
+    """Payment details an organizer records on a registration."""
+
+    paid: bool
+    amount_cents: int
+    payment_method: str
+    payment_reference: str
+    payment_notes: str
 
 
 class _CapExceeded(Exception):
@@ -672,62 +684,6 @@ class RegistrationService:
             SideCompService.cancel_player_registrations_in_event(scope.event_url, player_registration.player)
 
     @staticmethod
-    def deregister_team_as_organizer(
-        scope: Scope,
-        team_id: str,
-        *,
-        void_entry: bool,
-        actor,
-    ) -> Result[None, ArctosError]:
-        """Cancel any team's registration. The caller must have checked organizer rights.
-
-        The team keeps its paid entry unless *void_entry* is set.
-        """
-        from models import TeamRegistration, db
-
-        filters = {"league_id": scope.league_url} if scope.is_league else {"event": scope.event_url}
-        team_registration = TeamRegistration.query.filter_by(
-            **filters, team=team_id, status=TeamRegistrationStatus.CONFIRMED
-        ).first()
-        if team_registration is None:
-            return Err(ArctosError("Team not found or already deregistered", status_code=404, public=True))
-        match paid_entry_service.release_registration(team_registration, actor=actor):
-            case Some(entry) if void_entry:
-                paid_entry_service.void_entry(entry, actor=actor)
-        RegistrationService._cancel_team_registration(scope, team_registration)
-        db.session.commit()
-        return Ok(None)
-
-    @staticmethod
-    def deregister_player_as_organizer(
-        scope: Scope,
-        player_id: str,
-        *,
-        void_entry: bool,
-        actor,
-    ) -> Result[None, ArctosError]:
-        """Cancel any player's registration. The caller must have checked organizer rights.
-
-        The player keeps their paid entry unless *void_entry* is set.
-        """
-        from models import PlayerRegistration, db
-
-        filters = {"league_id": scope.league_url} if scope.is_league else {"event": scope.event_url}
-        player_registration = (
-            PlayerRegistration.query.filter_by(**filters, player=player_id)
-            .filter(PlayerRegistration.status.in_(paid_entry_service.ACTIVE_PLAYER_STATUSES))
-            .first()
-        )
-        if player_registration is None:
-            return Err(ArctosError("Player not found or already deregistered", status_code=404, public=True))
-        match paid_entry_service.release_registration(player_registration, actor=actor):
-            case Some(entry) if void_entry:
-                paid_entry_service.void_entry(entry, actor=actor)
-        RegistrationService._cancel_player_registration(scope, player_registration)
-        db.session.commit()
-        return Ok(None)
-
-    @staticmethod
     @allow_Q
     def deregister_player(
         scope: Scope,
@@ -813,6 +769,96 @@ class RegistrationService:
             case Err(_) as err:
                 db.session.rollback()
                 return err
+        RegistrationService._cancel_player_registration(scope, player_registration)
+        db.session.commit()
+        return Ok(None)
+
+    @staticmethod
+    def _scope_filter(scope: Scope) -> dict:
+        return {"league_id": scope.league_url} if scope.is_league else {"event": scope.event_url}
+
+    @staticmethod
+    def _update_payment(registration_model, scope: Scope, registration_id, payment: Payment, *, actor):
+        from models import db
+
+        registration = registration_model.query.filter_by(
+            id=registration_id, **RegistrationService._scope_filter(scope)
+        ).first()
+        if registration is None:
+            return Err(NotFoundError("Registration not found"))
+        paid_entry_service.record_manual_payment(
+            registration,
+            paid=payment.paid,
+            amount_cents=payment.amount_cents,
+            method=payment.payment_method,
+            reference=payment.payment_reference,
+            notes=payment.payment_notes,
+            actor=actor,
+        )
+        db.session.commit()
+        return Ok(registration)
+
+    @staticmethod
+    def update_team_payment(
+        scope: Scope, registration_id, payment: Payment, *, actor
+    ) -> Result["TeamRegistration", ArctosError]:
+        """Record an organizer's payment on a team registration in *scope*.
+
+        Marking it paid covers it with the team's paid entry, or a new manual
+        one; marking it unpaid voids the covering entry.
+        """
+        from models import TeamRegistration
+
+        return RegistrationService._update_payment(TeamRegistration, scope, registration_id, payment, actor=actor)
+
+    @staticmethod
+    def update_player_payment(
+        scope: Scope, registration_id, payment: Payment, *, actor
+    ) -> Result["PlayerRegistration", ArctosError]:
+        """Record an organizer's payment on a player registration in *scope*, like :meth:`update_team_payment`."""
+        from models import PlayerRegistration
+
+        return RegistrationService._update_payment(PlayerRegistration, scope, registration_id, payment, actor=actor)
+
+    @staticmethod
+    def deregister_team_as_to(scope: Scope, team_id: str, *, void_entry: bool, actor) -> Result[None, ArctosError]:
+        """Cancel any confirmed team registration, open or not. The caller must have checked organizer rights.
+
+        The team keeps its paid entry unless *void_entry* is set. Its players
+        stay registered without a team, and brackets stop referring to it.
+        """
+        from models import TeamRegistration, db
+
+        team_registration = TeamRegistration.query.filter_by(
+            team=team_id, status=TeamRegistrationStatus.CONFIRMED, **RegistrationService._scope_filter(scope)
+        ).first()
+        if team_registration is None:
+            return Err(NotFoundError("Team not found or already deregistered"))
+        match paid_entry_service.release_registration(team_registration, actor=actor):
+            case Some(entry) if void_entry:
+                paid_entry_service.void_entry(entry, actor=actor)
+        RegistrationService._cancel_team_registration(scope, team_registration)
+        db.session.commit()
+        return Ok(None)
+
+    @staticmethod
+    def deregister_player_as_to(scope: Scope, player_id: str, *, void_entry: bool, actor) -> Result[None, ArctosError]:
+        """Cancel a pending or confirmed player registration, open or not, like :meth:`deregister_team_as_to`.
+
+        In a standalone event this also drops the player's side competition registrations.
+        """
+        from models import PlayerRegistration, db
+
+        player_registration = (
+            PlayerRegistration.query.filter_by(player=player_id, **RegistrationService._scope_filter(scope))
+            .filter(PlayerRegistration.status.in_(paid_entry_service.ACTIVE_PLAYER_STATUSES))
+            .first()
+        )
+        if player_registration is None:
+            return Err(NotFoundError("Player not found or already deregistered"))
+        match paid_entry_service.release_registration(player_registration, actor=actor):
+            case Some(entry) if void_entry:
+                paid_entry_service.void_entry(entry, actor=actor)
         RegistrationService._cancel_player_registration(scope, player_registration)
         db.session.commit()
         return Ok(None)

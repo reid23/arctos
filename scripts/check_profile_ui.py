@@ -665,13 +665,11 @@ async def staged_profile_edit(check: SmokeCheck, page: Page, kind: str) -> None:
         await page.locator("#profile-edit-name").fill("Local profile preview")
         await page.locator("#profile-edit-location").fill("Preview City")
         await page.locator("#profile-edit-about").fill("**Unsaved preview bio**")
-        if kind == "player":
-            await page.locator("#profile-edit-phone").fill("555-0100-private")
         await preview_visible()
         await expect(page.locator("#profile-preview-name")).to_have_text("Local profile preview")
         await expect(page.locator("#profile-edit-preview .profile-location")).to_have_text("Preview City")
         await expect(page.locator(".profile-preview-content")).to_contain_text("Unsaved preview bio")
-        await expect(page.locator("#profile-edit-preview")).not_to_contain_text("555-0100-private")
+        await expect(page.locator("#profile-edit-phone")).to_have_count(0)
         await page.set_viewport_size({"width": 1280, "height": 900})
         await page.locator("#profile-edit-name").fill("Updated live name")
         await expect(page.locator("#profile-preview-name")).to_have_text("Updated live name")
@@ -871,7 +869,7 @@ async def player_identity(check: SmokeCheck, page: Page) -> None:
     async def compact_metadata(scope: str) -> None:
         header = page.locator(scope)
         icons = header.get_by_role("list", name="Pompfen", exact=True)
-        await expect(icons.locator(".player-pompfen-item")).to_have_count(8)
+        await expect(icons.locator(".player-pompfen-item")).to_have_count(7)
         await expect(icons.locator(".player-pompfen-item.is-selected")).to_have_count(2)
         await expect(icons.locator("button, input, h2, .fa-check")).to_have_count(0)
         await expect(icons.locator('[data-pompfen="CHAIN"]')).to_have_attribute("title", "Chain (selected)")
@@ -926,7 +924,10 @@ async def player_identity(check: SmokeCheck, page: Page) -> None:
         await expect(pronouns).to_have_attribute("maxlength", "64")
         await pronouns.fill("they/them")
         choices = page.locator(".player-pompfen-editor")
-        await expect(choices.get_by_role("checkbox")).to_have_count(8)
+        await expect(choices.get_by_role("checkbox")).to_have_count(7)
+        await expect(choices.get_by_role("checkbox", name="Qwik", exact=True)).to_be_visible()
+        await expect(choices.get_by_role("checkbox", name="Skull", exact=True)).to_have_count(0)
+        await expect(choices.get_by_role("checkbox", name="Unarmed", exact=True)).to_have_count(0)
         for name in ("Chain", "Staff"):
             await choices.get_by_role("checkbox", name=name, exact=True).check()
         long = choices.get_by_role("checkbox", name="Long", exact=True)
@@ -1076,6 +1077,7 @@ async def profile_markdown(check: SmokeCheck, page: Page, kind: str) -> None:
     try:
         await page.goto(check.base_url + path, wait_until="domcontentloaded")
         await rich_bio(page.locator(".profile-bio"))
+        await expect(page.locator("body")).not_to_contain_text("555-0100-private")
         await check.check_layout(page, f"{kind}-public-markdown", 320)
         check.visited += 1
         await page.goto(check.base_url + path + "/edit", wait_until="domcontentloaded")

@@ -157,8 +157,10 @@ def google_login():
 
     ``GET /_api/auth/google/login``
 
-    Redirects the user to Google's consent screen. An optional same-site
-    ``next`` path is where the user lands after signing in.  Returns an error flash
+    Redirects the user to Google, which always shows its account chooser:
+    without it, a browser signed in to one Google account is sent straight
+    back with that account, leaving no way to pick another. An optional
+    same-site ``next`` path is where the user lands after signing in.  Returns an error flash
     and a redirect to the frontend if Google OAuth is not configured.
 
     Returns:
@@ -179,7 +181,7 @@ def google_login():
         session.pop("login_next", None)
     redirect_uri = _google_callback_uri()
     google = oauth.google
-    return google.authorize_redirect(redirect_uri)
+    return google.authorize_redirect(redirect_uri, prompt="select_account")
 
 
 @bp.route("/auth/google/callback")

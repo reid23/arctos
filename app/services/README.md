@@ -60,7 +60,8 @@ The registration service provides the following key methods:
 - **`register_player_as_to(tournament_url, *, actor_user_id, actor_user_type, player_id, team_id=None, ...)`** — Register a player on behalf of a TO. The actor must be a TO for the tournament. Always returns a `CONFIRMED`, paid `PlayerRegistration`, covered by the player's own paid entry or a new `ORGANIZER` one. Existing `CANCELLED`/`REJECTED` registrations for the same (tournament, player) are reused; existing `CONFIRMED` rows return a duplicate-error. Rejects historical tournaments, whose rosters are managed by `HistoricalClaimsService`.
 - **`register_team_as_to(tournament_url, *, actor_user_id, actor_user_type, team_id, pseudonym="")`** - Register a team on behalf of a TO. The actor must be a TO for the tournament. Returns a CONFIRMED, paid `TeamRegistration`, covered like `register_player_as_to`. Honors `n_max_teams` (error message includes the count and limit). Existing `CANCELLED` rows for the same (tournament, team) are reused; existing `CONFIRMED` rows return a duplicate-error. Rejects historical tournaments, whose teams are added by `HistoricalRecordsService`.
 - **`deregister_team(scope, team_id, *, transfer_to=None, actor=None)`** / **`deregister_player(scope, player_id, *, transfer_to=None, actor=None)`** — Cancel the caller's own registration. The paid entry stays with the holder for re-registration, or moves to `transfer_to`. A team's roster stays registered as unattached players.
-- **`deregister_team_as_organizer(scope, team_id, *, void_entry, actor)`** / **`deregister_player_as_organizer(...)`** — Cancel any registration; the route checks organizer rights. The entry stays with the registrant unless `void_entry` is set.
+- **`deregister_team_as_to(scope, team_id, *, void_entry, actor)`** / **`deregister_player_as_to(...)`** — Cancel any registration; the route checks organizer rights. The entry stays with the registrant unless `void_entry` is set.
+- **`update_team_payment(scope, registration_id, payment, *, actor)`** / **`update_player_payment(...)`** — Apply an organizer's payment edit through `paid_entry_service.record_manual_payment`.
 
 ## Paid entries
 
@@ -203,6 +204,16 @@ them.
    import) - keep the boundary clean.
 5. Write a unit test in `tests/unit/`, plus an integration test that
    hits the route that wraps it.
+
+## Licenses
+
+[`license_service.py`](license_service.py) issues a key after a manual payment
+and attaches it to one standalone event or one league. The secret half of the
+key is hashed like a password. `generate_license.py` lists licenses by id and
+can change how many teams one covers or how much was paid. Those amounts are
+entered, not calculated from each other. Routes in `tournaments/licenses.py` and
+`leagues.py` are the only writers an organizer can reach. A license counts as
+valid when its allowance covers the confirmed team registrations.
 
 ## Example: starting a match
 

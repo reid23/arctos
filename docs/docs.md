@@ -37,7 +37,6 @@ Overview
 
 For Players
 
- - [Phone Number](#phone-number)
  - [Logging Injuries](#logging-injuries)
 
 For Head Refs
@@ -403,11 +402,6 @@ Penalties are visible to:
 
 ---
 
-## Phone Number
-
-A player can store a phone number in Edit profile. It is not shown on the public
-profile. Arctos does not currently send match or schedule notifications to it.
-
 ## Logging Injuries
 
 Add injuries from your profile's Injuries section. New injuries are private by
@@ -663,6 +657,13 @@ results, completed the rankings, and updated the tags accordingly.
 Tags let you apply the seeding rules for your event. The Results tab
 also provides calculated standings, described below; it does not set
 tags or advance teams through a bracket.
+
+A tag can also fill itself in. Give it an Arctos Schedule Script expression
+such as `(winner {Semi A})` and it takes that team once the expression can
+be evaluated; a team assigned by hand overrides it. See
+[Tags as Expressions](arctos-schedule-script.md#tags-as-expressions). Script
+variables, defined under **Scripting**, are named expressions that tags,
+skip conditions, and other variables can share.
 
 
 ### Static Scheduling
