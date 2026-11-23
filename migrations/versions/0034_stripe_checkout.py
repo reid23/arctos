@@ -32,7 +32,6 @@ def _payments_table_sql(*, with_stripe: bool) -> str:
         "stripe_payment_intent_id VARCHAR(255), "
         "stripe_account_id VARCHAR(255), "
         "currency VARCHAR(10), "
-        "application_fee_cents INTEGER DEFAULT '0' NOT NULL, "
         "payer_user_id VARCHAR(50), "
         "payer_user_type VARCHAR(10), "
         if with_stripe
@@ -93,11 +92,11 @@ def upgrade():
         sa.Column("player_registration_id", sa.Integer(), sa.ForeignKey("player_registrations.id"), nullable=True),
         sa.Column("amount_cents", sa.Integer(), nullable=False),
         sa.Column("currency", sa.String(10), nullable=False),
-        sa.Column("application_fee_cents", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("status", sa.String(9), nullable=False),
         sa.Column("failure_message", sa.Text(), nullable=True),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.Column("expires_at", sa.DateTime(), nullable=False),
+        sa.Column("submitted_at", sa.DateTime(), nullable=True),
         sa.Column("completed_at", sa.DateTime(), nullable=True),
         sa.CheckConstraint(
             "(event IS NOT NULL AND league_id IS NULL) OR (event IS NULL AND league_id IS NOT NULL)",

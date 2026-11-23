@@ -97,8 +97,9 @@ unaffected.
 - `start_checkout` validates the registration form, expires the
   registrant's previous checkout, and creates a session as a direct charge
   on the organizer's payout account plus a `CheckoutHold`. An open hold for
-  a new team registration takes a place under `n_max_teams` until it
-  expires. A registrant with an unpaid registration pays for it instead
+  a new team registration takes a place under `n_max_teams` until Stripe
+  reports it expired, at most `EXPIRY_GRACE` past its expiry, or, once a
+  delayed payment is submitted, until that payment settles. A registrant with an unpaid registration pays for it instead
   ("pay now").
 - `fulfill` runs from the checkout webhook and from the return page
   (`sync`), once per hold. It commits the `Payment` and a `STRIPE` entry,

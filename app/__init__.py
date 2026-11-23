@@ -141,7 +141,6 @@ def create_app(config: dict | None = None) -> Flask:
     app.config["STRIPE_SECRET_KEY"] = os.environ.get("STRIPE_SECRET_KEY", "")
     app.config["STRIPE_ACCOUNT_WEBHOOK_SECRET"] = os.environ.get("STRIPE_ACCOUNT_WEBHOOK_SECRET", "")
     app.config["STRIPE_CHECKOUT_WEBHOOK_SECRET"] = os.environ.get("STRIPE_CHECKOUT_WEBHOOK_SECRET", "")
-    app.config["STRIPE_PLATFORM_FEE_BPS"] = int(os.environ.get("STRIPE_PLATFORM_FEE_BPS", "0"))
 
     # Handle subpath deployment
     if "SCRIPT_NAME" in os.environ:
@@ -177,8 +176,6 @@ def create_app(config: dict | None = None) -> Flask:
             raise ValueError("PUBLIC_CANONICAL_ORIGIN must be an HTTP(S) origin without path or credentials")
         app.config["PUBLIC_CANONICAL_ORIGIN"] = origin.rstrip("/")
 
-    if not 0 <= app.config["STRIPE_PLATFORM_FEE_BPS"] < 10_000:
-        raise ValueError("STRIPE_PLATFORM_FEE_BPS must be at least 0 and below 10000")
     if app.config["STRIPE_SECRET_KEY"]:
         from app.utils.stripe_gateway import EXTENSION_KEY, StripeGateway
 

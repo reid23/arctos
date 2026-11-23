@@ -179,13 +179,13 @@ class StripeGateway:
         amount_cents: int,
         currency: str,
         product_name: str,
-        application_fee_cents: int,
         customer_email: str | None,
+        submit_message: str | None,
         success_url: str,
         cancel_url: str,
         expires_at: datetime,
     ) -> CheckoutSession:
-        """Start a direct charge on *stripe_account_id*; the platform keeps *application_fee_cents*."""
+        """Start a direct charge on *stripe_account_id* for the full amount."""
         params = {
             "mode": "payment",
             "line_items": [
@@ -203,10 +203,10 @@ class StripeGateway:
             "cancel_url": cancel_url,
             "expires_at": int(expires_at.replace(tzinfo=timezone.utc).timestamp()),
         }
-        if application_fee_cents > 0:
-            params["payment_intent_data"]["application_fee_amount"] = application_fee_cents
         if customer_email:
             params["customer_email"] = customer_email
+        if submit_message:
+            params["custom_text"] = {"submit": {"message": submit_message}}
         with _stripe_errors():
             session = self._client.v1.checkout.sessions.create(params, {"stripe_account": stripe_account_id})
         return _checkout_session(session, stripe_account_id)

@@ -161,7 +161,6 @@ class Payment(db.Model):  # type: ignore[misc]
         stripe_payment_intent_id: Stripe PaymentIntent behind that session.
         stripe_account_id: Connected account the payment was charged on.
         currency: Lowercase ISO currency code of a Stripe payment.
-        application_fee_cents: The platform's fee from a Stripe payment.
         payer_user_id: Account that paid through Stripe.
         payer_user_type: ``"player"`` or ``"team"`` for ``payer_user_id``.
         created_at: When the payment was first recorded.
@@ -182,7 +181,6 @@ class Payment(db.Model):  # type: ignore[misc]
     stripe_payment_intent_id = db.Column(db.String(AUTH_STRING_LEN), nullable=True)
     stripe_account_id = db.Column(db.String(AUTH_STRING_LEN), nullable=True)
     currency = db.Column(db.String(SHORT_CODE_LEN), nullable=True)
-    application_fee_cents = db.Column(db.Integer, default=0, nullable=False)
     payer_user_id = db.Column(db.String(USER_ID_LEN), nullable=True)
     payer_user_type = db.Column(db.String(SHORT_CODE_LEN), nullable=True)
     created_at = db.Column(db.DateTime, default=now_utc_naive, nullable=False)
@@ -204,8 +202,10 @@ class CheckoutHold(db.Model):  # type: ignore[misc]
     """A Stripe Checkout Session in progress for one registrant.
 
     The hold keeps the registration form so the registration can complete
-    when the payment does, and, for a new team registration, holds a place
-    under the team cap until ``expires_at``. A pay-now hold names the
+    when the payment does. For a new team registration, it holds a place
+    under the team cap while open, until ``expires_at`` plus a grace
+    period for Stripe's expiry event to arrive, or indefinitely once the
+    payer has submitted a payment that is still processing. A pay-now hold names the
     existing registration it pays for instead. At most one hold per
     registrant and scope is ``OPEN``. Write holds only through
     :mod:`app.services.checkout_service`.
@@ -227,12 +227,13 @@ class CheckoutHold(db.Model):  # type: ignore[misc]
             is for.
         amount_cents: Amount charged, in cents.
         currency: Lowercase ISO currency code.
-        application_fee_cents: The platform's fee.
         status: :class:`~app.domain.enums.CheckoutHoldStatus`.
         failure_message: Why the registration couldn't complete after
             payment, shown to the payer.
         created_at: When the checkout started.
         expires_at: When Stripe expires the session.
+        submitted_at: When Arctos learned that the payer submitted a payment
+            that hasn't settled yet, for delayed payment methods.
         completed_at: When the payment was recorded.
     """
 
@@ -253,11 +254,11 @@ class CheckoutHold(db.Model):  # type: ignore[misc]
     player_registration_id = db.Column(db.Integer, db.ForeignKey("player_registrations.id"), nullable=True)
     amount_cents = db.Column(db.Integer, nullable=False)
     currency = db.Column(db.String(SHORT_CODE_LEN), nullable=False)
-    application_fee_cents = db.Column(db.Integer, default=0, nullable=False)
     status = db.Column(db.Enum(CheckoutHoldStatus), nullable=False)
     failure_message = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=now_utc_naive, nullable=False)
     expires_at = db.Column(db.DateTime, nullable=False)
+    submitted_at = db.Column(db.DateTime, nullable=True)
     completed_at = db.Column(db.DateTime, nullable=True)
 
     __table_args__ = (

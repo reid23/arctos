@@ -133,7 +133,7 @@ def test_checkout_charges_the_organizer_account_and_keeps_the_form(client, team,
     assert response.get_json()["url"] == "https://checkout.stripe.test/cs_1"
     request = stripe_gateway.checkout_requests[0]
     assert request["stripe_account_id"] == "acct_1"
-    assert (request["amount_cents"], request["currency"], request["application_fee_cents"]) == (1000, "usd", 0)
+    assert (request["amount_cents"], request["currency"]) == (1000, "usd")
     assert request["success_url"].endswith("/checkout/{CHECKOUT_SESSION_ID}")
     assert request["cancel_url"].endswith("/test-tournament/register")
     hold = CheckoutHold.query.one()
@@ -143,16 +143,6 @@ def test_checkout_charges_the_organizer_account_and_keeps_the_form(client, team,
         "Paid Team",
     )
     assert _team_registration(team.id) is None
-
-
-def test_platform_fee_comes_from_config(client, app, team, paid_tournament, stripe_gateway, monkeypatch):
-    monkeypatch.setitem(app.config, "STRIPE_PLATFORM_FEE_BPS", 250)
-    login_as(client, team)
-
-    _start_team_checkout(client)
-
-    assert stripe_gateway.checkout_requests[0]["application_fee_cents"] == 25
-    assert CheckoutHold.query.one().application_fee_cents == 25
 
 
 def test_checkout_validates_the_form_first(client, team, paid_tournament, stripe_gateway):
@@ -208,22 +198,104 @@ def test_only_the_payer_or_registrant_sees_a_checkout(client, team, player, paid
     assert client.post("/_api/payments/checkouts/cs_1/sync").status_code == 404
 
 
-def test_open_team_checkouts_hold_places_under_the_cap(client, team, paid_tournament, stripe_gateway):
+def _age_hold(session_id, age):
+    """Move a hold's start *age* into the past."""
+    hold = CheckoutHold.query.filter_by(stripe_session_id=session_id).one()
+    hold.expires_at -= age
+    db.session.commit()
+
+
+def _one_team_place(paid_tournament):
     paid_tournament.registrable_config.n_max_teams = 1
     db.session.commit()
-    other = _team("other_team")
+    return _team("other_team")
+
+
+def test_open_team_checkouts_hold_places_through_the_expiry_grace(client, team, paid_tournament, stripe_gateway):
+    other = _one_team_place(paid_tournament)
     login_as(client, team)
     _start_team_checkout(client)
 
     login_as(client, other)
     blocked = _start_team_checkout(client, pseudonym="Other")
-    CheckoutHold.query.one().expires_at -= checkout_service.CHECKOUT_LIFETIME + timedelta(minutes=1)
-    db.session.commit()
-    after_expiry = _start_team_checkout(client, pseudonym="Other")
+    _age_hold("cs_1", checkout_service.CHECKOUT_LIFETIME + timedelta(minutes=1))
+    in_grace = _start_team_checkout(client, pseudonym="Other")
+    _age_hold("cs_1", checkout_service.EXPIRY_GRACE)
+    after_grace = _start_team_checkout(client, pseudonym="Other")
+
+    assert blocked.status_code == in_grace.status_code == 400
+    assert "Maximum number of teams (1)" in blocked.get_json()["error"]
+    assert after_grace.status_code == 200
+
+
+def test_stripe_expiry_releases_a_place_before_the_grace_ends(client, team, paid_tournament, stripe_gateway):
+    other = _one_team_place(paid_tournament)
+    login_as(client, team)
+    _start_team_checkout(client)
+    _age_hold("cs_1", checkout_service.CHECKOUT_LIFETIME + timedelta(minutes=1))
+    stripe_gateway.expire_checkout_session("acct_1", "cs_1")
+
+    _post_checkout_event(client, "checkout.session.expired", "cs_1")
+    login_as(client, other)
+
+    assert _start_team_checkout(client, pseudonym="Other").status_code == 200
+
+
+def test_a_payment_reported_late_keeps_its_place(client, team, paid_tournament, stripe_gateway):
+    other = _one_team_place(paid_tournament)
+    login_as(client, team)
+    _start_team_checkout(client)
+    stripe_gateway.pay("cs_1")
+    _age_hold("cs_1", checkout_service.CHECKOUT_LIFETIME + timedelta(minutes=1))
+    login_as(client, other)
+    blocked = _start_team_checkout(client, pseudonym="Other")
+
+    _post_checkout_event(client, "checkout.session.completed", "cs_1")
 
     assert blocked.status_code == 400
-    assert "Maximum number of teams (1)" in blocked.get_json()["error"]
-    assert after_expiry.status_code == 200
+    assert _team_registration(team.id).paid
+
+
+def test_a_processing_payment_keeps_its_place_past_the_grace(client, team, paid_tournament, stripe_gateway):
+    other = _one_team_place(paid_tournament)
+    login_as(client, team)
+    _start_team_checkout(client)
+    stripe_gateway.pay("cs_1", payment_status="unpaid")
+    _post_checkout_event(client, "checkout.session.completed", "cs_1")
+    _age_hold("cs_1", checkout_service.CHECKOUT_LIFETIME + checkout_service.EXPIRY_GRACE + timedelta(days=2))
+    login_as(client, other)
+    blocked = _start_team_checkout(client, pseudonym="Other")
+
+    stripe_gateway.pay("cs_1")
+    _post_checkout_event(client, "checkout.session.async_payment_succeeded", "cs_1")
+
+    assert blocked.status_code == 400
+    assert _team_registration(team.id).paid
+
+
+def test_a_failed_processing_payment_releases_its_place(client, team, paid_tournament, stripe_gateway):
+    other = _one_team_place(paid_tournament)
+    login_as(client, team)
+    _start_team_checkout(client)
+    stripe_gateway.pay("cs_1", payment_status="unpaid")
+    _post_checkout_event(client, "checkout.session.completed", "cs_1")
+
+    _post_checkout_event(client, "checkout.session.async_payment_failed", "cs_1")
+    login_as(client, other)
+
+    assert _start_team_checkout(client, pseudonym="Other").status_code == 200
+
+
+def test_only_new_team_checkouts_mention_the_held_place(client, team, player, paid_tournament, stripe_gateway):
+    login_as(client, team)
+    _start_team_checkout(client)
+    login_as(client, player)
+    _start_player_checkout(client, jersey_name="Pat")
+
+    team_request, player_request = stripe_gateway.checkout_requests
+    assert team_request["submit_message"] == checkout_service.TEAM_HOLD_NOTICE
+    assert "30 minutes" in team_request["submit_message"]
+    assert player_request["submit_message"] is None
 
 
 def test_a_second_checkout_expires_the_first(client, team, paid_tournament, stripe_gateway):

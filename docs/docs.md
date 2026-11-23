@@ -52,6 +52,8 @@ For tournament organizers
     - [Basic Information](#basic-information)
     - [Head Ref Options](#head-ref-options)
     - [Visibility and Access Control](#visibility-and-access-control)
+ - [Registration Fees and Online Payments](#registration-fees-and-online-payments)
+    - [Fees](#fees)
  - [Match Schedule Setup](#match-schedule-setup)
     - [Activities and Side Competitions](#activities-and-side-competitions)
     - [Tags and References: Specifying Teams](#tags-and-references-specifying-teams)
@@ -234,9 +236,9 @@ Here's, briefly, how it works.
        those).
      - registration configuration: terms that registrants need to
        agree to, the registration price for teams and players,
-       etc. (eventually registrants will be able to pay these fees
-       through Arctos, but that functionality has not been implemented
-       yet).
+       etc. Registrants can pay these fees online by card (see
+       [Registration Fees and Online Payments](#registration-fees-and-online-payments)),
+       or pay you separately.
      - a schedule: This can be as simple as matches at specific times,
        or it can have dynamically schedule matches, breaks,
        synchronization points, and more. Match participats can either
@@ -262,9 +264,9 @@ Here's, briefly, how it works.
      player's registration. If a team declines a request, the player
      stays registered as an unattached free merc.
   6. TOs continuously perform registration management
-     - As teams and/or players submit their registration payments, TOs
-       mark them paid (optionally notating the amount paid) on the
-       registration management page.
+     - Online payments mark registrations paid automatically. For
+       payments made any other way, TOs mark them paid (optionally
+       notating the amount paid) on the registration management page.
      - TOs may deregister players and/or teams as they see fit. A
        deregistered team or player keeps their paid entry unless the TO
        voids it.
@@ -514,6 +516,112 @@ head refs to tell different penalties apart when viewing a list.
 
 Note that once a penalty has been made with a specific penalty type,
 that type cannot be deleted!
+
+## Registration Fees and Online Payments
+
+Registrants can pay their registration fee by card when they
+register. The money goes straight to the organizer's own Stripe
+account, and from there to their bank. Arctos never holds it.
+
+Online payments only appear on sites where they're set up. On those
+sites, you need:
+
+  1. **A payout account.** Edit your player profile and, under
+     **Account settings → Payouts**, choose **Set up payouts**. Stripe
+     asks for your identity and bank details on its own site, then
+     sends you back. Stripe may take a while to review them. The card
+     shows "Ready to receive online payments." once it's done. Payout
+     accounts are for US-based organizers, and only player accounts
+     can have one, not team accounts.
+  2. **The payout account attached to your event.** In
+     **Organizer tools → Settings**, under **Online payments**, choose
+     **Use my payout account**. You can only attach your own. Any TO
+     can detach the attached account, for example to swap in theirs.
+  3. **Online payments turned on.** Check **Registrants pay fees
+     online by card** in the same card. Leagues have the same card in
+     their settings, and the fee covers the whole season.
+
+The team and player fees are the ones in
+[Basic Information](#basic-information). A fee of zero means nobody
+pays, online or otherwise.
+
+### What registrants see
+
+Once online payments are on, registering with a fee takes the
+registrant to Stripe's checkout page. They're registered when the
+payment goes through, and their registration shows as paid. Online
+payment then isn't optional: someone who doesn't pay isn't
+registered.
+
+  - A team in checkout holds a place under your team limit, so a team
+    can't pay for a spot that fills while it pays. Teams have 30
+    minutes to pay, and Stripe's checkout page tells them so. After
+    that the checkout expires and the place is released, usually within
+    a minute or two and never more than 15 minutes later. A payment
+    made just before the deadline keeps its place. So does a slower
+    payment method, like a bank transfer, until it finishes
+    processing.
+  - If a payment goes through after registration closes, the
+    registrant is still registered. They started before it closed.
+  - If registration can't go through after payment (say, the team
+    limit filled anyway), the payment is kept as a **prepaid entry**.
+    The registrant can use it to register later or transfer it, or you
+    can refund them.
+  - Anyone registered before you turned online payments on, and still
+    unpaid, can pay with the **Pay now** button when they edit their
+    registration (teams also see it on their team management page).
+  - Registrants who deregister keep their prepaid entry. They can
+    register again for free or transfer it to another team or player.
+    See steps 6 and 7 of [Before the Tournament](#before-the-tournament).
+
+Registrants who paid you some other way still work the old way: mark
+them paid on the registration management page. Registering someone
+with **Quick Register** never asks for payment either.
+
+If your payout account stops being able to take payments (Stripe
+needs more information, for example), registrants who owe a fee are
+told to contact you, and they can't register until it's fixed. The
+**Online payments** card says so too.
+
+### Fees
+
+The registrant pays exactly the fee you set. Nothing is added on
+top. Arctos doesn't take a cut. The only fee is **Stripe's processing
+fee**, which Stripe charges to your account for each payment, at its
+standard rate for the card used. See
+[Stripe's pricing](https://stripe.com/pricing).
+
+For example, take a $40.00 player fee and Stripe's US card rate of
+2.9% + 30¢ (check the pricing page for the current rate). Stripe's
+fee is 2.9% of $40.00, which is $1.16, plus $0.30, so $1.46, and you
+receive $38.54. To net the full amount, raise the fee to cover
+Stripe's.
+
+The amount Arctos shows as paid is what the registrant paid, before
+fees. Your Stripe Dashboard shows what you actually received.
+
+Stripe pays out to your bank on its own schedule, usually a few days
+after each payment.
+
+### Refunds and disputes
+
+Refunds happen in the **Stripe Dashboard**, not in Arctos. Use
+**Open Stripe Dashboard** under **Account settings → Payouts**, and
+sign in with the Stripe account you made during setup.
+
+Arctos doesn't find out about refunds. After refunding someone, also
+do one of these in Arctos:
+
+  - Uncheck **paid** on their registration. They stay registered but
+    unpaid, or
+  - deregister them and check **Void their prepaid entry**, so they
+    can't register again for free.
+
+A refund doesn't return Stripe's processing fee, so refunding a $40.00 payment in the example above costs you $1.46.
+
+If a cardholder disputes a payment with their bank, Stripe takes the
+amount from your balance while it's investigated, plus a dispute
+fee. Respond to it in the Stripe Dashboard.
 
 ## Match Schedule Setup
 

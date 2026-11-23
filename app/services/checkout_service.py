@@ -6,7 +6,7 @@ through checkout. Starting a checkout validates the registration form,
 creates a Stripe Checkout Session as a direct charge on the organizer's
 payout account, and records a :class:`~app.models.payments.CheckoutHold`
 with the form. An open team hold takes a place under the team cap until
-the session expires.
+Stripe reports the session expired (see :func:`held_team_places`).
 
 Fulfillment runs from the checkout webhook and from the payer's return
 page, whichever comes first; the hold's status makes it idempotent. It
@@ -27,7 +27,6 @@ from datetime import timedelta
 from decimal import Decimal
 
 import sqlalchemy as sa
-from flask import current_app
 
 from app.domain.enums import CheckoutHoldStatus, PaidEntrySource, UserType
 from app.error_values import Err, Ok, Result, Some, allow_Q
@@ -44,9 +43,16 @@ from models import CheckoutHold, Payment, RegistrableConfig, db
 
 logger = logging.getLogger(__name__)
 
-# Stripe's minimum session lifetime; also how long a team hold keeps a place.
+# Stripe's minimum session lifetime.
 CHECKOUT_LIFETIME = timedelta(minutes=30)
-BASIS_POINTS = 10_000
+# How long past expiry an open team hold keeps its place, so a payment made
+# just before expiry still registers when its event arrives late. Stripe's
+# expiry event releases the place sooner.
+EXPIRY_GRACE = timedelta(minutes=15)
+TEAM_HOLD_NOTICE = (
+    f"Your team's spot is held for {CHECKOUT_LIFETIME.seconds // 60} minutes."
+    " Finish paying within that time, or the spot may go to another team."
+)
 PAYMENT_FAILED_EVENT = "checkout.session.async_payment_failed"
 
 SETUP_INCOMPLETE_MESSAGE = "The organizer's payment setup is incomplete. Contact them to register."
@@ -90,10 +96,15 @@ def require_payment_settled(
 
 
 def held_team_places(scope: Scope, *, excluding_team: str | None = None) -> int:
-    """Open, unexpired checkouts for new team registrations, which each hold a place under the cap."""
+    """Open checkouts for new team registrations, which each hold a place under the cap.
+
+    A hold counts until Stripe reports its session expired, or for
+    :data:`EXPIRY_GRACE` past expiry if that report doesn't arrive. A
+    submitted payment that is still processing counts until it settles.
+    """
     query = CheckoutHold.query.filter_by(
         **_scope_filters(scope), kind=UserType.TEAM.value, status=CheckoutHoldStatus.OPEN, team_registration_id=None
-    ).filter(CheckoutHold.expires_at > now_utc_naive())
+    ).filter((CheckoutHold.expires_at > now_utc_naive() - EXPIRY_GRACE) | CheckoutHold.submitted_at.is_not(None))
     if excluding_team is not None:
         query = query.filter(CheckoutHold.holder_team != excluding_team)
     return query.count()
@@ -227,7 +238,6 @@ def start_checkout(
 
     account = config.payout_account
     currency = account.default_currency or "usd"
-    application_fee_cents = amount_cents * current_app.config["STRIPE_PLATFORM_FEE_BPS"] // BASIS_POINTS
     expires_at = now_utc_naive() + CHECKOUT_LIFETIME
     try:
         session = stripe.create_checkout_session(
@@ -235,8 +245,8 @@ def start_checkout(
             amount_cents=amount_cents,
             currency=currency,
             product_name=_product_name(parent, kind, holder.name),
-            application_fee_cents=application_fee_cents,
             customer_email=getattr(payer, "email", None),
+            submit_message=TEAM_HOLD_NOTICE if kind == UserType.TEAM and registration is None else None,
             success_url=success_url,
             cancel_url=cancel_url,
             expires_at=expires_at,
@@ -257,7 +267,6 @@ def start_checkout(
         player_registration_id=registration.id if registration is not None and kind == UserType.PLAYER else None,
         amount_cents=amount_cents,
         currency=currency,
-        application_fee_cents=application_fee_cents,
         status=CheckoutHoldStatus.OPEN,
         expires_at=expires_at,
     )
@@ -349,7 +358,6 @@ def fulfill(hold: CheckoutHold, session: CheckoutSession) -> CheckoutHold:
         stripe_payment_intent_id=session.payment_intent_id,
         stripe_account_id=hold.stripe_account_id,
         currency=session.currency,
-        application_fee_cents=hold.application_fee_cents,
         payer_user_id=hold.payer_user_id,
         payer_user_type=hold.payer_user_type,
     )
@@ -383,6 +391,12 @@ def apply_session(hold: CheckoutHold, session: CheckoutSession, *, payment_faile
         return hold
     if session.paid:
         return fulfill(hold, session)
+    if session.status == "complete" and not payment_failed:
+        if hold.submitted_at is None:
+            hold.submitted_at = now_utc_naive()
+            db.session.commit()
+            logger.info("checkout submitted, payment processing: hold=%s session=%s", hold.id, session.id)
+        return hold
     if session.status == "expired" or payment_failed:
         hold.status = CheckoutHoldStatus.EXPIRED
         if payment_failed:

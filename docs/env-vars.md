@@ -146,7 +146,8 @@ Cloud Console. Forwarded host headers are not trusted to choose this URL.
 Online payments are hidden unless `STRIPE_SECRET_KEY` is set. Organizers'
 payout accounts are Stripe Accounts v2 accounts with Managed Risk: Stripe
 charges its fees to the organizer's account and absorbs losses it can't
-recover from them. Organizers manage their accounts in the full Stripe
+recover from them. Arctos takes no cut of registration payments.
+Organizers manage their accounts in the full Stripe
 Dashboard.
 
 `STRIPE_SECRET_KEY`
@@ -185,11 +186,6 @@ Dashboard.
   The payer's return page also confirms payment with Stripe, so
   registration completes without the webhook; the webhook covers payers
   who close the tab and payments that settle later.
-
-`STRIPE_PLATFORM_FEE_BPS`
-: Arctos's application fee on each registration payment, in basis points
-  (`250` is 2.5%). Defaults to `0`. Stripe's own fees are charged to the
-  organizer either way.
 
 
 ## Sign in with Arctos
